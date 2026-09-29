@@ -18,3 +18,7 @@ __pycache__/
 # 데몬 로그/체크포인트 (비영속)
 .harnesside/state/
 *.log
+
+# 빌드 산출물(포크에서 넘어옴). 타깃 이름이 옛 이름(llamacli)이라 치환 불변식을
+# 위반했고, 300KB tarball 을 저장소에 두는 것도 이유가 없다.
+bin/

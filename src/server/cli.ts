@@ -181,10 +181,15 @@ export async function cmdDoctor(paths: Paths): Promise<number> {
         resolve({ ok: !err, out: String(stdout).trim() })
       );
     });
-  for (const [label, cmd, args] of [
-    ["llama-server", "/home/jeano/llama.cpp/build-opt/bin/llama-server", ["--version"]],
-    ["chrome", "google-chrome", ["--version"]],
-  ] as const) {
+
+  // llama-server 위치는 **이미 있는 탐색 규칙** 을 재사용한다. 여기서 경로를
+  // 하드코딩하면(했다 — `/home/jeano/...`) 이 저장소를 클론한 다른 사람의
+  // `doctor` 가 "찾을 수 없음" 을 말하고, 어디가 잘못됐는지 아무도 모른다.
+  const { findLlamaServer } = await import("../setup/llamaCpp.js");
+  const llama = await findLlamaServer();
+  emit(llama ? `  llama-server: ${C.green(llama.binPath)}` : `  llama-server: ${C.red("찾을 수 없음")}`);
+
+  for (const [label, cmd, args] of [["chrome", "google-chrome", ["--version"]]] as const) {
     const r = await probe(cmd, [...args]);
     emit(`  ${label}: ${r.ok ? C.green(r.out.split("\n")[0]) : C.red("찾을 수 없음")}`);
   }
