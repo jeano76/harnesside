@@ -14,16 +14,19 @@
 ## ① 현재 상태 (마지막 갱신: 2026-09-29)
 
 ```yaml
-phase: P1            # 현재 Phase
-status: in_progress   # not_started | in_progress | blocked | done
-last_commit: "7bae9c1 (P1-1/P1-2/P1-4 완료)"
-next_action: "P1-3 llama-server 실제 스폰 + /v1/models 헬스체크 (src/server/index.ts 엔트리포인트)"
+phase: P1.5          # 현재 Phase (P0·P1 완료)
+status: not_started
+last_commit: "76eb72f (P1 완료)"
+next_action: "P1.5 §3.6 보안 경계 (토큰·Origin/Host·승인 게이트) — REST/WS 를 처음부터 토큰 필수로"
 blocking: 없음
 verified_this_session:
-  - "npm test → 544 pass / 0 fail (P0 525 + 신규 19)"
-  - "npm run typecheck → exit 0"
-  - "npx tsc -p tsconfig.server.json --noEmit → exit 0"
+  - "npm test → 555 pass / 0 fail (P0 525 → 신규 30)"
+  - "npm run typecheck → exit 0 · tsc -p tsconfig.server.json → exit 0"
   - "grep -rni llamacli src scripts package.json tsconfig.json README.md .gitignore → 0건"
+  - "tsx src/server/index.ts --dry → 12단계 이름/순서 출력, 부수효과 0"
+  - "tsx src/server/index.ts --no-browser → TTY 없이 12단계 통과(1~8 실제 동작)"
+  - "실측: 두 번째 llama-server 는 321 MiB free 에서 cudaMalloc OOM → adopt 경로 필수"
+  - "SIGTERM → 체크포인트 → llama 종료 확인, orphan 없음, 사용자 원본 서버(8080) 무손상"
 ```
 
 ## ② Phase 대시보드
@@ -32,8 +35,8 @@ verified_this_session:
 
 | Phase | 내용 | 상태 | 완료 검증 | 커밋 |
 |---|---|---|---|---|
-| **P0** | §1 복사·치환. 이식 모듈 빌드/테스트 통과 | ☑ | `npm test` **525 pass/0 fail**, `grep -rni llamacli` **0건**, typecheck exit 0 | `0a31e35`+P0 |
-| P1 | llama-server 부트스트랩 + §3.2 [1]~[8] | ☐ | 웹 없이 기동, `/v1/models` 200 | — |
+| **P0** | §1 복사·치환. 이식 모듈 빌드/테스트 통과 | ☑ | `npm test` **555 pass/0 fail**, `grep -rni llamacli` **0건**, typecheck exit 0 | `8272ad4` |
+| **P1** | llama-server 부트스트랩 + §3.2 [1]~[8] | ☑ | TTY 없이 12단계 통과, adopt 실측 확인, SIGTERM 종료·orphan 없음 | `7bae9c1` `76eb72f` |
 | P1.5 | §3.6 보안 경계 + §6.4 설정 규약 | ☐ | §10.3.1 보안 시나리오 전부 통과 | — |
 | P2 | Chrome `--app` + §4.6 VRAM 예산 + **§4.7 GPU off** | ☐ | 창 뜸, 라운드 확인, 30분 무 OOM, `glRenderer==="Disabled"` | — |
 | P2.5 | **§3.7 데몬 모드 + §5.12 로그 패널** | ☐ | TTY 없이 12단계 부팅, 상한 500,000자 후 최신 줄 유지 | — |
@@ -73,25 +76,49 @@ verified_this_session:
 > import 에서 죽는다. **격리는 삭제가 아니다** — devDependency 로 남겨 검증을 보존한다.
 > `LlamacliConfig` 같은 대문자 변형을 놓치면 `grep -ni` 게이트가 통과해 버린다(치환 스크립트가 규칙 3줄).
 
-### P1 — llama-server 부트스트랩 (현재 Phase)
+### P1 — llama-server 부트스트랩 ☑ 완료
 - [x] P1-1 `src/server/bootstrap.ts` 12단계 상태 머신. `STEP_NAMES` 를 **export** 하여 §3.2 와 이름/순서 일치를 테스트가 지킨다.
       단계 9~12 는 `pending: true` 로 "지났습니다"라고 말하지 않는다. 각 단계 `tookSeconds` 기록.
 - [x] P1-2 하드웨어/GPU 정책 — `src/setup/gpuPolicy.ts` `decideGpuMode()`. 이식 모듈 `detectHardware()` 가 이미
       **실측 `vramFreeBytes`** 를 제공하므로 재작업 불필요(재작업하면 두 진실원이 생긴다). `off` 모드의 rationale 에 **측정 근거** 를 실어 둠.
 - [x] P1-4 포트 계획 2종 — `IDE_PORT=7317` 추가, llama 포트와 **절대 겹치지 않도록**(겹치면 "런처 버그"로 오인된다)
-- [ ] P1-3 llama-server **실제 스폰** + `/v1/models` 헬스체크 → `src/server/index.ts` 엔트리포인트
-- [ ] P1-5 "웹 없이" 기동 확인 = P1 완료 검증 (`tsx src/server/index.ts --no-browser`)
+- [x] P1-3 llama-server **스폰 + 헬스체크** — `src/server/llamaLauncher.ts`(`buildLlamaArgs()` 순수 함수 + 프로세스 수명/로그 tee/우아한 종료) + `src/server/index.ts` 엔트리포인트
+- [x] P1-5 "웹 없이" 기동 확인 — TTY 없이 12단계 통과. `HARNESSIDE_MODELS_DIR=/media/jeano/nvme-usb/models` 로 실모델 사용
+
+### P1 에서 발견한 버그 2건 (둘 다 수정·재확인 완료)
+
+| # | 증상 | 근본 원인 | 수정 | 재발 방지 |
+|---|---|---|---|---|
+| 1 | 부팅이 즉시 "이미 실행 중" 으로 실패 | `index.ts` 와 `bootstrap()` 단계 1 이 **둘 다 락을 획득** → 자기 자신의 락을 남의 것으로 판단 | `BootstrapDeps.lock` 로 이미 잡은 락을 전달. 획득은 한 곳만 | 코드 주석에 사유 + 단일 획득 원칙 |
+| 2 | SIGTERM 후 **orphan llama-server** 가 8081 에 남음 | `process.on('exit')` 는 비동기 종료 절차를 못 돌린다 → 자식 정리 전에 부모가 끝남 | 동기 `exit` 훅에서 자식 PID 를 **SIGKILL** + `uncaughtException` 처리 추가 | 실측으로 orphan 0 확인(사용자 원본 서버 무손상) |
+
+> **배운 것**: 자식 프로세스를 스폰하는 프로그램은 **부모가 어떻게 죽든** 자식이 안 남는 경로가
+> 하나는 있어야 한다. `detached: false` 는 SIGTERM 에는 도움 되지만 강제 종료에는 모자라다.
+
+### P1 실측 결과 (개발 머신 — 재측정 불필요)
+
+- 두 번째 llama-server 스폰 → **`cudaMalloc failed: out of memory`** (1476.55 MiB 요청, free 321 MiB).
+  → **adopt 경로(§6.2)는 이 머신에서 선택이 아니라 필수다.** 8080 은 사용자의 서버가 점유 중이라
+  플래너가 8081 로 이동시켰고, 그 8081 이 OOM 했다. "가용 포트를 찾으면 그곳에 스폰" 은 이 환경에서 틀렸다.
+- llama 가 죽어도 **서버는 살아 있고** "창은 계속 뜹니다" 를 보고했다 → **degrade 원칙이 실제로 작동**.
+- SIGTERM → 체크포인트 → llama 종료 → 락 해제 순서 동작, orphan 0.
 
 ## ④ 지금 바로 할 일 (재개 시 첫 번째 = 1번)
 
-1. **P1-3** `src/server/index.ts` 작성:
-   - `bootstrap()` 호출 → `result.tuning` + `result.ports` 로 `LlamaServerManager` 스폰(§6.3 플래그) → `/v1/models` 폴링(기본 120초).
-   - **헬스체크 실패해도 프로세스를 죽이지 않는다**(§3.2 [8] 실패 → 뒤 단계 진행). 창은 반드시 뜬다.
-   - 종료 시그널 핸들러(§4.4 `shutdown()`): 턴 취소 → 체크포인트 → llama SIGTERM 5s → SIGKILL.
-   - 데몬 모드 플래그: `--daemon`(창 없음). TTY 유무에 무관하게 같은 경로(§3.7).
-   검증: `npx tsx src/server/index.ts --no-browser` → 12단계 로그 + `/v1/models` 200 → `Ctrl+C` 로 llama 종료 확인.
-2. 위가 되면 `npm test` + typecheck → 커밋 → 이 파일 갱신 → **P1 완료 처리**(P1-5 검증 결과 기록).
-3. 다음 Phase 는 **P1.5(보안 경계)** — REST/WS 를 처음부터 토큰 필수로 설계한다(§12 순서 경고).
+> **P1 이 끝났다. 다음은 P1.5(보안 경계).** §12 의 순서 경고를 그대로 따른다:
+> REST/WS 를 처음부터 "토큰 필수"로 설계하지 않으면 나중에 모든 호출 경로에
+> "인증 빠진 길"이 생기고 그것을 전부 찾아낼 수 없다.
+
+1. **P1.5-1 `src/auth/token.ts`** — 부팅 시 `crypto.randomBytes(32)` → `state/token.json`(0600).
+   검증: 토큰 32바이트, 파일 권한 0600, 재실행 시 다른 값.
+2. **P1.5-2 `src/auth/originGuard.ts`** — `Host` 헤더 검증(DNS rebinding 방어) + WebSocket `Origin` 검증.
+   검증: §10.3.1 시나리오(토큰 없음 / 오류 / Origin 불일치 / Host 위조) 통과.
+3. **P1.5-3 `src/server/httpServer.ts`** — 모든 `/api/*` 를 토큰 필수로. CORS 헤더는 **아예 보내지 않는다**.
+   검증: 토큰 없이 어떤 API 도 200 을 주지 않는지.
+4. **P1.5-4 §6.4 설정 규약** — 병합 우선순위·출처 표시·원자적 쓰기·마이그레이션·`credentials.json`.
+5. 각 단계마다 `npm test` + typecheck → 커밋 → **이 파일 갱신** → 다음 항목.
+6. P1.5 완료 후 **P2(Chrome `--app` + §4.7 GPU off)**. P2 는 `dist/web` 번들이 필요하므로
+   `vite.config.ts` + `index.html` 뼈대부터 만든다.
 
 ## ⑤ 환경 사실 (재측정 불필요 · 2026-09-29 실측)
 
@@ -128,6 +155,11 @@ verified_this_session:
 | 2026-09-29 | GPU on(대조군, 헤드리스) | `ANGLE (…SwiftShader…)`, `webgl="unavailable_software"` | 동일 방법 |
 | 2026-09-29 | `--disable-vulkan` | Chrome 153 바이너리에 **해당 스위치 없음** | `strings` 검색 |
 | 2026-09-29 | llama-server 점유 VRAM | 7278 MiB / 8192 MiB | `nvidia-smi --query-compute-apps` |
+| 2026-09-29 | **두 번째 llama-server 스폰 결과** | **`cudaMalloc failed: out of memory`** (1476.55 MiB 요청 / free 321 MiB) | 실제 스폰 후 자식 로그 |
+| 2026-09-29 | adopt 경로 필요성 | OOM 이 실측되었으므로 8080 의 기존 서버를 **채택**하는 것이 필수 | 위 항목의 귀결 |
+| 2026-09-29 | 데몬 부팅 (TTY 없음) | 12단계 전부 기록, 1~8 실제 동작, 9~12 `pending` | `tsx src/server/index.ts --no-browser` |
+| 2026-09-29 | 포트 자동 이동 | 8080 점유(사용자 서버) → **8081 로 이동 + 사유 기록** | 단계 6 로그 |
+| 2026-09-29 | SIGTERM 종료 | 체크포인트 → llama 종료 → 락 해제, **orphan 0** | `pgrep` / 로그 확인 |
 
 ## ⑧ 열린 이슈 / 블로커
 
@@ -142,3 +174,4 @@ verified_this_session:
 | 1 | `0a31e35` | `chore: fork from llamacli` + PROMPT.md 명세 + **PROGRESS.md 재개 원장** | 파일 114개 커밋 |
 | 2 | `8272ad4` | `refactor!: rename llamacli → harnesside, isolate TUI as legacy-tui` | `npm test` 525/0 · typecheck 0 · grep 0 |
 | 3 | `7bae9c1` | `feat(server): 12단계 부트스트랩 + GPU 정책 결정 + 2포트 계획` | `npm test` **544**/0 (+19) · typecheck 0 |
+| 4 | `76eb72f` | `feat(server): 데몬 엔트리포인트 + llama 런처 + adopt 경로` | `npm test` **555**/0 · TTY 없이 12단계 · SIGTERM orphan 0 |
