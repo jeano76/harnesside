@@ -28,6 +28,24 @@ const LOG = "/tmp/opencode/p12.log";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** llama 프로세스 목록. **판정에는 쓰지 않는다**(아래 llamaAlive 참고) — 정리용. */
+async function llamaPids() {
+  let out = "";
+  try {
+    ({ stdout: out } = await exec("pgrep", ["-af", "/llama-server"], { timeout: 5000 }));
+  } catch {
+    return [];
+  }
+  return out
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => ({ pid: Number(l.split(/\s+/)[0]), cmd: l.slice(0, 90) }))
+    // 이 스크립트를 실행한 셸/노드가 명령 줄에 그 문자열을 포함하면 제외한다.
+    .filter((p) => !/verify-shutdown|pgrep -af|bash -c|node .*\.mjs/.test(p.cmd))
+    .filter((p) => Number.isFinite(p.pid) && p.pid > 1);
+}
+
 /**
  * "llama-server 가 살아 있는가" 의 판정.
  *
@@ -41,8 +59,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * 준다. 명령 줄 문자열은 위장할 수 있지만 포트는 그렇지 않다.
  */
 async function llamaAlive() {
-  const pids = await llamaPids();
-  if (pids.length === 0) return false;
   for (const port of [8080, 8081, 8082]) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, { signal: AbortSignal.timeout(1500) });
@@ -51,8 +67,8 @@ async function llamaAlive() {
       // 응답 없음 = 이 포트에 llama 없음
     }
   }
-  // 포트로 확인 안 되면 프로세스를 신뢰한다(예: 아직 바인딩 전)
-  return pids.length > 0;
+  // 어떤 포트도 응답하지 않으면 죽은 것으로 본다. **프로세스 이름은 믿지 않는다.**
+  return false;
 }
 
 async function harnessPids() {
@@ -69,25 +85,44 @@ async function harnessPids() {
   }
 }
 
-async function startServer(extraArgs = []) {
+/**
+ * 서버 기동.
+ *
+ * **`npx` 를 거치지 않는다.** `npx tsx ...` 로 띄우면 잡히는 pid 는 npx 의 것이고,
+ * 서버는 그 **자식** 다. 그러면 신호를 **npx 에** 보내는 셈이 되고, npx 가 죽으면
+ * 트리 전체가 따라 죽는다 — 즉 SIGHUP 이 "무시" 되도록 되어 있어도 죽어 보인다.
+ * 실제로 S4 가 그렇게 거짓 실패했다.
+ *
+ * `node_modules/.bin/tsx` 는 node shebang 스크립트라 **pid 자체가 서버 프로세스** 다.
+ * 그래야 §4.4 의 신호 핸들러를 진짜로 테스트한다.
+ */
+async function startServer(extraArgs = [], logFile = LOG) {
   await rm(join(ROOT, ".harnesside/state/instance.lock"), { force: true });
-  // 시나리오마다 로그를 덮어쓰면 실패한 것의 로그를 잃는다.
-  const out = await import("node:fs").then((m) => m.openSync(`${LOG}.${name.split(" ")[0]}`, "w"));
-  const p = spawn("npx", ["tsx", "src/server/index.ts", ...extraArgs], {
+  const out = await import("node:fs").then((m) => m.openSync(logFile, "w"));
+  const tsxBin = join(ROOT, "node_modules", ".bin", "tsx");
+  const p = spawn(tsxBin, ["src/server/index.ts", ...extraArgs], {
     cwd: ROOT,
     env: { ...process.env, HARNESSIDE_MODELS_DIR: "/media/jeano/nvme-usb/models" },
     stdio: ["ignore", out, out],
     detached: true,
   });
   p.unref();
+
+  // **잡은 pid 가 진짜 서버인지** 확인한다. 아니면 조용히 잘못된 프로세스를 신호로
+  // 때리는 셈이고, 모든 결과가 뒤집힌다(지금까지 두 번 당한 실수).
+  await sleep(1200);
+  const cmdline = await readFile(`/proc/${p.pid}/cmdline`, "utf8").catch(() => "");
+  if (!cmdline.includes("src/server/index.ts")) {
+    throw new Error(`pid ${p.pid} 가 서버가 아닙니다: ${cmdline.replace(/\0/g, " ").slice(0, 120)}`);
+  }
   return p.pid;
 }
 
 /** 부팅이 끝날 때까지 기다린다(모델 로딩 포함). */
-async function waitBoot(timeoutMs = 120_000) {
+async function waitBoot(logFile = LOG, timeoutMs = 120_000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    const txt = await readFile(LOG, "utf8").catch(() => "");
+    const txt = await readFile(logFile, "utf8").catch(() => "");
     if (/\[12\/12\]/.test(txt)) return true;
     await sleep(2000);
   }
@@ -127,10 +162,13 @@ async function scenario(name, { args = [], trigger, expectAlive = false, graceMs
     record(`${name}: 시작 전 llama 없음`, false, `${before}개 살아 있음 — 이전 실험이 정리되지 않았다`);
     return;
   }
-  const pid = await startServer(args);
-  const booted = await waitBoot();
+  // 시나리오마다 **자기 로그** 를 쓴다 — 앞 시나리오 로그로 boot 완료를 잘못
+  // 기다리면(로그가 남아 있으니까) 실패한 시나리오의 원인을 볼 수 없다.
+  const logFile = `${LOG}.${name.replace(/[^A-Za-z0-9]+/g, "_")}`;
+  const pid = await startServer(args, logFile);
+  const booted = await waitBoot(logFile);
   if (!booted) {
-    record(`${name}: 부팅 완료`, false, "12/12 에 도달하지 못했다");
+    record(`${name}: 부팅 완료`, false, `12/12 에 도달하지 못했다 (${logFile})`);
     try {
       process.kill(pid, "SIGKILL");
     } catch {
