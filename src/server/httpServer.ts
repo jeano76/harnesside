@@ -33,6 +33,20 @@ const MIME: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
+/** JSON 본문을 읽는다. 상한이 없으면 요청 하나가 메모리를 다 먹을 수 있다. */
+export async function readBody(req: IncomingMessage, maxBytes = 8 * 1024 * 1024): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    const b = c as Buffer;
+    size += b.byteLength;
+    if (size > maxBytes) throw Object.assign(new Error("요청 본문이 너무 큽니다"), { status: 413 });
+    chunks.push(b);
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  return raw ? JSON.parse(raw) : {};
+}
+
 function contentTypeFor(file: string): string {
   return MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
 }
@@ -215,7 +229,15 @@ export class HttpServer {
         this.json(res, 200, out);
       }
     } catch (e) {
-      // 내부 오류 메시지를 그대로 노출하지 않는다(경로·스택이 새어나간다).
+      // 핸들러가 **의도한** 상태 코드(404/403/409)는 그대로 전달한다 — 경로 안전이
+      // "403" 인데 "500" 이 되면 사용자는 서버 오류로 오해하고 원인을 못 찾는다.
+      // 그 외 내부 오류는 경로·스택이 새지 않도록 가린다.
+      const status = (e as { status?: number })?.status;
+      if (typeof status === "number" && status >= 400 && status < 600) {
+        const conflict = (e as { conflict?: unknown }).conflict;
+        this.json(res, status, { error: (e as Error).message, status, ...(conflict ? { conflict } : {}) });
+        return;
+      }
       this.deps.logger?.("error", { err: String(e), key }, "핸들러 오류");
       this.deny(res, 500, "서버 오류");
     }

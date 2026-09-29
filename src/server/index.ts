@@ -21,10 +21,11 @@
 import { bootstrap, type BootstrapResult } from "./bootstrap.js";
 import { LlamaLauncher } from "./llamaLauncher.js";
 import { acquireInstanceLock, type InstanceLock } from "./bootstrap.js";
-import { HttpServer } from "./httpServer.js";
+import { HttpServer, readBody } from "./httpServer.js";
 import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type DaemonMode } from "./daemon.js";
 import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
+import { safeListDir, safeReadFile, safeWriteFile } from "../fs/safePath.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -218,7 +219,37 @@ async function main(): Promise<number> {
             model: r.model?.path ?? null,
             gpuMode: r.gpu?.mode ?? null,
           }))
-          // §5.12 로그 패널 급유. 폴링 경로(WS 는 P3).
+          // §8.2 파일 API — 경로 안전이 이 라우트 **앞에서** 처리된다(§3.4).
+          .route("GET", "/api/fs/tree", async (c) => {
+            const r = await safeListDir(c.query.get("path") || ".", { root: projectRoot });
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-found" ? 404 : 403 });
+            return r.value;
+          })
+          .route("GET", "/api/fs/file", async (c) => {
+            const r = await safeReadFile(c.query.get("path") || "", { root: projectRoot });
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-found" ? 404 : 403 });
+            return r.value;
+          })
+          .route("PUT", "/api/fs/file", async (c) => {
+            const body = (await readBody(c.req)) as { path?: string; content?: string; baseVersion?: number };
+            if (typeof body.path !== "string" || typeof body.content !== "string") {
+              throw Object.assign(new Error("path 와 content 가 필요합니다"), { status: 400 });
+            }
+            const r = await safeWriteFile(body.path, body.content, {
+              root: projectRoot,
+              baseVersion: body.baseVersion,
+              readOnlyPaths: [join(projectRoot, ".harnesside")],
+            });
+            if (!r.ok) {
+              // 충돌은 409 — 클라이언트가 "비교 / 내 변경 유지" 를 고르게 한다(§3.4)
+              throw Object.assign(new Error(r.detail), {
+                status: r.reason === "conflict" ? 409 : 403,
+                conflict: r.reason === "conflict" ? r.current : undefined,
+              });
+            }
+            return r.value;
+          })
+          // §5.12 로그 패널 급유. 폴링 경로(WS 가 기본).
           .route("GET", "/api/logs", (c) => {
             const limit = Number(c.query.get("limit") ?? 500);
             const parseList = <T extends string>(v: string | null): T[] | undefined => {
