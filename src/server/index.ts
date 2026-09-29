@@ -32,6 +32,7 @@ import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
 import { AgentService } from "./agentService.js";
+import { SessionBridge } from "../session/bridge.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -157,6 +158,17 @@ async function main(): Promise<number> {
 
   // §5.3 에이전트. llama 포트(BaseUrl)는 **부팅 후에** 정해지므로(단계 6·7) 이 시점의
   // 값으로 박지 않는다 — 부팅 전에 만들어 두면 어차피 옛 값이다.
+  const session = new SessionBridge({
+    stateDir: stateDir(projectRoot),
+    workspace: () => workspace.root(),
+    onSaved: (doc) => ring.info("session", `세션 저장됨: ${doc.id}`, "server", { blocks: doc.blocks.length }),
+    onError: (m) => {
+      // **저장 실패를 조용히 삼키지 않는다** — 복구할 수 없는 순간에야 알게 되는 실패다.
+      ring.error("session", `세션 저장 실패: ${m}`, "server");
+      emit(`[session] 저장 실패: ${m}`);
+    },
+  });
+  session.start();
   const agent = new AgentService({
     baseDir: () => workspace.baseDir(),
     baseUrl: () => `http://127.0.0.1:${boot?.ports?.llamaPort ?? 8080}`,
@@ -164,7 +176,20 @@ async function main(): Promise<number> {
     model: () => boot?.model?.path ?? process.env.HARNESSIDE_MODEL ?? "",
     systemPrompt,
     thresholds: { autoTriggerRatio: 0.6, contextWindowTokens: 32_768 },
-    emit: (e) => hub?.publish({ ...e } as never),
+    emit: (e) => {
+      hub?.publish({ ...e } as never);
+      // §5.10: 블록이 바뀌면 저장 예약. **매 델타마다** 쓰면 디스크 I/O 가 스트리밍을
+      // 끊는다 — 그래서 디바운스(1초)로 합친다. 예약만 하고 실제로는 나중에 쓴다.
+      if (e.type === "agent.delta" || e.type === "agent.reasoning" || e.type === "agent.tool") {
+        session.capture(agent.conversation);
+      }
+    },
+    onTurnEnd: () => {
+      // 턴이 끝나면 주기적 안전망을 내리고 **즉시** 저장한다 — 마지막 몇 초가
+      // 사라지면 사용자는 "답변 끝부분이 없다" 고 겪는다.
+      session.stopPeriodic();
+      void session.saveNow();
+    },
     logger: (l) => emit(l),
     diff: (path, diff) => {
       // 도구 계층이 주는 diff 는 **ANSI 색이 들어 있다**(UI 전용이라고 명시돼 있다).
@@ -206,11 +231,15 @@ async function main(): Promise<number> {
     emit(`[shutdown] ${reason}`);
     // §4.4 순서: 턴 취소 → 체크포인트 → llama 종료 → 로그 flush
     try {
-      await writeCheckpoint(stateDir(projectRoot), { reason } as never);
-      emit("[shutdown] 체크포인트 기록 완료");
+      await writeCheckpoint(stateDir(projectRoot), { reason } as never);      emit("[shutdown] 체크포인트 기록 완료");
     } catch (e) {
       emit(`[shutdown] 체크포인트 실패(무시하고 계속): ${String(e)}`);
     }
+    // §5.10: 창을 닫아도 대화가 남아야 한다. **디바운스 대기 중인 저장을 잃지 않는다** —
+    // 이걸 빼면 마지막 1초의 답변이 사라지고 사용자는 "끝이 잘렸다" 고 느낀다.
+    session.stopPeriodic();
+    const saved = await session.saveNow();
+    emit(`[shutdown] 세션 ${saved.ok ? "저장됨" : `저장 실패(${saved.detail})`}`);
     if (launcher) {
       await launcher.stop();
       emit("[shutdown] llama-server 종료 완료");
@@ -468,10 +497,22 @@ async function main(): Promise<number> {
           .route("POST", "/api/agent/cancel", async () => agent.cancel())
           .route("POST", "/api/agent/turn", async (c) => {
             const body = (await readBody(c.req)) as { text?: string };
+            const text = String(body.text ?? "");
+            // 사용자가 뭐라고 했는지가 세션의 핵심이다 — 보내기 **전에** 기록한다.
+            if (text.trim()) session.noteUser(text);
             // 턴은 **기다린다** — HTTP 응답이 턴의 결과라야 이 라우트는 존재 이유가 없다.
             // 델타는 WS 로 흘린다(§2.3).
-            return agent.send(String(body.text ?? ""));
-          });
+            return agent.send(text);
+          })
+          // ── §5.10 세션 ─────────────────────────────────────────────────────
+          .route("GET", "/api/session/current", () => ({
+            id: session.doc?.id ?? null,
+            blocks: session.doc?.blocks ?? [],
+            saved: session.saved,
+            lastError: session.lastError,
+          }))
+          .route("GET", "/api/session/list", async () => ({ sessions: await session.list() }))
+          .route("POST", "/api/session/save", async () => session.saveNow());
         const { port: actual } = await http.start();
         hub.publish({ type: "sys.logs", limits: ring.status } as never);
         return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };

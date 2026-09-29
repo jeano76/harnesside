@@ -112,13 +112,22 @@ test("디바운스: 연속 저장은 하나로 합쳐진다 — 스트리밍 중
   const s = await sandbox();
   try {
     const store = new SessionStore(s.dir, 120);
-    for (let i = 0; i < 20; i++) store.schedule(doc({ bytes: i }));
+    // 상태 표식은 `name` 을 쓴다. **`bytes` 를 쓰면 안 된다** — 그건 이제 "이 파일의
+    // 크기" 라는 자기 참조 필드라 저장할 때마다 다시 계산된다(테스트가 검증하던 것과
+    // 다른 값이 된다 — 즉 테스트가 무엇을 검사하던지 잃는다).
+    for (let i = 0; i < 20; i++) store.schedule(doc({ name: `v${i}` }));
     assert.equal(store.pending, 1, `대기 중인 저장이 ${store.pending}개 — 매 델타마다 디스크를 쓴다`);
     await new Promise((r) => setTimeout(r, 250));
     assert.equal(store.pending, 0);
     // 마지막 값이 저장되어야 한다 (중간 값이 아니다)
     const got = await store.read(doc().id);
-    assert.equal(got?.bytes, 19, "마지막 상태가 아니라 중간 상태가 저장됐다");
+    assert.equal(got?.name, "v19", "마지막 상태가 아니라 중간 상태가 저장됐다");
+    // 그리고 크기는 **실제 파일 크기** 다 — 목록의 0 은 "저장 안 됐다" 로 읽힌다.
+    const { stat } = await import("node:fs/promises");
+    const { sessionsDir } = await import("./store.js");
+    const st = await stat(join(sessionsDir(s.dir), `${doc().id}.json`));
+    assert.equal((got?.bytes ?? 0) > 0, true, "크기가 0 으로 기록됐다");
+    assert.ok(Math.abs((got?.bytes ?? 0) - st.size) <= 2, `크기 ${got?.bytes} 가 실제 ${st.size} 와 다르다`);
   } finally {
     await s.cleanup();
   }

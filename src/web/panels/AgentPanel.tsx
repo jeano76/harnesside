@@ -12,6 +12,8 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { animationFor, initialThink, ingest, finish, type ThinkState, type ThinkStyle } from "../agent/think.js";
+// 블록 규칙의 **정본**은 여기다. 이 파일은 그려 줄 뿐이다(두 곳에 판단을 두면 어긋난다).
+import { appendToBlock, applyEvent, type AgentBlock } from "../../session/blocks.js";
 
 export const THINK_STYLES: { id: ThinkStyle; label: string; hint: string }[] = [
   { id: "dots", label: "파동 점", hint: "기본. 생각 중임을 짧게 알립니다" },
@@ -21,46 +23,8 @@ export const THINK_STYLES: { id: ThinkStyle; label: string; hint: string }[] = [
   { id: "bar", label: "막대", hint: "움직임 없음. prefers-reduced-motion 에 적합" },
 ];
 
-export interface AgentBlock {
-  id: string;
-  kind: "reasoning" | "text" | "status" | "tool" | "error";
-  text: string;
-  tool?: { name: string; done?: boolean };
-  at: number;
-}
-
-/** `reasoning` 델타를 누적하되, 블록 하나가 지나치게 길어지지 않게 자른다(§5.12 와 같은 이유). */
-const MAX_BLOCK_CHARS = 4000;
-
-export function appendToBlock(blocks: AgentBlock[], kind: AgentBlock["kind"], text: string, at: number, tool?: AgentBlock["tool"]): AgentBlock[] {
-  const last = blocks[blocks.length - 1];
-  if (last && last.kind === kind && (kind !== "tool" || last.tool?.name === tool?.name) && at - last.at < 2500) {
-    const merged = [...blocks.slice(0, -1), { ...last, text: (last.text + text).slice(-MAX_BLOCK_CHARS), tool: tool ?? last.tool }];
-    return merged;
-  }
-  return [...blocks, { id: `${kind}-${at}-${blocks.length}`, kind, text: text.slice(0, MAX_BLOCK_CHARS), tool, at }];
-}
-
-/** WS 이벤트를 블록으로 바꾼다. **한 곳에서만** — 두 곳에서 바꾸면 순서가 뒤집힌다. */
-export function applyEvent(blocks: AgentBlock[], e: { type: string; text?: string; tool?: AgentBlock["tool"]; at?: number }): AgentBlock[] {
-  const at = e.at ?? Date.now();
-  switch (e.type) {
-    case "agent.reasoning":
-      return appendToBlock(blocks, "reasoning", e.text ?? "", at);
-    case "agent.delta":
-      return appendToBlock(blocks, "text", e.text ?? "", at);
-    case "agent.status":
-      return appendToBlock(blocks, "status", e.text ?? "", at);
-    case "agent.tool":
-      return appendToBlock(blocks, "tool", e.tool?.name ?? "", at, e.tool);
-    case "agent.error":
-      return appendToBlock(blocks, "error", e.text ?? "", at);
-    case "agent.diff":
-      return appendToBlock(blocks, "text", `[${e.text ?? "diff"}] 변경됨`, at);
-    default:
-      return blocks;
-  }
-}
+export type { AgentBlock };
+export { applyEvent, appendToBlock };
 
 function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle }) {
   const anim = animationFor(style);

@@ -138,8 +138,15 @@ export class SessionStore {
     const dir = sessionsDir(this.stateDir);
     await mkdir(dir, { recursive: true });
     const body = { ...doc, updatedAt: Date.now() };
-    const json = JSON.stringify(body);
     const path = join(dir, `${doc.id}.json`);
+    // **크기를 기록한다.** 목록의 크기 칸이 항상 0 이면 "저장 안 됐나" 하고 오해한다
+    // (실측: 목록이 0 을 보여줬다). 압축 여부 판단도 이 값을 쓴다.
+    //
+    // 자기 참조 필드라 **완전히 같을 수 없다**(숫자 자릿수만큼 어긋난다). 두 번 직렬화해서
+    // 몇 바이트 차이로 맞춘다 — 목록 표시용이지, 이 값으로 복구 판정을 하지 않는다.
+    body.bytes = Buffer.byteLength(JSON.stringify(body), "utf8");
+    const json = JSON.stringify(body);
+    body.bytes = Buffer.byteLength(json, "utf8");
     if (json.length > COMPRESS_THRESHOLD) {
       // gzip 으로 옆에 두되, 확장자 .gz 로 구분한다(복원 시 자동으로 읽는다).
       const { gzip } = await import("node:zlib");

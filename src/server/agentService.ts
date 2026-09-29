@@ -20,6 +20,7 @@ import { AgentLoop } from "../agent/loop.js";
 import { OpenAICompatibleClient } from "../backend/openaiClient.js";
 import type { ModelBackend } from "../backend/types.js";
 import type { CompactionThresholds } from "../compaction/compactor.js";
+import { applyEvent, type AgentBlock } from "../session/blocks.js";
 
 /**
  * 압축 임계값의 기본값.
@@ -104,6 +105,8 @@ export class AgentService {
   private forcedToolChoice = false;
   /** 표시가 꺼져 있는데 사고 델타가 왔음을 **한 번만** 알렸는가. */
   private hiddenReasoningNotified = false;
+  /** 이 실행의 대화 블록(저장·복원의 원본). */
+  private blocks: AgentBlock[] = [];
   private think: ThinkPolicy = { ...DEFAULT_THINK };
 
   constructor(private opts: AgentServiceOptions) {}
@@ -112,9 +115,32 @@ export class AgentService {
     return { ...this.state };
   }
 
-  /** 이벤트를 WS 로 보낸다. 한 곳에서만 부른다 — 경로가 둘이면 순서가 뒤집힌다. */
+  /**
+   * 이벤트를 WS 로 보낸다. 한 곳에서만 부른다 — 경로가 둘이면 순서가 뒤집힌다.
+   *
+   * **여기서 블록도 함께 쌓는다.** 웹에도 블록이 생기지만(화면에 그려야 하니까),
+   * 세션 저장은 **서버** 가 한다. 서버가 블록을 모으지 않으면 저장은 "빈 대화" 가 되고
+   * 복원했을 때 사용자는 대화를 잃었다고 생각한다. 양쪽이 같은 규칙
+   * (`session/blocks.ts`) 을 쓰므로 화면과 저장이 어긋나지 않는다.
+   */
   private emit(e: AgentEvent): void {
+    this.blocks = applyEvent(this.blocks, {
+      type: e.type,
+      text: e.text ?? (e.tool ? e.tool.name : undefined),
+      tool: e.tool,
+      at: e.at,
+    });
     this.opts.emit(e);
+  }
+
+  /** 지금까지의 대화 블록(저장·복원용). */
+  get conversation(): AgentBlock[] {
+    return this.blocks;
+  }
+
+  /** 사용자 입력을 대화에 넣는다 — "내가 뭐라고 했나" 가 세션의 핵심이다. */
+  addUserMessage(text: string): void {
+    this.emit({ type: "agent.status", text: `전송: ${text.slice(0, 80)}`, at: (this.opts.now ?? Date.now)() });
   }
 
   get ready(): boolean {

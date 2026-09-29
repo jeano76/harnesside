@@ -232,6 +232,10 @@ export default function App() {
   const [blocks, setBlocks] = useState<AgentBlock[]>([]);
   const [think, setThink] = useState<ThinkState>(() => initialThink());
   const [turnRunning, setTurnRunning] = useState(false);
+  /** 복원했음을 사용자에게 **한 번** 말한다 — 조용히 복원되면 "왜 대화가 있지?" 가 된다. */
+  const [restored, setRestored] = useState(0);
+  const blocksRef = useRef<AgentBlock[]>([]);
+  blocksRef.current = blocks;
 
   /** 열린 탭 목록 — 전환 계획을 서버에 보낼 때 필요하다(탭이 새 루트 밖에 있으면 닫혀야 한다). */
   const openTabs = useMemo(() => (openFile ? [openFile.path] : []), [openFile]);
@@ -240,6 +244,20 @@ export default function App() {
   const pushToast = useCallback((t: Toast) => {
     setToasts((prev) => [t, ...prev.filter((x) => x.id !== t.id)].slice(0, 5));
   }, []);
+
+  useEffect(() => {
+    if (restored <= 0) return;
+    pushToast({
+      id: "session:restored",
+      kind: "info",
+      title: "이전 대화를 복원했습니다",
+      body: `블록 ${restored}개 — 창을 닫아도 남습니다.`,
+      at: Date.now(),
+      ttlMs: 10_000,
+      requiresAck: false,
+      source: "session",
+    });
+  }, [restored, pushToast]);
 
   /**
    * 턴을 보낸다.
@@ -458,6 +476,37 @@ export default function App() {
   useEffect(() => {
     saveDraft({ text: draft, savedAt: Date.now(), attachments: [] }, typeof localStorage !== "undefined" ? localStorage : null);
   }, [draft]);
+
+  // §5.10 — **새로고침/서버 재시작** 에서만 세션을 복원한다.
+  // WS 재연결에서 이걸 부르면 스트리밍 중 화면이 통째로 바뀐다(§5.10 금지).
+  // 구분은 `planRestore` 가 하고, 여기서는 WS 상태가 **닫힘→열림** 을 거친 경우에만
+  // 복원을 시도한다. 최초 로드에서도 복원을 시도하는 것이 "새로고침" 이다.
+  const restoredOnce = useRef(false);
+  useEffect(() => {
+    if (wsState !== "open" || restoredOnce.current) return;
+    restoredOnce.current = true;
+    void (async () => {
+      try {
+        const cur = await client.get<{ id: string | null; blocks: { id: string; kind: string; title: string; content: unknown; createdAt: number }[]; saved: boolean }>(
+          "/api/session/current"
+        );
+        if (!cur.id || cur.blocks.length === 0) return;
+        // **빈 화면으로 덮지 않는다.** 지금 화면에 블록이 있으면(스트리밍 중) 붙인다.
+        if (blocksRef.current.length > 0) return;
+        setBlocks(
+          cur.blocks.map((b, i) => ({
+            id: b.id || `restored-${i}`,
+            kind: (b.kind as AgentBlock["kind"]) ?? "text",
+            text: typeof b.content === "string" ? b.content : (b.title ?? ""),
+            at: b.createdAt ?? Date.now(),
+          }))
+        );
+        setRestored(cur.blocks.length);
+      } catch {
+        // 복원 실패는 조용히 넘어간다 — 창이 뜨는 것을 막을理由가 없다.
+      }
+    })();
+  }, [wsState]);
 
   // M5 팔레트
   const commands: Command[] = useMemo(
