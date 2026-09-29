@@ -16,6 +16,7 @@ import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
 import { MonitorPanel } from "./panels/MonitorPanel.js";
 import { DiffPanel } from "./editor/DiffPanel.js";
+import { planOpen, formatBytes } from "./editor/model.js";
 import { WsClient } from "./wsClient.js";
 import { DEFAULT_LAYOUT, movePanel, toggleCollapse, keyboardMove, panelOf, zoneLabel, type PanelId, type Zone } from "./layout/engine.js";
 import { loadDraft, saveDraft, clearDraft, searchCommands, type Command, type Toast } from "./panels/notify.js";
@@ -45,6 +46,60 @@ const EXAMPLES = [
   "테스트를 실행하고 실패한 것만 정리해 주세요",
 ];
 
+/** 패널 제목. 존과 무관하게 **같은 이름** 이어야 한다 — 제목을 존에서 만들면
+ *  패널이 옮겨갈 때 제목까지 바뀐다(사용자가 못 찾는다). */
+const TITLES: Record<string, string> = {
+  explorer: "탐색기",
+  agent: "에이전트",
+  editor: "에디터",
+  diff: "변경 검토",
+  monitor: "모니터",
+  log: "서버 로그",
+  settings: "설정",
+};
+
+/**
+ * 파일 보기. **빈 패널을 두지 않는다**(§11.3) — 열려 있는 파일이 없으면
+ * "무엇을 열 수 있나" 를 보여준다. 판정(`planOpen`)은 이미 검증된 모듈을 쓴다.
+ */
+function FileView({ info }: { info: { path: string; content: string; version: number; size: number } }) {
+  const plan = useMemo(() => planOpen({ path: info.path, name: info.path.split("/").pop() ?? "", size: info.size }, info.content), [info]);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "4px 8px", borderBottom: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
+        <strong style={{ fontSize: 11 }}>{info.path.split("/").pop()}</strong>
+        <span style={{ color: DIM, fontSize: 10 }}>{plan.language}</span>
+        {plan.readOnly && <span style={{ color: "#d29922", fontSize: 10 }}>읽기 전용</span>}
+        <span style={{ flex: 1 }} />
+        <span style={{ color: DIM, fontSize: 10 }}>{formatBytes(info.size)}</span>
+      </div>
+      {/* 못 열면 **이유** 를 말한다. 빈 화면이 되면 안 된다. */}
+      {plan.reason && <div style={{ padding: "4px 8px", color: plan.readOnly ? "#d29922" : DIM, fontSize: 11 }}>{plan.reason}</div>}
+      {plan.kind === "image" ? (
+        <div style={{ padding: 8, color: DIM, fontSize: 11 }}>이미지 뷰는 아직 구현되지 않았습니다. 경로와 크기는 위와 같습니다.</div>
+      ) : plan.kind === "binary" ? (
+        <div style={{ padding: 8, color: DIM, fontSize: 11 }}>바이너리라 내용을 표시하지 않습니다.</div>
+      ) : (
+        <pre
+          style={{
+            margin: 0,
+            padding: "6px 8px",
+            font: "11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            color: FG,
+            overflow: "auto",
+            flex: "1 1 auto",
+            minHeight: 0,
+          }}
+        >
+          {plan.content}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function Empty({ title, hint, actions }: { title: string; hint: string; actions?: { label: string; onClick: () => void }[] }) {
   return (
     <div style={{ padding: 16, color: DIM, display: "grid", gap: 8, justifyItems: "start" }}>
@@ -66,6 +121,26 @@ function Empty({ title, hint, actions }: { title: string; hint: string; actions?
       )}
     </div>
   );
+}
+
+/**
+ * 패널을 **존에 따라** 배치한다.
+ *
+ * 엔진이 판정한 존을 **그대로 렌더**해야 한다. 고정 3열 그리드로 그렸다가 존 라벨만
+ * 붙이면, 라벨이 실제 위치와 어긋난다 — 사용자는 "오른쪽 도크" 라고 적혀 있는데
+ * 화면에서는 중앙에 있다. **라벨이 거짓말을 하는 배치가 도킹 엔진보다 나쁘다.**
+ * 그래서 열 배열을 존에서 **계산**한다.
+ */
+/**
+ * 존별로 묶는다.
+ *
+ * `top` 과 `bottom` 도 **자기 자리를 갖는다.** 중앙 열에 끼워 넣으면서 머리에는
+ * "상단 도크" 라고 적으면 라벨이 거짓말이 된다(실제로 났다). 그래서 행을 따로 잡는다.
+ */
+function groupByZone(panels: { id: PanelId; zone: Zone }[]) {
+  const out: Record<Zone, PanelId[]> = { left: [], center: [], right: [], top: [], bottom: [] };
+  for (const p of panels) out[p.zone].push(p.id);
+  return out;
 }
 
 function Panel({
@@ -134,6 +209,15 @@ export default function App() {
   const [paletteQuery, setPaletteQuery] = useState("");
   const [modelName, setModelName] = useState<string | null>(null);
   const [diff, setDiff] = useState<{ path: string; oldText: string; newText: string } | null>(null);
+  // 열려 있는 파일(§5.1). 없으면 빈 패널이 아니라 "무엇을 열 수 있나" 를 보여준다.
+  const [openFile, setOpenFile] = useState<{ path: string; content: string; version: number; size: number } | null>(null);
+  const refreshTree = useCallback(async () => {
+    try {
+      await client.get("/api/fs/tree?path=.");
+    } catch {
+      /* 탐색기는 별도 패널에서 처리한다 */
+    }
+  }, []);
   const [layout, setLayout] = useState(DEFAULT_LAYOUT);
   const [monitorCollapsed, setMonitorCollapsed] = useState(false);
 
@@ -272,13 +356,69 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /**
+   * 패널 본문. **존과 무관하게** 같은 내용 — 패널이 옮겨가면 내용까지 바뀌면
+   * 사용자는 "어디로 옮긴 거지?" 하고 헤더만 찾게 된다.
+   */
+  const BODY: Partial<Record<PanelId, React.ReactNode>> = {
+    explorer: <Empty title="열린 파일이 없습니다" hint="탐색기에서 파일을 여세요. 경로는 워크스페이스 루트 아래로만 제한됩니다." />,
+    agent: (
+      <Empty
+        title="아직 메시지가 없습니다"
+        hint="입력창에 무엇을 지시할지 쓰세요. 파괴적인 도구는 승인 게이트를 거칩니다."
+        actions={EXAMPLES.map((t) => ({ label: t.length > 28 ? `${t.slice(0, 27)}…` : t, onClick: () => setDraft(t) }))}
+      />
+    ),
+    diff: diff ? (
+      <DiffPanel path={diff.path} oldText={diff.oldText} newText={diff.newText} source="file" onClose={() => setDiff(null)} />
+    ) : (
+      <Empty title="변경 사항이 없습니다" hint="에이전트가 파일을 쓰면 여기서 항목별로 승인하거나 되돌릴 수 있습니다." />
+    ),
+    editor: openFile ? (
+      <FileView info={openFile} />
+    ) : (
+      <Empty
+        title="열린 파일이 없습니다"
+        hint="탐색기에서 파일을 여세요. 저장하지 않은 탭은 창을 닫아도 세션에 남습니다."
+        actions={[{ label: "새로고침", onClick: () => void refreshTree() }, ...EXAMPLES.slice(0, 1).map((t) => ({ label: "예시 프롬프트", onClick: () => setDraft(t) }))]}
+      />
+    ),
+    settings: <Empty title="설정" hint="모델 · 브라우저 · 에이전트 · 로그 · 업데이트 · 고급. 모든 항목에 값의 출처와 근거가 함께 표시됩니다." />,
+  };
+
   const visible = useMemo(() => visibleTail(filterEntries(logs, filter), 2000), [logs, filter]);
   const hits = useMemo(() => searchCommands(commands, paletteQuery, 12), [commands, paletteQuery]);
+  // 로그 패널은 항상 최하단에 붙으므로 배치 대상에서 제외한다(§5.12 닫을 수 없음).
+  const zones = useMemo(
+    () => groupByZone(layout.panels.filter((p) => p.id !== "log").map((p) => ({ id: p.id, zone: p.zone }))),
+    [layout],
+  );
+  /** 입력창을 그릴 열. **정확히 하나** — 두 곳에 그리면 같은 입력창이 두 개 보인다. */
+  const inputZone: Zone = zones.right.includes("agent")
+    ? "right"
+    : zones.left.includes("agent")
+      ? "left"
+      : zones.center.includes("agent")
+        ? "center"
+        : "center";
+  // 열 폭도 존에 따라 정한다 — 없는 열은 만들지 않는다(빈 공간을 남기면 낭비다).
+  const gridCols = `${zones.left.length ? "260px " : ""}1fr${zones.right.length ? " 380px" : ""}`;
+  const gridRows = ["28px", ...(zones.top.length ? ["auto"] : []), "1fr", "auto"].join(" ");
   const full = bufferFullLabel(logStatus);
   const bootDone = steps?.filter((s) => s.ok).length ?? 0;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "260px 1fr 380px", gridTemplateRows: "28px 1fr auto", height: "100vh", background: BG, color: FG, font: "12px/1.5 system-ui, -apple-system, 'Noto Sans KR', sans-serif" }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: gridCols,
+        gridTemplateRows: "28px 1fr auto",
+        height: "100vh",
+        background: BG,
+        color: FG,
+        font: "12px/1.5 system-ui, -apple-system, 'Noto Sans KR', sans-serif",
+      }}
+    >
       {/* 상단 바 */}
       <header style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, padding: "0 10px", borderBottom: `1px solid ${BORDER}`, background: "#161b22" }}>
         <strong>harnesside</strong>
@@ -292,61 +432,103 @@ export default function App() {
         </span>
       </header>
 
-      {/* 좌: 탐색기 */}
-      <div style={{ gridRow: 2, display: "flex", flexDirection: "column", gap: 6, padding: 6, minHeight: 0, borderRight: `1px solid ${BORDER}` }}>
-        <Panel title="탐색기" zone={panelOf(layout, "explorer")?.zone ?? "left"} collapsed={panelOf(layout, "explorer")?.collapsed} onToggle={() => setLayout((l) => toggleCollapse(l, "explorer"))} onMove={(z) => setLayout((l) => movePanel(l, "explorer", z))}>
-          <Empty title="열린 파일이 없습니다" hint="왼쪽 패널의 탐색기에서 파일을 여세요. 경로는 워크스페이스 루트 아래로만 제한됩니다." />
-        </Panel>
-        <Panel title="변경 검토" zone={panelOf(layout, "diff")?.zone ?? "center"} collapsed={panelOf(layout, "diff")?.collapsed} onToggle={() => setLayout((l) => toggleCollapse(l, "diff"))} onMove={(z) => setLayout((l) => movePanel(l, "diff", z))}>
-          {diff ? (
-            <DiffPanel path={diff.path} oldText={diff.oldText} newText={diff.newText} source="file" onClose={() => setDiff(null)} />
-          ) : (
-            <Empty title="변경 사항이 없습니다" hint="에이전트가 파일을 쓰면 여기서 항목별로 승인하거나 되돌릴 수 있습니다." />
-          )}
-        </Panel>
-      </div>
+      {/* 상단 도크 — 전용 행. 중앙 열에 넣으면 라벨이 거짓말이 된다(§5.4·§5.8). */}
+      {zones.top.length > 0 && (
+        <div
+          style={{
+            gridRow: 2,
+            gridColumn: "1 / -1",
+            display: "flex",
+            flexDirection: "row",
+            gap: 6,
+            padding: 6,
+            minWidth: 0,
+            borderBottom: `1px solid ${BORDER}`,
+            maxHeight: 280,
+          }}
+        >
+          {zones.top.map((id) => (
+            <div key={id} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+              <Panel
+                title={TITLES[id] ?? id}
+                zone="top"
+                collapsed={panelOf(layout, id)?.collapsed}
+                onToggle={() => setLayout((l) => toggleCollapse(l, id))}
+                onMove={(target) => setLayout((l) => movePanel(l, id, target))}
+              >
+                {BODY[id]}
+              </Panel>
+            </div>
+          ))}
+        </div>
+      )}
 
-      {/* 중앙: 에이전트 */}
-      <main style={{ gridRow: 2, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, borderRight: `1px solid ${BORDER}` }}>
-        <Panel title="에이전트" zone={panelOf(layout, "agent")?.zone ?? "right"} collapsed={panelOf(layout, "agent")?.collapsed} onToggle={() => setLayout((l) => toggleCollapse(l, "agent"))} onMove={(z) => setLayout((l) => movePanel(l, "agent", z))}>
-          <Empty title="아직 메시지가 없습니다" hint="아래 입력창에 무엇을 지시할지 쓰세요. 파괴적인 도구는 승인 게이트를 거칩니다." actions={EXAMPLES.map((t) => ({ label: t.length > 28 ? `${t.slice(0, 27)}…` : t, onClick: () => setDraft(t) }))} />
-        </Panel>
-        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, margin: 6, display: "flex", flexDirection: "column", flex: "0 0 auto" }}>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="무엇을 할까요? (실수로 창을 닫아도 입력 내용은 남습니다)"
-            style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", minHeight: 72, padding: 8, font: "inherit" }}
-          />
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}` }}>
-            <span style={{ fontSize: 10, color: DIM }}>{draft ? "드래프트 저장됨" : ""}</span>
-            <span style={{ flex: 1 }} />
-            <button
-              type="button"
-              onClick={() => {
-                clearDraft(typeof localStorage !== "undefined" ? localStorage : null);
-                setDraft("");
-              }}
-              style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}
-            >
-              지우기
-            </button>
-            <button type="button" disabled={!draft.trim()} style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 10px", cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
-              보내기
-            </button>
+      {/* 좌 / 중앙 / 우 — **존에서 계산한다**(고정 그리드 아님) */}
+      {(["left", "center", "right"] as const).map((zone) => {
+        const ids = zones[zone];
+        if (ids.length === 0) return null;
+        return (
+          <div
+            key={zone}
+            style={{
+              // 상단 도크가 있으면 본체는 그 다음 행이다.
+              gridRow: zones.top.length > 0 ? 3 : 2,
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              padding: 6,
+              minHeight: 0,
+              minWidth: 0,
+              borderRight: zone === "right" ? "none" : `1px solid ${BORDER}`,
+            }}
+          >
+            {ids.map((id) => {
+              const p = panelOf(layout, id);
+              const z = p?.zone ?? zone;
+              const move = (target: Zone) => setLayout((l) => movePanel(l, id, target));
+              const toggle = () => setLayout((l) => toggleCollapse(l, id));
+              if (id === "monitor") {
+                return <MonitorPanel key={id} latest={metrics} series={metricSeries} collapsed={p?.collapsed} onToggle={toggle} />;
+              }
+              return (
+                <Panel key={id} title={TITLES[id] ?? id} zone={z} collapsed={p?.collapsed} onToggle={toggle} onMove={move}>
+                  {BODY[id]}
+                </Panel>
+              );
+            })}
+            {/* 입력창은 **한 곳에만** 렌더한다. 에이전트 열이 있으면 그 열에,
+                없으면 중앙에. 두 열에 다 그리면 같은 입력창이 두 개 보이고
+                어느 쪽에 썼는지 모른다(실제로 그렇게 났다). */}
+            {zone === inputZone && (
+              <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, display: "flex", flexDirection: "column", flex: "0 0 auto" }}>
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder="무엇을 할까요? (실수로 창을 닫아도 입력 내용은 남습니다)"
+                  style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", minHeight: 72, padding: 8, font: "inherit" }}
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}` }}>
+                  <span style={{ fontSize: 10, color: DIM }}>{draft ? "드래프트 저장됨" : ""}</span>
+                  <span style={{ flex: 1 }} />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearDraft(typeof localStorage !== "undefined" ? localStorage : null);
+                      setDraft("");
+                    }}
+                    style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}
+                  >
+                    지우기
+                  </button>
+                  <button type="button" disabled={!draft.trim()} style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 10px", cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
+                    보내기
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      </main>
-
-      {/* 우: 모니터 */}
-      <aside style={{ gridRow: 2, display: "flex", flexDirection: "column", gap: 6, padding: 6, minHeight: 0 }}>
-        <MonitorPanel latest={metrics} series={metricSeries} collapsed={monitorCollapsed} onToggle={() => setMonitorCollapsed((v) => !v)} />
-        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <Panel title="모니터" zone={panelOf(layout, "monitor")?.zone ?? "right"} collapsed={monitorCollapsed} onToggle={() => setMonitorCollapsed((v) => !v)} onMove={(z) => setLayout((l) => movePanel(l, "monitor", z))}>
-            <span />
-          </Panel>
-        </div>
-      </aside>
+        );
+      })}
 
       {/* 하단: 로그 — 닫을 수 없는 기본 탭 (§5.12) */}
       <footer style={{ gridColumn: "1 / -1", borderTop: `1px solid ${BORDER}`, background: BG }}>
