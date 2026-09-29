@@ -101,6 +101,18 @@ jobs:
           seq 1 12 > /tmp/want.txt
           diff -u /tmp/want.txt /tmp/nums.txt && echo "12단계 순서 정상"
 
+      - name: 가짜 모델 준비
+        # **모델이 없으면 llama 를 띄우지 않는다.** 실제로 그렇게 동작했다:
+        # 단계 [7] 이 "선행 조건 미충족 — 스킵" 이 되고, 창은 뜨지만 추론은 죽는다.
+        # 그래서 spawn 경로를 검증하려면 .gguf 파일이 있어야 한다.
+        # `chooseModel` 은 **파일 존재**만 본다(stat().isFile) — 내용·크기는 안 본다.
+        # 파일 이름이 우선 계열(§7.2)에 들어가기만 하면 선택된다.
+        run: |
+          mkdir -p "$HOME/fake-models"
+          # 정규화 후 "ornith-1.5-35b-a3b" 를 포함해야 우선 계열로 잡힌다.
+          head -c 4096 /dev/zero > "$HOME/fake-models/Ornith-1.5-35B-A3B-Q3_K_M.gguf"
+          ls -l "$HOME/fake-models"
+
       - name: spawn 경로 — **우리가 띄운 llama 는 함께 죽는다** (§4.4)
         # 8080 을 비워 두고 데몬이 **직접 띄우게** 한다. 그래야 §4.4 의 요구
         # ("창을 닫으면 llama 도 멈춘다")를 실제로 검증한다.
@@ -110,18 +122,35 @@ jobs:
         # 그건 따로 다룬다(§4.4 는 "우리가 띄운" llama 에 대한 요구다).
         env:
           HARNESSIDE_LLAMA_SERVER: ${{ github.workspace }}/scripts/fake-llama-server.mjs
+          HARNESSIDE_MODELS_DIR: ${{ env.HOME }}/fake-models
         run: |
           kill -9 "$(cat /tmp/fake-llama.pid 2>/dev/null)" 2>/dev/null || true
           sleep 1
           rm -f .harnesside/state/instance.lock
           setsid npx tsx src/server/index.ts --no-browser < /dev/null > /tmp/spawn.log 2>&1 &
-          SPID=$!
+          # `$!` 로 잡으면 **안 된다.** `setsid` 는 포크하고 부모가 즉시 종료하므로
+          # `$!` 는 **이미 죽은 pid** 다. 실제로 그랬다: kill 이 아무 일도 안 하면서 데몬은
+          # 살아남았고, llama 포트가 계속 열려 있어 "종료 안 됨" 으로 오판했다.
+          # 정본은 **인스턴스 락** — 데몬이 자기 pid 를 직접 써 두는 곳이다.
           for i in $(seq 1 90); do
-            grep -q '\[12/12\]' /tmp/spawn.log && break; sleep 1
+            [ -s .harnesside/state/instance.lock ] && break; sleep 1
           done
-          grep -q '\[12/12\]' /tmp/spawn.log || { echo "데몬이 12단계에 못 도달"; tail -20 /tmp/spawn.log; exit 1; }
+          [ -s .harnesside/state/instance.lock ] || { echo "데몬이 락을 만들지 않았다"; tail -20 /tmp/spawn.log; exit 1; }
+          SPID=$(head -1 .harnesside/state/instance.lock)
+          # 시그널을 보낼 pid 가 **정말 서버**인지 확인한다. 검증기가 거짓말하는 건
+          # 검증기가 없는 것보다 나쁘다(실제로 이 대화에서 세 번 배웠다).
+          tr '\0' ' ' < "/proc/$SPID/cmdline" 2>/dev/null | grep -q 'src/server/index.ts' \
+            || { echo "락의 pid $SPID 가 서버가 아닙니다 — 신호 대상부터 확인"; exit 1; }
+          for i in $(seq 1 90); do
+            grep -q '헬스체크: 준비 완료' /tmp/spawn.log && break; sleep 1
+          done
+          grep -q '12/12' /tmp/spawn.log || { echo "데몬이 12단계에 못 도달"; tail -20 /tmp/spawn.log; exit 1; }
+          # 단계 [12] 는 llama **기동이 아니라 계획** 다. 실제로 스폰과 헬스체크는
+          # 12단계 **이후** 에 일어난다 — 여기서 12/12 만 보고 "됐다" 고 하면 안 된다.
+          grep -q '헬스체크: 준비 완료' /tmp/spawn.log || {
+            echo "llama 헬스체크가 통과하지 않았다"; tail -20 /tmp/spawn.log; exit 1; }
           SPORT=$(grep -oE '포트 계획 — llama [0-9]+' /tmp/spawn.log | grep -oE '[0-9]+$' | head -1)
-          echo "llama 포트: $SPORT"
+          echo "llama 포트: $SPORT (데몬 pid $SPID)"
           # `grep -oE '[0-9]+'` 를 쓰면 `[1/12]` 에서 **1 과 12 를 둘 다** 뽑는다
           # (개수 `/12]` 쪽 숫자까지). 그래서 **대괄호 안의 앞 숫자만** 꺼낸다.
           grep -oE '^\[[0-9]+' /tmp/spawn.log | tr -d '[' | sort -n > /tmp/dnums2.txt
@@ -129,8 +158,12 @@ jobs:
           # 우리가 띄운 서버가 실제로 그 포트에서 응답하는지
           curl -sf --max-time 3 "http://127.0.0.1:${SPORT:-8080}/v1/models" > /dev/null \
             && echo "스폰한 llama 가 응답합니다" || { echo "스폰한 llama 가 응답하지 않습니다"; exit 1; }
-          kill -TERM $SPID 2>/dev/null || true
-          sleep 6
+          # 데몬이 스스로 죽지 않았는지도 본다 — `--no-browser` 회귀의 직접 증상이다.
+          if grep -q 'window-closed' /tmp/spawn.log; then
+            echo "데몬이 '창이 닫혔다'는 이유로 스스로 종료됐습니다 — 창을 띄우지 않았는데 그런 버그입니다"; exit 1
+          fi
+          kill -TERM $SPID
+          sleep 8
           kill -9 $SPID 2>/dev/null || true
           sleep 2
           # 판정 정본은 **포트** 다. `pgrep -f llama-server` 는 **이 셸 자신** 을 잡는다

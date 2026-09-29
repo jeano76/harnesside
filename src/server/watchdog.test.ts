@@ -140,3 +140,58 @@ test("하트비트 유예 — 도구 실행 중에 서버가 죽지 않는다 (�
   assert.equal(heartbeatFresh(now - 14_999, 15, now), true);
   assert.equal(heartbeatFresh(now - 15_000, 15, now), false, "경계값");
 });
+
+// ── 회귀: `--no-browser` 데몬이 **자기 첫 tick 에 스스로 죽었다** ──────────────
+//
+// 증상: CI 부팅 스모크가 "스폰한 llama 가 응답하지 않습니다" 로 실패.
+// 로그에는 `[llama] llama-server 준비 완료(/v1/models 200)` 가 남아 있었고,
+// 바로 뒤에 `[shutdown] window-closed` 가 있었다.
+//
+// 원인: `--no-browser` 는 Chrome 을 띄우지 않는데 mode 는 여전히 `window` 였다
+// (기본값이 window — D3). `isChromeAlive()` 는 `!!browser?.pid` 이므로 **영구히
+// false**. 워치독은 그것을 "창이 닫혔다" 로 읽고 종료했다.
+// 즉 **창을 띄우지 않기로 한 경우**에 window 모드의 수명 규칙이 적용됐다.
+// 부재(없음)와 종료(죽음)는 다른 신호인데, 코드가 그 둘을 구분하지 않았다.
+//
+// 수정: `expectChrome: false` 면 Chrome 분기를 통째로 건너뛴다.
+test("expectChrome:false — 창을 띄우지 않았으면 '창이 닫혔다'는 신호가 없다", () => {
+  const s = setup("window", { expectChrome: false, intervalMs: 5 });
+  // `isChromeAlive` 는 창이 없으므로 false 다. 그래도 **죽지 않아야** 한다.
+  s.state.chrome = false;
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.equal(s.shutdowns.length, 0, `창이 없는데 종료됐다: ${s.shutdowns.join(",")}`);
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("expectChrome 생략은 예전 동작을 유지한다 — 창이 있었으면 '닫힘'을 따른다", () => {
+  // 기본값 true 여야 **기존 호출자**의 수명이 안 바뀐다. 이 게짓을 바꾸면 다른 곳이 조용히
+  // 살아남기 시작한다.
+  const s = setup("window", { intervalMs: 5 });
+  s.state.chrome = false;
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, ["window-closed"]);
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("expectChrome:false 여도 llama 죽음은 **알린다** — 무음으로 삼키지 않는다", () => {
+  // 창 분기를 건너뛰는 것이 "Chrome 상태를 아무것도 안 본다" 로 바뀌면 안 된다.
+  const s = setup("daemon", { expectChrome: false, intervalMs: 5 });
+  s.state.llama = false;
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      const msg = s.ring.query({ levels: ["error"] }).map((e) => e.message).join(" ");
+      assert.match(msg, /llama-server 가 종료/, "llama 죽음은 창 유무와 무관하게 알려야 한다");
+      assert.equal(s.shutdowns.length, 0, "daemon 모드에서 자동으로 죽지 않는다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});

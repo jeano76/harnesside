@@ -381,14 +381,22 @@ async function main(): Promise<number> {
           ring,
           isLlamaAlive: () => !!launcher?.pid,
           isChromeAlive: () => !!browser?.pid,
+          // `--no-browser` / `--daemon` 은 **창을 띄우지 않는다**. 그러면 window 모드여도
+          // "창이 닫혔다" 는 신호가 성립하지 않으므로, 창이 있었어야 하는지를 알려줘야 한다.
+          // 이걸 빠뜨리면 워치독이 첫 tick 에 "창이 닫혔다" 고 판단해 데몬을 죽인다
+          // (실제로 CI 부팅 스모크가 그렇게 죽었다 — llama 는 정상 응답 중이었다).
+          expectChrome: !NO_BROWSER,
           clientConnected: () => (hub?.clientCount ?? 0) > 0,
           idleShutdownSec: Number(process.env.HARNESSIDE_IDLE_SHUTDOWN_SEC ?? 0),
           shutdown: (reason) => void shutdown(reason),
         });
         ring.info(
           "lifecycle",
-          `서버가 대기 중입니다 (${mode} 모드${NO_BROWSER ? " · 창 없음" : ""}). 창을 닫으면 ` +
-            (mode === "daemon" ? "서버는 계속됩니다." : "llama-server 도 함께 종료됩니다(요구 9)."),
+          NO_BROWSER
+            ? `서버가 대기 중입니다 (${mode} 모드 · 창 없음). 창이 없으니 닫힘 신호는 없고, ` +
+                `llama-server 는 이 프로세스가 끝날 때까지 함께 돕니다.`
+            : `서버가 대기 중입니다 (${mode} 모드). 창을 닫으면 ` +
+                (mode === "daemon" ? "서버는 계속됩니다." : "llama-server 도 함께 종료됩니다(요구 9)."),
           "server"
         );
         return { ok: true, detail: `대기 중 (${mode} 모드)` };

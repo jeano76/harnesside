@@ -23,6 +23,22 @@ export interface WatchdogDeps {
   /** 자식 상태 조회. 없으면 "모름"으로 본다. */
   isLlamaAlive?: () => boolean;
   isChromeAlive?: () => boolean;
+  /**
+   * Chrome 을 **애초에 띄우기로 했는지**. false 면 "창이 닫혔다" 는 신호가
+   * **아예 성립하지 않는다** — 창이 없었으니까.
+   *
+   * 실제로 겪은 버그: `--no-browser` 로 띄우면 Chrome 을 띄우지 않는데도 mode 는
+   * `window` 였다(D3: 기본이 window). 그러면 `isChromeAlive()` 가 **영구히 false** 라
+   * 워치독이 첫 tick 에 "창이 닫혔다" 고 판단하고 **자기 자신을 종료**했다. CI 부팅
+   * 스모크가 그랬다: llama 를 정상적으로 띄우고 `/v1/models 200` 까지 확인한 뒤
+   * 곧바로 종료돼, "스폰한 llama 가 응답하지 않는다" 는 메시지가 남았다.
+   *
+   * 즉 **창을 띄우지 않기로 한 경우**에.window 모드의 수명 규칙(창이 닫히면 종료)을
+   * 적용하면 안 된다. 부재(없음)와 종료(죽음)는 다른 신호다.
+   *
+   * 기본값은 true — 주지 않은 호출자는 예전처럼 "창이 있었다" 고 본다.
+   */
+  expectChrome?: boolean;
   /** 종료 실행(§4.4 shutdown). */
   shutdown: (reason: string) => Promise<void> | void;
   /** 데몬 유휴 종료 정책(초). 0/미지정 = 없음(기본값이 조용히 사라지는 최악의 UX). */
@@ -69,7 +85,11 @@ export function startWatchdog(deps: WatchdogDeps): Watchdog {
     }
 
     // 2) Chrome: 모드에 따라 다르게 처리한다(§3.7.2 의 의도적 예외).
-    if (deps.isChromeAlive && !deps.isChromeAlive()) {
+    //
+    // `expectChrome: false` (창을 아예 띄우지 않음) 면 이 분기를 **통째로 건너뛴다**.
+    // `isChromeAlive()` 는 "죽었나?" 를 묻는데, 애초에 없던 것에는 "죽음" 이 없다.
+    // 여기서 구분하지 않으면 `--no-browser` 데몬이 **자기 첫 tick 에 스스로 죽는다.**
+    if (deps.expectChrome !== false && deps.isChromeAlive && !deps.isChromeAlive()) {
       if (!chromeDownNotified) {
         chromeDownNotified = true;
         if (deps.mode === "window") {
