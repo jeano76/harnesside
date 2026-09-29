@@ -10,6 +10,8 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ApiClient, ApiError, type BootStep, type GpuInfo } from "./api.js";
 import { resolveToken } from "./session.js";
+import { LogPanel } from "./panels/LogPanel.js";
+import type { LogEntry, LogLevel } from "../server/logRing.js";
 
 const { token, cleanHref } = resolveToken(
   typeof location !== "undefined" ? location.href : "/",
@@ -26,6 +28,16 @@ function App() {
   const [steps, setSteps] = useState<BootStep[] | null>(null);
   const [gpu, setGpu] = useState<GpuInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // §5.12: 로그 패널은 **닫을 수 없는 기본 탭**이다. 데몬이라 서버 상태를 보는
+  // 유일한 창이고, 닫으면 "멈췄다"로 오해된다.
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logStatus, setLogStatus] = useState<{
+    keptChars: number;
+    droppedLines: number;
+    maxChars: number;
+    bufferFull: boolean;
+  } | null>(null);
+  const [logLevel, setLogLevel] = useState<LogLevel>("info");
 
   useEffect(() => {
     let alive = true;
@@ -50,6 +62,28 @@ function App() {
     };
   }, []);
 
+  // 로그 구독: WS 는 P3 에서 붙는다. 지금은 폴링으로 같은 화면을 보인다 —
+  // "상시 출력" 요구는 WS 가 없어도 성립해야 한다(폴링이라도 흐름이 끊기면 안 된다).
+  useEffect(() => {
+    let alive = true;
+    const pull = async () => {
+      try {
+        const r = await client.get<{ entries: LogEntry[]; status: typeof logStatus }>("/api/logs?limit=500");
+        if (!alive) return;
+        setLogs(r.entries);
+        setLogStatus(r.status);
+      } catch {
+        // 로그 조회 실패가 부팅 화면을 죽이면 안 된다 — 조용히 다음 주기에 다시 시도
+      }
+    };
+    void pull();
+    const t = setInterval(pull, 2000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
   const done = steps?.filter((s) => s.ok).length ?? 0;
   return (
     <div style={{ padding: 16, display: "grid", gridTemplateRows: "auto 1fr auto", height: "100%", gap: 12 }}>
@@ -59,6 +93,11 @@ function App() {
         {steps && (
           <span style={{ color: "#8b949e" }}>
             {done}/{steps.length} 완료
+          </span>
+        )}
+        {logStatus && (
+          <span style={{ color: "#6e7681", fontSize: 12 }}>
+            로그 {logStatus.keptChars.toLocaleString()}자 / 상한 {logStatus.maxChars.toLocaleString()}자
           </span>
         )}
       </header>
@@ -91,6 +130,16 @@ function App() {
         ) : (
           <div>GPU 정책 조회 중…</div>
         )}
+        {/* §5.12: 서버 로그가 상시 보인다. 서버가 데몬이라 이 패널이 유일한 창이다. */}
+        <div style={{ marginTop: 6, border: "1px solid #30363d", borderRadius: 6, overflow: "hidden" }}>
+          <LogPanel
+            entries={logs}
+            status={logStatus ?? undefined}
+            level={logLevel}
+            onSetLevel={setLogLevel}
+            height={180}
+          />
+        </div>
       </footer>
     </div>
   );

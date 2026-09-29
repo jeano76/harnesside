@@ -113,12 +113,16 @@ export class BrowserLauncher {
     });
 
     // 자식 로그를 받아 §5.12 패널로 넘긴다(창이 GPU 문제로 죽는 경우가 실제로 있다).
+    //
+    // **한 줄을 두 경로로 보내지 않는다.** `onLine` 과 `logger` 에 동시에 넣으면
+    // 같은 줄이 두 번 보인다(실제로 그랬다 — "왜 로그가 두 번 나오지" 라는 질문은
+    // 사용자가 아니라 우리가 만들어 낸 것). `onLine` 이 데이터 경로, `logger` 는
+    // 수명주기(스폰/종료) 전용이다.
     const pipe = (idx: 1 | 2) => {
       const src = this.proc?.stdio?.[idx];
       if (!src) return;
       createInterface({ input: src as NodeJS.ReadableStream }).on("line", (line) => {
         this.deps.onLine?.(line);
-        this.log("info", `[chrome] ${line}`);
       });
     };
     pipe(1);

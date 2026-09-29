@@ -30,25 +30,32 @@ verified_this_session:
   - "보안: 토큰 없는 /api/gpu → 401 · Host 위조 → 403 · 경로 탈출 내용 새지 않음"
 ```
 
-> ⚠️ **환경 변경 (개발 착수 시 반드시 알아야 할 사실)**: 이 머신에는 `llama-server.service`
-> (systemd user) 가 llama.cpp 를 **자동 재시작**한다. `kill` 로 멈춰도 몇 분 안에 다시 뜬다.
-> harnesside 를 개발하려면 먼저 아래를 실행해 VRAM 을 비워야 한다.
-> 되돌리기: `systemctl --user enable --now llama-server.service cpulimit-llama.service`
+> ⚠️ **환경: llama.cpp 에는 워치독이 붙어 있다 (2026-09-29 전부 off)**
+>
+> 이 머신의 llama.cpp 는 네 개의 systemd user 유닛으로 관리되고, **워치독이 재시작한다.**
+> `kill` 로 멈춰도 곧 다시 뜬다 — 재현하는 동안 실제로 겪었다.
+>
+> | 유닛 | 역할 | 주기 |
+> |---|---|---|
+> | `llama-watchdog.timer` | `llama-watchdog.sh` 가 `/slots` 를 쳐 **행(hang) 을 감지하고 `systemctl --user restart llama-server.service`** | 60초 |
+> | `llama-server-monitor.timer` | 로그/상태 알림 | 20분 |
+> | `llama-server.service` | llama.cpp 본체 | 상시 |
+> | `cpulimit-llama.service` | CPU 사용률 제한 | 상시 |
+>
+> `Restart=always` 로는 **잡히지 않는다** — 워치독이 존재하는 이유가 그것이다
+> (스크립트 주석: "크래시가 아니라 행으로 죽는다").
 >
 > ```bash
+> # 개발 시작 전 — VRAM 이 비어야 GPU 정책(§4.7)을 실측할 수 있다
+> systemctl --user disable --now llama-watchdog.timer llama-server-monitor.timer
 > systemctl --user disable --now llama-server.service cpulimit-llama.service
+> rm -rf ~/.local/state/llama-watchdog      # 잔여 실패 카운트 제거
+>
+> # 되돌리기
+> systemctl --user enable --now llama-watchdog.timer llama-server-monitor.timer
+> systemctl --user enable --now llama-server.service cpulimit-llama.service
 > ```
 ```
-
-
-> ⚠️ **환경 변경 (개발 착수 시 반드시 알아야 할 사실)**: 이 머신에는 `llama-server.service`
-> (systemd user) 가 llama.cpp 를 **자동 재시작**한다. `kill` 로 멈춰도 몇 분 안에 다시 뜬다.
-> harnesside 를 개발하려면 먼저 아래를 실행해 VRAM 을 비워야 한다.
-> 되돌리기: `systemctl --user enable --now llama-server.service cpulimit-llama.service`
->
-> ```bash
-> systemctl --user disable --now llama-server.service cpulimit-llama.service
-> ```
 
 ## ② Phase 대시보드
 

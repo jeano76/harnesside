@@ -22,6 +22,9 @@ import { bootstrap, type BootstrapResult } from "./bootstrap.js";
 import { LlamaLauncher } from "./llamaLauncher.js";
 import { acquireInstanceLock, type InstanceLock } from "./bootstrap.js";
 import { HttpServer } from "./httpServer.js";
+import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type DaemonMode } from "./daemon.js";
+import { teeChild } from "./logWatcher.js";
+import type { LogLevel, LogSource } from "./logRing.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { issueToken } from "../auth/token.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
@@ -34,9 +37,25 @@ const flag = (n: string) => argv.includes(n);
 const DRY = flag("--dry");
 const NO_BROWSER = flag("--no-browser") || flag("--daemon");
 
-/** 데몬은 사람이 보지 않는다. stdout 은 파일/파이프로 새므로 한 줄씩만 쓴다(§3.7.1). */
+/** 데몬 상태 출력 — 한 줄씩만. 화면 출력(커서 이동·바)은 절대 하지 않는다(§3.7.1). */
 function emit(line: string) {
   process.stdout.write(`${line}\n`);
+}
+
+/**
+ * 읽기 전용 명령은 부팅 없이 즉시 처리한다(§3.7.4).
+ * `status`/`logs`/`down`/`doctor` 는 서버가 죽어 있어도 동작해야 한다 —
+ * "서버가 없으니 상태를 알 수 없다" 는 비참한 상황이 되기 때문이다.
+ */
+async function tryStandalone(): Promise<boolean> {
+  const { runStandalone, USAGE } = await import("./cli.js");
+  if (argv.includes("--help") || argv.includes("-h") || argv[0] === "help") {
+    emit(USAGE);
+    return true;
+  }
+  const code = await runStandalone(argv);
+  if (code !== null) process.exit(code);
+  return false;
 }
 
 function stateDir(projectRoot: string): string {
@@ -47,7 +66,13 @@ async function main(): Promise<number> {
   const projectRoot = process.cwd();
   const home = homedir();
   const modelsDir = process.env.HARNESSIDE_MODELS_DIR ?? join(home, ".harnesside", "models");
+  const paths = defaultPaths(projectRoot, home);
   await mkdir(stateDir(projectRoot), { recursive: true });
+
+  // 데몬 로깅: 전부 이 링을 지난다(분산 로깅은 반드시 누락된다 — §3.5.1).
+  const logging = initDaemonLogging(paths);
+  const ring = logging.ring;
+  const mode: DaemonMode = flag("--daemon") ? "daemon" : "window";
 
   if (DRY) {
     const r = await bootstrap({ projectRoot, modelsDir, dryRun: true });
@@ -84,6 +109,8 @@ async function main(): Promise<number> {
       emit("[shutdown] HTTP/WS 종료 완료");
     }
     if (lock) await lock.release();
+    await clearInstance(paths).catch(() => {});
+    logging.close();
     emit("[shutdown] 종료합니다");
     process.exit(0);
   };
@@ -172,7 +199,28 @@ async function main(): Promise<number> {
             llama: r.llama?.source ?? null,
             model: r.model?.path ?? null,
             gpuMode: r.gpu?.mode ?? null,
-          }));
+          }))
+          // §5.12 로그 패널 급유. 폴링 경로(WS 는 P3).
+          .route("GET", "/api/logs", (c) => {
+            const limit = Number(c.query.get("limit") ?? 500);
+            const parseList = <T extends string>(v: string | null): T[] | undefined => {
+              if (!v) return undefined;
+              const parts = v.split(",").map((x) => x.trim()).filter(Boolean) as T[];
+              return parts.length ? parts : undefined;
+            };
+            return {
+              entries: ring.query({
+                limit: Number.isFinite(limit) ? limit : 500,
+                levels: parseList<LogLevel>(c.query.get("levels")),
+                sources: parseList<LogSource>(c.query.get("sources")),
+              }),
+              status: ring.status,
+            };
+          })
+          .route("POST", "/api/logs/clear", () => {
+            ring.clear();
+            return { cleared: true, status: ring.status };
+          });
         const { port: actual } = await http.start();
         return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };
       },
@@ -193,8 +241,31 @@ async function main(): Promise<number> {
             extraArgs: process.env.HARNESSIDE_CHROME_EXTRA_ARGS?.split(/\s+/).filter(Boolean) ?? [],
           },
           {
-            logger: (level, m) => (level === "error" ? emit(m) : undefined),
-            onLine: (l) => emit(`[chrome] ${l}`),
+            // 수명주기 이벤트만 logger 로(스폰/종료/오류). 자식 줄은 onLine 이 담당한다 —
+            // 두 경로로 보내면 같은 줄이 두 번 보인다.
+            logger: (level, m, data) => {
+              ring.append({
+                ts: Date.now(),
+                level: level === "error" ? "error" : level === "warn" ? "warn" : "info",
+                scope: "browser",
+                source: "chrome",
+                message: m,
+                data: (data ?? {}) as Record<string, unknown>,
+              });
+            },
+            // 자식 로그는 **원문 그대로** 링에 남긴다. ERROR 같은 줄은 승격시킨다
+            // (브라우저가 GPU 문제로 죽는 경우가 실제로 있다 — §5.12.1).
+            onLine: (l) => {
+              const isErr = /error|fatal|fail|oom/i.test(l);
+              ring.append({
+                ts: Date.now(),
+                level: isErr ? "error" : "info",
+                scope: "browser",
+                source: "chrome",
+                message: l,
+              });
+              if (isErr) emit(`[chrome] ${l}`);
+            },
           }
         );
         const res = await browser.launch();
@@ -318,10 +389,15 @@ async function tryAdopt(port: number, timeoutMs = 1500): Promise<string | null> 
   }
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch(async (e) => {
-    // 부팅 실패도 로그로 남기고 0 이 아닌 값으로 끝낸다(데몬은 사람이 보지 않는다).
-    emit(`[fatal] ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
-    process.exit(1);
-  });
+// 읽기 전용 명령은 부팅 없이 끝낸다(서버가 죽어도 상태를 알 수 있어야 한다).
+if (await tryStandalone()) {
+  // 처리 완료
+} else {
+  main()
+    .then((code) => process.exit(code))
+    .catch(async (e) => {
+      // 부팅 실패도 로그로 남기고 0 이 아닌 값으로 끝낸다(데몬은 사람이 보지 않는다).
+      emit(`[fatal] ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
+      process.exit(1);
+    });
+}
