@@ -20,6 +20,7 @@
 
 import { bootstrap, type BootstrapResult } from "./bootstrap.js";
 import { LlamaLauncher } from "./llamaLauncher.js";
+import { resolveBrowserIntent } from "./browserIntent.js";
 import { acquireInstanceLock, type InstanceLock } from "./bootstrap.js";
 import { HttpServer, readBody } from "./httpServer.js";
 import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type DaemonMode } from "./daemon.js";
@@ -41,7 +42,10 @@ import { mkdir, access } from "node:fs/promises";
 const argv = process.argv.slice(2);
 const flag = (n: string) => argv.includes(n);
 const DRY = flag("--dry");
-const NO_BROWSER = flag("--no-browser") || flag("--daemon");
+// "창을 띄워야 하는가" 의 **정본은 browserIntent.ts** 다. 여기서 또 판단하면
+// 두 진실원이 되고, 실제로 그랬다 — 플래그 변수는 있었는데 단계 11 이 안 봤다.
+const BROWSER_INTENT = resolveBrowserIntent(argv);
+const NO_BROWSER = !BROWSER_INTENT.launch;
 
 /** 데몬 상태 출력 — 한 줄씩만. 화면 출력(커서 이동·바)은 절대 하지 않는다(§3.7.1). */
 function emit(line: string) {
@@ -318,6 +322,20 @@ async function main(): Promise<number> {
       },
       // [11] Chrome 기동 — GPU 모드를 **적용하고 검증까지** 하고 보고한다(§4.7.5).
       11: async ({ result: r }) => {
+        // `--no-browser` / `--daemon` 은 **실제로 창을 띄우지 않아야 한다.**
+        // 여기를 비워두고 항상 띄우면: 문서가 "llama 만 기동" 이라고 말하는 것과
+        // 달리 창이 뜨고, GPU 를 먹고, CI 러너에는 X 서버가 없어서
+        // "Missing X server or $DISPLAY" 로 죽는다(실제로 그랬다).
+        // 데몬 모드(§3.7.2) 도 마찬가지 — 창 없는 게 정의이니까.
+        //
+        // 그래도 단계는 **실패로 표시하지 않는다**: 부팅은 성공했고 창만 없는 것이라
+        // "기동 실패" 라고 하면 사용자는 서버가 죽었다고 오해한다.
+        if (NO_BROWSER) {
+          return {
+            ok: true,
+            detail: `${BROWSER_INTENT.reason} — Chrome 을 띄우지 않습니다(브라우저 GPU 예산 없음)`,
+          };
+        }
         const idePort = r.ports?.idePort ?? 7317;
         const mode = r.gpu?.mode ?? "off";
         const cdpPort = Number(process.env.HARNESSIDE_CDP_PORT ?? 9222);
