@@ -107,11 +107,21 @@ jobs:
         # 그래서 spawn 경로를 검증하려면 .gguf 파일이 있어야 한다.
         # `chooseModel` 은 **파일 존재**만 본다(stat().isFile) — 내용·크기는 안 본다.
         # 파일 이름이 우선 계열(§7.2)에 들어가기만 하면 선택된다.
+        #
+        # 워크스페이스 **안**에 둔다. `${{ env.HOME }}` 는 러너에서 **비어 있다** —
+        # 실제로 그래서 `HARNESSIDE_MODELS_DIR=/fake-models` 가 되어
+        # "모델이 없습니다" 로 떨어졌다. 셸 안의 `$HOME` 은 되지만, 워크스페이스 경로는
+        # `github.workspace` 로 확정적이므로 그쪽이 낫다(붙잡을 값이 하나뿐이다).
         run: |
-          mkdir -p "$HOME/fake-models"
+          mkdir -p .ci-fake-models
           # 정규화 후 "ornith-1.5-35b-a3b" 를 포함해야 우선 계열로 잡힌다.
-          head -c 4096 /dev/zero > "$HOME/fake-models/Ornith-1.5-35B-A3B-Q3_K_M.gguf"
-          ls -l "$HOME/fake-models"
+          head -c 4096 /dev/zero > .ci-fake-models/Ornith-1.5-35B-A3B-Q3_K_M.gguf
+          ls -l .ci-fake-models
+
+      - name: 웹 자산 빌드
+        # 단계 [9] 가 "dist/web 없음" 이라고 말하는 건 부팅이 아니라 **빌드 안 한 것** 이다.
+        # 부팅 경로를 실제로 보는 잡이므로 자산까지 있어야 로그가 정직하다.
+        run: npm run build
 
       - name: spawn 경로 — **우리가 띄운 llama 는 함께 죽는다** (§4.4)
         # 8080 을 비워 두고 데몬이 **직접 띄우게** 한다. 그래야 §4.4 의 요구
@@ -122,8 +132,12 @@ jobs:
         # 그건 따로 다룬다(§4.4 는 "우리가 띄운" llama 에 대한 요구다).
         env:
           HARNESSIDE_LLAMA_SERVER: ${{ github.workspace }}/scripts/fake-llama-server.mjs
-          HARNESSIDE_MODELS_DIR: ${{ env.HOME }}/fake-models
+          HARNESSIDE_MODELS_DIR: ${{ github.workspace }}/.ci-fake-models
         run: |
+          # **변수가 비었거나 경로가 틀리면 조용히 "모델이 없습니다" 로 떨어진다.**
+          # 그 메시지는 원인을 말해주지 않으니(왜 없는지는 안 말한다), 여기서 먼저 확인한다.
+          ls -1 "$HARNESSIDE_MODELS_DIR"/*.gguf > /dev/null 2>&1 || {
+            echo "HARNESSIDE_MODELS_DIR=$HARNESSIDE_MODELS_DIR 에 .gguf 가 없습니다"; exit 1; }
           kill -9 "$(cat /tmp/fake-llama.pid 2>/dev/null)" 2>/dev/null || true
           sleep 1
           rm -f .harnesside/state/instance.lock
