@@ -22,6 +22,7 @@ import { bootstrap, type BootstrapResult } from "./bootstrap.js";
 import { LlamaLauncher } from "./llamaLauncher.js";
 import { acquireInstanceLock, type InstanceLock } from "./bootstrap.js";
 import { HttpServer } from "./httpServer.js";
+import { BrowserLauncher } from "./browserLauncher.js";
 import { issueToken } from "../auth/token.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
@@ -58,6 +59,7 @@ async function main(): Promise<number> {
   let launcher: LlamaLauncher | null = null;
   let boot: BootstrapResult | null = null;
   let http: HttpServer | null = null;
+  let browser: BrowserLauncher | null = null;
 
   // SIGTERM/SIGINT = 명시적 종료(S5). SIGHUP 은 터미널을 닫는 것이므로 무시한다.
   const shutdown = async (reason: string) => {
@@ -72,6 +74,10 @@ async function main(): Promise<number> {
     if (launcher) {
       await launcher.stop();
       emit("[shutdown] llama-server 종료 완료");
+    }
+    if (browser) {
+      await browser.stop();
+      emit("[shutdown] Chrome 종료 완료");
     }
     if (http) {
       await http.close().catch(() => {});
@@ -89,6 +95,7 @@ async function main(): Promise<number> {
   // 즉시 죽이는 것**은 가능하다. 이게 없으면 `timeout`/강제 종료로 부모가 죽을 때 자식이
   // 남아 포트와 VRAM 을 붙잡는다(실제로 겪음 — orphan llama-server 가 8081 에 남음).
   process.on("exit", () => {
+    void http?.close().catch(() => {});
     const pid = launcher?.pid;
     if (pid) {
       try {
@@ -146,6 +153,7 @@ async function main(): Promise<number> {
         http = new HttpServer({
           token: tokenRec,
           port,
+          staticDir: webDir,
           logger: (level, o, m) => (level === "error" ? emit(`[http] ${m}`) : undefined),
         });
         http
@@ -167,6 +175,41 @@ async function main(): Promise<number> {
           }));
         const { port: actual } = await http.start();
         return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };
+      },
+      // [11] Chrome 기동 — GPU 모드를 **적용하고 검증까지** 하고 보고한다(§4.7.5).
+      11: async ({ result: r }) => {
+        const idePort = r.ports?.idePort ?? 7317;
+        const mode = r.gpu?.mode ?? "off";
+        const cdpPort = Number(process.env.HARNESSIDE_CDP_PORT ?? 9222);
+        browser = new BrowserLauncher(
+          {
+            mode,
+            cdpPort,
+            idePort,
+            // 토큰은 쿼리로만 실린다 — CDP 소켓에 실으면 /json/version 로 새고,
+            // Origin/Host 검증은 별도로 건다(§3.6, §4.1).
+            appUrl: `http://127.0.0.1:${idePort}/?t=${encodeURIComponent(tokenRec?.token ?? "")}`,
+            noSandbox: process.env.HARNESSIDE_CHROME_NO_SANDBOX === "1",
+            extraArgs: process.env.HARNESSIDE_CHROME_EXTRA_ARGS?.split(/\s+/).filter(Boolean) ?? [],
+          },
+          {
+            logger: (level, m) => (level === "error" ? emit(m) : undefined),
+            onLine: (l) => emit(`[chrome] ${l}`),
+          }
+        );
+        const res = await browser.launch();
+        if (!res.flags.length) {
+          return { ok: false, detail: "브라우저 바이너리를 찾지 못했습니다 — 설치 후 재시작 하세요 (창 없이 서버만 동작)" };
+        }
+        if (!res.attached) {
+          return { ok: false, detail: `Chrome 기동은 했지만 CDP(${res.cdpPort}) 에 붙지 못했습니다` };
+        }
+        const v = res.verification;
+        const verdict =
+          mode !== "off" ? (v?.detail ?? "GPU 모드 적용") : v?.ok ? "GPU 비활성 확인됨" : `⚠ GPU 비활성 미확인 — ${v?.detail ?? "판정 실패"}`;
+        emit(`[gpu] ${verdict}`);
+        for (const line of res.rationale) emit(`       · ${line}`);
+        return { ok: mode !== "off" || !!v?.ok, detail: `${res.flags.length}개 플래그 · ${verdict}` };
       },
     },
     log: (l) => emit(l),

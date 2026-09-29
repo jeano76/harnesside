@@ -12,9 +12,30 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import type { Duplex } from "node:stream";
+import { readFile, realpath } from "node:fs/promises";
+import { resolve, sep, join, extname } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { extractToken, tokenMatches, type TokenRecord } from "../auth/token.js";
 import { checkHost, checkOrigin, normalizeHeaders, type AllowedOrigins } from "../auth/originGuard.js";
+
+/** 확장자별 Content-Type. 미등록 확장자는 이진으로 둔다(브라우저가 해석하지 않게). */
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".webp": "image/webp",
+  ".woff2": "font/woff2",
+  ".map": "application/json; charset=utf-8",
+};
+
+function contentTypeFor(file: string): string {
+  return MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
+}
 
 export interface RouteContext {
   req: IncomingMessage;
@@ -139,7 +160,12 @@ export class HttpServer {
     const key = `${method} ${url.pathname}`;
 
     const match = this.match(method, url.pathname);
-    const isPublic = PUBLIC_ROUTES.has(key) || match?.public === true;
+    // **토큰은 API/WS 에만 요구한다.** 정적 자산(HTML·JS·CSS)까지 걸면 첫 요청에만
+    // `?t=` 를 실은 페이지가 뜬 뒤 그 JS 요청이 401 이 되어 **빈 화면** 이 된다
+    // (실제로 그렇게 났다 — 창은 뜨는데 아무것도 그려지지 않는다).
+    // 자산에는 시크릿이 없으므로 공개해도 위험이 없고, 보호 대상은 데이터(`/api/*`)다.
+    const isApi = url.pathname === "/api" || url.pathname.startsWith("/api/");
+    const isPublic = !isApi || PUBLIC_ROUTES.has(key) || match?.public === true;
 
     // 2) Origin 검증 (브라우저가 보낸 경우)
     const originCheck = checkOrigin(h.origin, this.allowed);
@@ -159,6 +185,9 @@ export class HttpServer {
     }
 
     if (!match) {
+      // API 가 아니면 **웹 자산**을 준다. "창이 떴는데 빈 화면" 은 결함이다(§0.3).
+      const served = await this.serveStatic(url.pathname, res);
+      if (served) return;
       this.deny(res, 404, `알 수 없는 경로: ${url.pathname}`);
       return;
     }
@@ -197,6 +226,72 @@ export class HttpServer {
       if (ok) return { handler: r.handler, params, public: r.public };
     }
     return null;
+  }
+
+  /**
+   * 정적 자산 서빙 (§5 의 웹 IDE).
+   *
+   * 두 가지가 중요하다:
+   * 1) **경로 탈출 차단** — `dist/web` 밖으로 나가면 403. 웹 서버가 임의 파일을
+   *    읽는다면 그건 §3.4 가 아니라 §3.6 의 구멍이다.
+   * 2) **SPA 폴백** — 없는 경로는 `index.html` 이다. 라우팅은 클라이언트가 하므로
+   *    404 를 주면 "빈 화면" 이 되고, 사용자는 서버가 죽었다고 생각한다(§0.3).
+   */
+  private async serveStatic(pathname: string, res: ServerResponse): Promise<boolean> {
+    const root = this.deps.staticDir;
+    if (!root) return false;
+    // API 는 여기서 받지 않는다 — 인증을 거친 라우터의 영역이다.
+    if (pathname.startsWith("/api/") || pathname.startsWith("/ws")) return false;
+
+    const rel = decodeURIComponent(pathname).replace(/^\/+/, "");
+    const resolvedRoot = resolve(root);
+    const candidate = resolve(resolvedRoot, rel === "" ? "index.html" : rel);
+    const inside = (p: string) => p === resolvedRoot || p.startsWith(resolvedRoot + sep);
+
+    // 1) 경로 정규화 결과가 루트 밖이면 **파일이 있든 없든** 거부한다.
+    //    (없다고 404 를 주면 "어떤 파일이 있다/없다" 를 새어 준다)
+    if (!inside(candidate)) {
+      this.deny(res, 403, "경로 밖으로 나갈 수 없습니다");
+      return true;
+    }
+
+    // 2) 심볼릭 링크로 빠져나가는 경우도 같은 이유로 막는다.
+    const real = await realpath(candidate).catch(() => null);
+    if (real && !inside(real)) {
+      this.deny(res, 403, "경로 밖으로 나갈 수 없습니다");
+      return true;
+    }
+
+    // 3) 확장자가 없는 경로(= 라우팅)는 SPA 폴백. 확장자가 있는 경로는
+    //    "정적 파일" 이라 없는 것은 404 다 — index.html 로 덮으면 스크립트 404 가
+    //    화면에는 "앱이 조용히 깨진 상태" 로 보인다(§11.3 의 "멈춘 것처럼 보인다").
+    if (!real) {
+      const idx = join(resolvedRoot, "index.html");
+      const idxReal = await realpath(idx).catch(() => null);
+      if (extname(pathname) || !idxReal) {
+        if (!extname(pathname) && !idxReal) {
+          this.deny(res, 404, "dist/web 가 없습니다 — 'npm run build' 후 재시작 하세요");
+          return true;
+        }
+        return false; // 진짜 없는 정적 파일 → 라우터가 404
+      }
+      return this.sendFile(res, idxReal);
+    }
+
+    return this.sendFile(res, real);
+  }
+
+  private async sendFile(res: ServerResponse, file: string): Promise<boolean> {
+    const data = await readFile(file).catch(() => null);
+    if (!data) return false;
+    res.writeHead(200, {
+      "content-type": contentTypeFor(file),
+      "content-length": data.byteLength,
+      "cache-control": file.includes(`${sep}assets${sep}`) ? "public, max-age=31536000, immutable" : "no-store",
+      "x-content-type-options": "nosniff",
+    });
+    res.end(data);
+    return true;
   }
 
   private deny(res: ServerResponse, status: number, reason: string): void {

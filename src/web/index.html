@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- 로컬 전용 앱이다. 외부 리소스를 한 곳도 불러오지 않게 막아 둔다(§3.6 CSP 와 같은 취지). -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'self' ws://127.0.0.1:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>harnesside</title>
+    <style>
+      /* §4.2 라운드 모서리 — 창이 직사각형이어도 안쪽 모서리는 둥글게 보인다. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: transparent;
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      body {
+        background: #1e1e1e;
+        color: #d4d4d4;
+        font-family: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      #root {
+        height: 100%;
+        border-radius: 14px;
+        overflow: hidden;
+        border: 1px solid #30363d;
+        background: #1e1e1e;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
