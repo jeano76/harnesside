@@ -7,7 +7,7 @@
  * 모든 요청을 먼저 통과시키고, 라우터는 **인증된 요청만** 본다.
  *
  * CORS 는 아예 안 보낸다 — "빈 화이트리스트" 를 명시적으로 선언하는 편이
- * 나중에 누가 "일단放开하자" 하고 추가하는 것보다 안전하다.
+ * 나중에 누가 "일단 열어두자" 하고 추가하는 것보다 안전하다.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";

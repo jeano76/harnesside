@@ -79,10 +79,14 @@ export interface BootstrapDeps {
    * 9~12 단계 구현체. 나중에 Phase(P2/P3)가 자기를 **여기에 꽂는다** — 단계 목록은
    * 이 파일 하나만 진실원이고, 다른 곳에서 별도로 "부팅 로그"를 만들면 두 진실원이 된다.
    * 없는 단계는 `pending` 으로 남는다("지났습니다"라고 말하지 않는다).
+   *
+   * 구현체는 **지금까지의 결과**를 인자로 받는다. 결과를 바깥 변수(`boot`)로 대신 보면
+   * bootstrap() 이 아직 반환 전이므로 항상 비어 있다 — 실제로 `/api/gpu` 가 정책 없이
+   * 나왔던 버그(단계 10 이 1~9 결과를 볼 수 없음)의 원인이다.
    */
-  lateSteps?: Partial<Record<9 | 10 | 11 | 12, () => Promise<{ ok: boolean; detail: string }>>>;
-  /** 부팅 결과로 접근해야 하는 것들(단계 9~12 구현체가 사용). */
-  result?: BootstrapResult;
+  lateSteps?: Partial<
+    Record<9 | 10 | 11 | 12, (ctx: { result: BootstrapResult }) => Promise<{ ok: boolean; detail: string }>>
+  >;
   log?: (line: string) => void;
   /** 부팅 로그 패널(§5.12)로 흘릴 로거. 같은 싱글턴을 쓴다. */
   logger?: { info(o: unknown, m: string): void; warn(o: unknown, m: string): void; error(o: unknown, m: string): void };
@@ -140,7 +144,6 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   const steps: BootstrapStep[] = [];
   const errors: string[] = [];
   const result: BootstrapResult = { ok: false, steps, llamaReady: false, errors };
-  opts.result = result; // 단계 9~12 구현체가 앞 단계 결과를 읽을 수 있게
 
   if (opts.dryRun) {
     for (let i = 0; i < STEP_NAMES.length; i++) {
@@ -401,7 +404,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
     }
     const t0 = Date.now();
     try {
-      const out = await impl();
+      const out = await impl({ result });
       record({ n, name: STEP_NAMES[n - 1], ok: out.ok, detail: out.detail, tookSeconds: (Date.now() - t0) / 1000, fatal: false });
     } catch (e) {
       // 실패해도 부팅은 계속된다 — 창은 떠야 한다(§3.2 [8] 의 degrade 원칙과 같다).

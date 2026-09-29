@@ -140,9 +140,8 @@ async function main(): Promise<number> {
         }
       },
       // [10] HTTP/WS 기동 — 인증은 **처음부터** 들어간다(retrofit 하지 않는다, §12).
-      10: async () => {
-        const r = boot;
-        const port = r?.ports?.idePort ?? 7317;
+      10: async ({ result: r }) => {
+        const port = r.ports?.idePort ?? 7317;
         tokenRec = await issueToken(stateDir(projectRoot), port);
         http = new HttpServer({
           token: tokenRec,
@@ -152,15 +151,19 @@ async function main(): Promise<number> {
         http
           .route("GET", "/api/health", () => ({
             ok: true,
-            llamaUp: r?.llamaReady ?? false,
+            llamaUp: r.llamaReady,
             version: "0.1.0",
           }))
-          .route("GET", "/api/gpu", () => ({ ...r?.gpu, llama: r?.ports?.llamaPort, ide: port }))
+          .route("GET", "/api/gpu", () => ({ ...r.gpu, llama: r.ports?.llamaPort, ide: port }))
+          .route("GET", "/api/bootstrap", () => ({
+            steps: r.steps.map((s) => ({ n: s.n, name: s.name, ok: s.ok, detail: s.detail, pending: !!s.pending, tookSeconds: s.tookSeconds })),
+            tuning: r.tuning?.rationale ?? [],
+          }))
           .route("GET", "/api/system/version", () => ({
             version: "0.1.0",
-            llama: r?.llama?.source ?? null,
-            model: r?.model?.path ?? null,
-            gpuMode: r?.gpu?.mode ?? null,
+            llama: r.llama?.source ?? null,
+            model: r.model?.path ?? null,
+            gpuMode: r.gpu?.mode ?? null,
           }));
         const { port: actual } = await http.start();
         return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };
