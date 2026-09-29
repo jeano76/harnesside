@@ -26,6 +26,8 @@ import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type Dae
 import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
 import { BrowserLauncher } from "./browserLauncher.js";
+import { WsHub } from "./wsHub.js";
+import { startWatchdog, type Watchdog } from "./watchdog.js";
 import { issueToken } from "../auth/token.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
@@ -85,6 +87,8 @@ async function main(): Promise<number> {
   let boot: BootstrapResult | null = null;
   let http: HttpServer | null = null;
   let browser: BrowserLauncher | null = null;
+  let hub: WsHub | null = null;
+  let watchdog: Watchdog | null = null;
 
   // SIGTERM/SIGINT = 명시적 종료(S5). SIGHUP 은 터미널을 닫는 것이므로 무시한다.
   const shutdown = async (reason: string) => {
@@ -103,6 +107,13 @@ async function main(): Promise<number> {
     if (browser) {
       await browser.stop();
       emit("[shutdown] Chrome 종료 완료");
+    }
+    if (watchdog) {
+      watchdog.stop();
+    }
+    if (hub) {
+      await hub.close().catch(() => {});
+      emit("[shutdown] WebSocket 종료 완료");
     }
     if (http) {
       await http.close().catch(() => {});
@@ -177,10 +188,17 @@ async function main(): Promise<number> {
       10: async ({ result: r }) => {
         const port = r.ports?.idePort ?? 7317;
         tokenRec = await issueToken(stateDir(projectRoot), port);
+        // §2.3 허브: 로그·부팅 상태를 **흘려보낸다.** 2초 폴링은 "상시 출력" 요구를
+        // 흉내 내지만 흐름이 요청 간격만큼 끊긴다.
+        hub = new WsHub({ server: undefined as never, path: "/ws" });
+        // 링에 새 항목이 들어올 때마다 WS 로 보낸다(중간 계층 없이).
+        ring.onEntry((e) => hub!.publish({ type: "log.append", entry: e } as never));
+        ring.onStatus((st) => hub!.publish({ type: "log.status", status: st } as never));
         http = new HttpServer({
           token: tokenRec,
           port,
           staticDir: webDir,
+          onUpgrade: (req, socket, head) => hub!.handleUpgrade(req, socket, head),
           logger: (level, o, m) => (level === "error" ? emit(`[http] ${m}`) : undefined),
         });
         http
@@ -222,6 +240,7 @@ async function main(): Promise<number> {
             return { cleared: true, status: ring.status };
           });
         const { port: actual } = await http.start();
+        hub.publish({ type: "sys.logs", limits: ring.status } as never);
         return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };
       },
       // [11] Chrome 기동 — GPU 모드를 **적용하고 검증까지** 하고 보고한다(§4.7.5).
@@ -282,6 +301,25 @@ async function main(): Promise<number> {
         for (const line of res.rationale) emit(`       · ${line}`);
         return { ok: mode !== "off" || !!v?.ok, detail: `${res.flags.length}개 플래그 · ${verdict}` };
       },
+      // [12] 루프 유지 — 자식 죽음·모드별 창 종료·유휴 정책을 감시한다(§4.4).
+      12: async () => {
+        watchdog = startWatchdog({
+          mode,
+          ring,
+          isLlamaAlive: () => !!launcher?.pid,
+          isChromeAlive: () => !!browser?.pid,
+          clientConnected: () => (hub?.clientCount ?? 0) > 0,
+          idleShutdownSec: Number(process.env.HARNESSIDE_IDLE_SHUTDOWN_SEC ?? 0),
+          shutdown: (reason) => void shutdown(reason),
+        });
+        ring.info(
+          "lifecycle",
+          `서버가 대기 중입니다 (${mode} 모드${NO_BROWSER ? " · 창 없음" : ""}). 창을 닫으면 ` +
+            (mode === "daemon" ? "서버는 계속됩니다." : "llama-server 도 함께 종료됩니다(요구 9)."),
+          "server"
+        );
+        return { ok: true, detail: `대기 중 (${mode} 모드)` };
+      },
     },
     log: (l) => emit(l),
   });
@@ -340,16 +378,14 @@ async function main(): Promise<number> {
   const ready = await launcher.waitUntilReady(120_000);
   emit(`[8] 헬스체크: ${ready ? "준비 완료 (/v1/models 200)" : "실패 — 창은 계속 뜹니다"}`);
 
+  // 여기까지 왔다면 부팅이 끝났다(단계 1~12). 이후에는 **워치독이** 종료 시점을
+  // 결정하고, 우리는 신호를 기다리기만 한다 — 종료 경로를 두 개 만들면 (§4.4 표에서
+  // 이미 실패한 것) 어느 쪽이 실제로 쓰이는지 알 수 없다.
   if (NO_BROWSER) {
     emit(`[info] --no-browser: llama ${launcher.baseUrl} 에서 대기합니다. Ctrl+C 로 종료.`);
-    await holdLoop();
-    await shutdown("no-browser");
-    return 0;
   }
-
-  emit("[info] 창 기동(단계 11)은 P2 에서 구현됩니다. 이 동안은 서버만 살아 있습니다.");
   await holdLoop();
-  await shutdown("window-close");
+  await shutdown(NO_BROWSER ? "no-browser" : "window-close");
   return 0;
 }
 

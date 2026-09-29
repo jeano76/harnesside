@@ -57,6 +57,11 @@ export class BrowserLauncher {
     private deps: LaunchDeps = {}
   ) {}
 
+  /** 살아 있으면 PID. 워치독(§4.4 S1) 이 이걸 본다. */
+  get pid(): number | undefined {
+    return this.proc?.pid;
+  }
+
   private get log() {
     return this.deps.logger ?? (() => {});
   }

@@ -11,6 +11,7 @@ import { createRoot } from "react-dom/client";
 import { ApiClient, ApiError, type BootStep, type GpuInfo } from "./api.js";
 import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
+import { WsClient } from "./wsClient.js";
 import type { LogEntry, LogLevel } from "../server/logRing.js";
 
 const { token, cleanHref } = resolveToken(
@@ -38,6 +39,7 @@ function App() {
     bufferFull: boolean;
   } | null>(null);
   const [logLevel, setLogLevel] = useState<LogLevel>("info");
+  const [wsState, setWsState] = useState<"connecting" | "open" | "closed">("connecting");
 
   useEffect(() => {
     let alive = true;
@@ -62,26 +64,44 @@ function App() {
     };
   }, []);
 
-  // 로그 구독: WS 는 P3 에서 붙는다. 지금은 폴링으로 같은 화면을 보인다 —
-  // "상시 출력" 요구는 WS 가 없어도 성립해야 한다(폴링이라도 흐름이 끊기면 안 된다).
+  // 로그 스트리밍(§2.3). WS 가 끊겨도 **화면이 통째로 바뀌면 안 된다**(§5.10):
+  //이미 있는 항목은 유지하고 새 것만 붙인다. WS 가 못 붙을 때만 폴링으로 대체한다.
   useEffect(() => {
-    let alive = true;
-    const pull = async () => {
+    const idePort = Number(new URL(location.href).port || 7317);
+    const ws = new WsClient({
+      port: idePort,
+      token,
+      onEvent: (ev) => {
+        if (ev.type === "log.append") {
+          const e = ev.entry as LogEntry | undefined;
+          if (!e) return;
+          setLogs((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && e.seq <= last.seq) return prev; // 재전송된 것은 무시
+            // 상한을 클라이언트에서도 지킨다 — WS 가 늦어도 브라우저 메모리가 새지는 않는다
+            const next = [...prev, e];
+            return next.length > 2000 ? next.slice(next.length - 2000) : next;
+          });
+        } else if (ev.type === "log.status") {
+          setLogStatus(ev.status as typeof logStatus);
+        }
+      },
+      onStatus: (s) => setWsState(s),
+    });
+    ws.connect();
+
+    // WS 가 붙어도 **초기 스냅샷**은 받아야 한다(연결 전 기록분).
+    void (async () => {
       try {
         const r = await client.get<{ entries: LogEntry[]; status: typeof logStatus }>("/api/logs?limit=500");
-        if (!alive) return;
-        setLogs(r.entries);
+        setLogs((prev) => (prev.length > 0 ? prev : r.entries));
         setLogStatus(r.status);
       } catch {
-        // 로그 조회 실패가 부팅 화면을 죽이면 안 된다 — 조용히 다음 주기에 다시 시도
+        // 스냅샷 실패는 조용히 넘어간다 — WS 로 이어진다
       }
-    };
-    void pull();
-    const t = setInterval(pull, 2000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
+    })();
+
+    return () => ws.close();
   }, []);
 
   const done = steps?.filter((s) => s.ok).length ?? 0;
@@ -100,6 +120,17 @@ function App() {
             로그 {logStatus.keptChars.toLocaleString()}자 / 상한 {logStatus.maxChars.toLocaleString()}자
           </span>
         )}
+        {/* 연결 상태를 숨기지 않는다. WS 가 끊기면 로그도 흐르지 않는다는 뜻이므로
+            사용자가 "왜 멈췄지"를 추측하지 않아야 한다(§11.3). */}
+        <span
+          style={{
+            fontSize: 12,
+            color: wsState === "open" ? "#3fb950" : wsState === "connecting" ? "#d29922" : "#f85149",
+          }}
+          title="WebSocket 연결 상태"
+        >
+          {wsState === "open" ? "● 실시간" : wsState === "connecting" ? "○ 연결 중" : "▲ 끊김"}
+        </span>
       </header>
 
       <div style={{ overflow: "auto", minHeight: 0 }}>

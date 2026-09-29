@@ -64,6 +64,12 @@ export interface ServerDeps {
   /** 데몬이 파일을 못 찾는 환경(CI)에서 디스크를 만지지 않게. */
   staticDir?: string;
   logger?: (level: "info" | "warn" | "error", o: unknown, m: string) => void;
+  /**
+   * 인증을 통과한 WS 업그레이드를 넘겨받는 훅. `true` 를 반환하면 이 서버가
+   * 소유권을 가져갔다는 뜻이다(기본 구현으로 넘어가지 않는다).
+   * §2.3 의 허브를 여기에 꽂는다 — 인증은 여전히 이 서버가 담당한다.
+   */
+  onUpgrade?: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
 }
 
 const PUBLIC_ROUTES = new Set(["GET /api/health"]);
@@ -71,11 +77,17 @@ const PUBLIC_ROUTES = new Set(["GET /api/health"]);
 export class HttpServer {
   private server: Server | null = null;
   private wss: WebSocketServer | null = null;
+  /** 인증을 통과한 업그레이드 훅(§2.3 허브). */
+  private upgradeHandler: ((req: IncomingMessage, socket: Duplex, head: Buffer) => boolean) | null = null;
   private routes: Route[] = [];
   private boundPort = 0;
 
-  constructor(private deps: ServerDeps) {
-    this.routes = deps.routes ?? [];
+  constructor(private opts: ServerDeps) {
+    this.routes = opts.routes ?? [];
+  }
+
+  get deps(): ServerDeps {
+    return this.opts;
   }
 
   route(method: string, pattern: string, handler: Handler, opts: { public?: boolean } = {}): this {
@@ -119,6 +131,8 @@ export class HttpServer {
         socket.destroy();
         return;
       }
+      // 주입된 허브가 있으면 그것이 연결을 소유한다(§2.3). 없으면 최소 구현으로 폴백.
+      if (this.opts.onUpgrade && this.opts.onUpgrade(req, socket, head)) return;
       wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, req));
     });
 
