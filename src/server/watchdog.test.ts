@@ -89,6 +89,175 @@ test("daemon 모드: 창이 닫혀도 서버는 살아 있다 — 의도적 예�
   });
 });
 
+// ── S3: 웹 클라이언트 하트비트 만료(§4.4) ───────────────────────────────────
+
+test("S3: 클라이언트가 사라진 지 임계값을 넘으면 window 모드에서 종료한다", () => {
+  const s = setup("window", { intervalMs: 5, clientIdleThresholdSec: 15, msSinceLastClientGone: () => 20_000 });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, ["heartbeat-expired"], "S3 가 종료 사유를 말한다");
+      const msg = s.ring.query().map((e) => e.message).join(" ");
+      assert.match(msg, /클라이언트/, "왜인지 로그에 남는다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S3: **한 번도 붙은 적 없으면** 판정하지 않는다 — 아직 안 뜬 창을 죽이면 안 된다", () => {
+  // `null` 과 `0ms` 는 다른 사실이다. 부팅 직후에는 0 이고, 여기서 0 을 "만료" 로
+  // 읽으면 서버가 **자기 첫 tick 에** 죽는다(부재와 종료는 다른 신호다 — §④ 표 25).
+  const s = setup("window", { intervalMs: 5, clientIdleThresholdSec: 15, msSinceLastClientGone: () => null });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "아직 클라이언트가 붙은 적도 없다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S3: 임계값 미만이면 조용히 기다린다 — 재접속(새로고침)을 죽이지 않는다", () => {
+  const s = setup("window", { intervalMs: 5, clientIdleThresholdSec: 15, msSinceLastClientGone: () => 3_000 });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "3초는 15초가 아니다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S3: 유예 사유가 있으면 종료하지 않고 **사유를 말한다**", () => {
+  // §4.4: 진행 중 백그라운드 프로세스나 idleShutdownSec 이 있으면 유예한다.
+  // 조용히 기다리면 사용자는 "왜 아직 살아 있지" 라고 읽는다.
+  const s = setup("window", {
+    intervalMs: 5,
+    clientIdleThresholdSec: 15,
+    msSinceLastClientGone: () => 60_000,
+    deferS3: () => "진행 중인 턴이 있습니다",
+  });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "유예 중인데 종료했다");
+      const entry = s.ring.query().find((e) => /유예/.test(e.message));
+      assert.ok(entry, "유예 사실을 로그에 남긴다");
+      assert.match(String(entry?.data?.why ?? ""), /턴/, "사유가 data 에 실린다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S3: daemon 모드에서는 클라이언트가 없어도 서버가 살아 있다 (§4.4 의 의도적 예외)", () => {
+  const s = setup("daemon", { intervalMs: 5, clientIdleThresholdSec: 15, msSinceLastClientGone: () => 99_000 });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "데몬 모드에서 S3 로 종료됐다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S3 판정 함수가 없으면 아무 일도 없다 — 규칙이 없는데 결과만 있으면 그것도 거짓말이다", () => {
+  const s = setup("window", { intervalMs: 5 });
+  s.state.chrome = true;
+  s.state.connected = false;
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "판정값 없이 종료됐다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+// ── S6: 고아 데몬 ───────────────────────────────────────────────────────────
+
+test("S6: 창도 모델도 없고 클라이언트도 없으면 알린다 — 종료는 하지 않는다", () => {
+  const s = setup("daemon", { intervalMs: 5 });
+  s.state.llama = false;
+  s.state.chrome = false;
+  s.state.connected = false;
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "S6 로 종료하면 S1/S3 과 구분할 수 없다 — 어느 신호가 먹었나");
+      const entry = s.ring.query({ levels: ["error"] }).find((e) => /고아/.test(e.message));
+      assert.ok(entry, "고아 상태를 말해야 한다");
+      assert.equal(entry?.data?.signal, "S6");
+      assert.equal(entry?.data?.shutdown, false, "왜 안 죽는지 data 에 있다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S6: 하나라도 살아 있으면 고아 아니다", () => {
+  const s = setup("daemon", { intervalMs: 5 });
+  s.state.llama = false;
+  s.state.chrome = false;
+  s.state.connected = true; // 클라이언트가 붙어 있다
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.equal(
+        s.ring.query({ levels: ["error"] }).some((e) => /고아/.test(e.message)),
+        false,
+        "클라이언트가 붙어 있는데 고아라고 했다"
+      );
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S6: 창을 띄우지 않는 모드에서도 판정한다 — '창이 죽었다'는 말이 안 되는 곳", () => {
+  // `--no-browser` 에서 "창이 죽음" 은 성립하지 않는다. 그 조건을 그대로 쓰면
+  // **창 없는 데몬은 영원히 고아가 되지 않는다** — 실제 첫 실행이 그렇게 조용히
+  // 실패했다(모델도 없고 사람도 없는데 아무 말도 안 함).
+  const s = setup("daemon", { intervalMs: 5, expectChrome: false, chromeState: () => "alive" });
+  s.state.llama = false;
+  s.state.connected = false;
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      const entry = s.ring.query({ levels: ["error"] }).find((e) => /고아/.test(e.message));
+      assert.ok(entry, "창 없는 모드에서 고아를 말해야 한다");
+      assert.deepEqual(s.shutdowns, [], "그래도 죽이지 않는다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+// ── "못 띄움" 과 "닫힘" 의 구분(창 기동 실패가 서버를 죽이면 안 된다) ──────────
+
+test("창을 띄우지 못한 것은 닫힌 것이 아니다 — 서버를 죽이지 않는다", () => {
+  // 실제로 이 구분이 없을 때: DISPLAY 가 없어 CDP 가 안 붙으면 `pid` 가 없거나 죽어서
+  // 곧바로 "창이 닫혔다" 로 읽혔고, llama 는 정상 응답 중인데 데몬이 스스로 죽었다.
+  const s = setup("window", { intervalMs: 5, chromeState: () => "never-opened" });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "띄우지 못한 것을 종료로 읽었다");
+      const msg = s.ring.query().map((e) => e.message).join(" ");
+      assert.match(msg, /창을 띄우지 못했습니다/, "원인을 말한다");
+      assert.doesNotMatch(msg, /창이 닫혔습니다/, "닫힘으로 기록하면 원인이 사라진다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("chromeState 가 dead 면 종료한다 — 판정 함수를 한 곳에 모은 이유", () => {
+  const s = setup("window", { intervalMs: 5, chromeState: () => "dead" });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, ["window-closed"]);
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
 test("유휴 종료는 기본적으로 없다 — 켜라고 명시해야만 동작한다", () => {
   const s = setup("daemon", { intervalMs: 5, idleShutdownSec: 0 });
   s.state.connected = false;

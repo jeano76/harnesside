@@ -83,6 +83,13 @@ async function main(): Promise<number> {
   // 데몬 로깅: 전부 이 링을 지난다(분산 로깅은 반드시 누락된다 — §3.5.1).
   const logging = initDaemonLogging(paths);
   const ring = logging.ring;
+  // **수명주기 이벤트는 stdout 에도 남긴다.** 링은 파일에만 있으므로, 창이 왜 닫혔는지
+  // 알고 싶은 사람이 파일을 열어야 한다 — 그게 곧 원인을 숨기는 꼴이다(§5.12.1).
+  // 링 항목 중 수명주기(scope=lifecycle)만 mirroring 한다. 전부 찍으면 로그가 두 배로
+  // 부풀고(모델이 한 줄을 각자 다르게 말하는 문제), 아무것도 안 찍으면 원인이 사라진다.
+  ring.onEntry((e) => {
+    if (e.scope === "lifecycle") emit(`[${e.level === "error" ? "warn" : e.level}] ${e.message}`);
+  });
   const mode: DaemonMode = flag("--daemon") ? "daemon" : "window";
 
   // §5.5: 계측은 **서버가 1Hz 로 한 번만** 한다. 라우트는 마지막 샘플만 읽는다 —
@@ -113,6 +120,10 @@ async function main(): Promise<number> {
   let hub: WsHub | null = null;
   let watchdog: Watchdog | null = null;
   let adoptedProbe: (() => boolean) | null = null;
+  /** 창을 띄우려 한 적이 있는가. `never-opened` 판정의 전제다. */
+  let browserLaunchAttempted = false;
+  /** 진행 중인 턴이 있는가 — S3 유예 사유 중 하나(§4.4). */
+  let turnInProgress = false;
 
   /**
    * 채택한 서버의 생존 신호. **우리의 자식이 아니라 pid 로는 알 수 없다.**
@@ -234,7 +245,25 @@ async function main(): Promise<number> {
         tokenRec = await issueToken(stateDir(projectRoot), port);
         // §2.3 허브: 로그·부팅 상태를 **흘려보낸다.** 2초 폴링은 "상시 출력" 요구를
         // 흉내 내지만 흐름이 요청 간격만큼 끊긴다.
-        hub = new WsHub({ server: undefined as never, path: "/ws" });
+        hub = new WsHub({
+          server: undefined as never,
+          path: "/ws",
+          // 창 연결/해제도 **보여야 한다.** S3(하트비트 만료)이 "클라이언트가 사라진
+          // 지 N 초" 를 재려면 그 기준점이 필요하고, 사용자에게도 "창이 붙었다/떼졌다" 가
+          // 사실이다. 이 줄이 없으면 S3 는 언제 시작됐는지 로그에서 알 수 없다.
+          onConnect: () => {
+            if (hub && hub.clientCount === 1) {
+              ring.info("lifecycle", "창이 서버에 연결되었습니다.", "server");
+              emit("[ws] 창 연결됨 (1)");
+            }
+          },
+          onDisconnect: () => {
+            if (hub && hub.clientCount === 0) {
+              ring.info("lifecycle", "창 연결이 끊어졌습니다.", "server", { signal: "S3-arming" });
+              emit("[ws] 창 연결 끊김 — 창이 닫혔다면 곧 종료합니다(§4.4)");
+            }
+          },
+        });
         // 링에 새 항목이 들어올 때마다 WS 로 보낸다(중간 계층 없이).
         ring.onEntry((e) => hub!.publish({ type: "log.append", entry: e } as never));
         ring.onStatus((st) => hub!.publish({ type: "log.status", status: st } as never));
@@ -361,6 +390,7 @@ async function main(): Promise<number> {
         const idePort = r.ports?.idePort ?? 7317;
         const mode = r.gpu?.mode ?? "off";
         const cdpPort = Number(process.env.HARNESSIDE_CDP_PORT ?? 9222);
+        browserLaunchAttempted = true;
         browser = new BrowserLauncher(
           {
             mode,
@@ -425,6 +455,25 @@ async function main(): Promise<number> {
             return !!launcher?.pid;
           },
           isChromeAlive: () => !!browser?.pid,
+          // **"못 띄움" 과 "닫힘" 은 다른 사실이다.** 띄우려 했으나 실패한 상태를
+          // `dead` 로 넘기면 워치독이 "창이 닫혔다" 고 읽고 서버를 죽인다 — 실제로
+          // 그랬다(CDP 미첨부). 그 로그를 읽으면 "창이 안 떠서 서버가 죽었다" 로
+          // 잘못 이해한다. 서버는 살아 있고 주소만 알려 주면 된다(요구 9 의 degrade).
+          chromeState: () => {
+            if (NO_BROWSER) return "alive";
+            if (browser?.pid) return "alive";
+            return browserLaunchAttempted ? "never-opened" : "alive";
+          },
+          // S3 — 마지막 클라이언트 이탈 후 경과 시간. `null` 은 판정 대상이 아니다.
+          msSinceLastClientGone: () => hub?.msSinceLastClientGone() ?? null,
+          // §4.4 가 요구하는 유예 두 가지 중 (b) 정책 설정 여부는 여기서 확인된다.
+          // (a) 진행 중 백그라운드 프로세스는 아직 배선 전이라 유예 사유로 명시한다.
+          deferS3: () =>
+            Number(process.env.HARNESSIDE_IDLE_SHUTDOWN_SEC ?? 0) > 0
+              ? "daemon.idleShutdownSec 가 설정돼 있어 유휴 정책이 대신 판단합니다"
+              : turnInProgress
+                ? "진행 중인 턴이 있습니다"
+                : null,
           // `--no-browser` / `--daemon` 은 **창을 띄우지 않는다**. 그러면 window 모드여도
           // "창이 닫혔다" 는 신호가 성립하지 않으므로, 창이 있었어야 하는지를 알려줘야 한다.
           // 이걸 빠뜨리면 워치독이 첫 tick 에 "창이 닫혔다" 고 판단해 데몬을 죽인다

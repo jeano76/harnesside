@@ -268,7 +268,7 @@ async function setup() {
  * `expect` 은 llama 와 데몬 **각각**에 대한 기대다. 하나만 보면 "죽어야 할 쪽이
  * 살아서" 또는 "살아야 할 쪽이 죽어서" 를 놓친다(그래서 adopt 실측도 둘 다 봤다).
  */
-async function scenario(name, { args = [], expect, trigger, boot = "spawn" }) {
+async function scenario(name, { args = [], expect, trigger, boot = "spawn", clientIdle = false }) {
   console.log(`\n[${name}]`);
   // adopt 시나리오는 **먼저** "사용자의 서버" 를 띄운다. 그래야 데몬이 스폰하지 않는다.
   let adoptTarget = null;
@@ -304,6 +304,18 @@ async function scenario(name, { args = [], expect, trigger, boot = "spawn" }) {
     return;
   }
   record(name, "서버 기동 (pid 가 진짜 서버임)", true, `pid ${pid}`);
+
+  if (clientIdle) {
+    // S3 은 "**한 번도 붙은 적 없다**" 와 "떠났다" 를 구분한다. 그래서 트리거 전에
+    // **실제로 창이 붙었는지** 확인해야 한다 — 붙지 않은 상태에서 navigate 하면
+    // 아무 일도 안 일어나는데, 그걸 "S3 이 안 먹는다" 로 읽으면 안 된다.
+    const connected = await waitFor(
+      async () => /창 연결됨/.test(await readFile(logFile, "utf8").catch(() => "")),
+      40_000,
+      "창 연결"
+    );
+    record(name, "창이 실제로 붙었다 (S3 의 전제)", connected);
+  }
 
   const booted = await waitFor(
     async () => /\[12\/12\]/.test(await readFile(logFile, "utf8").catch(() => "")),
@@ -412,17 +424,45 @@ async function main() {
     },
   });
 
-  // S3 — 웹 클라이언트 하트비트 만료. **구현되어 있지 않다.**
-  //
-  // `heartbeatFresh()` 라는 순수 함수는 있지만(워치독 유예 판정용) **서버가 마지막
-  // ping 시각을 추적하지 않는다.** 즉 이 신호를 만들어 낼 방법이 코드에 없다.
-  // 창을 닫아서 흉내 내면(예전 스크립트가 그랬다) S1 을 두 번 재는 셈이라
-  // 통과했지만 아무것도 검증하지 않았다 — 그래서 **여기서 멈추고 미구현으로 적는다.**
-  console.log(`\n[S3 웹 클라이언트 하트비트 만료]\n  SKIP  미구현 — 마지막 ping 추적이 서버에 없다 (재현 방법이 없으면 통과로 세지 않는다)`);
-  // S4 — CDP 연결 소실 + 재연결 2회 실패. 이것도 **구현되어 있지 않다.**
+  // S3 — 웹 클라이언트 하트비트 만료. **창은 살아 있고 클라이언트만 사라진다.**
+  // 그래서 "창을 닫아서 흉내 내면" 안 된다 — 그건 S1/S2 다(예전 스크립트의 그 함정).
+  // 페이지만 about:blank 로 보내면 Chrome 은 살아 있고 WS 클라이언트만 끊긴다.
+  await scenario("S3 클라이언트 이탈 (창은 살아 있음)", {
+    expect: { llama: false, daemon: false },
+    clientIdle: true,
+    trigger: async () => {
+      const page = (await cdpTargets()).find((t) => t.type === "page" && (t.url ?? "").includes(String(IDE_PORT)));
+      if (!page) throw new Error("CDP 에 페이지가 없다");
+      await cdpSend(page.webSocketDebuggerUrl, "Page.navigate", { url: "about:blank" });
+    },
+  });
+
+  // S4 — CDP 연결 소실 + 재연결 2회 실패. **구현되어 있지 않다.**
   console.log(`\n[S4 CDP 연결 소실]\n  SKIP  미구현 — CDP 소시에 재연결 정책이 없다. S1/S2 와 관측상 구분되지 않는다`);
-  // S6 — 고아 데몬. 자식 전부 exit + 클라이언트 0. **구현되어 있지 않다.**
-  console.log(`\n[S6 고아 데몬]\n  SKIP  미구현 — 워치독에 "자식 전부 죽음" 판정이 없다`);
+  // S6 — 고아 데몬: **알림만 하고 종료하지 않는다**(§4.4 의 의도적 예외). 관측 가능한
+  // 것은 로그 한 줄이므로 그것을 확인한다.
+  await scenario("S6 고아 데몬 (알림만 · 종료 없음)", {
+    args: ["--no-browser"],
+    expect: { llama: false, daemon: true },
+    trigger: async (pid, logFile) => {
+      // llama 를 죽이고 창은 없는 상태 = 자식 하나도 남지 않음 + 클라이언트 0.
+      // 데몬만 살아 있으면 그것이 S6 의 정의다.
+      for (const p of await pidsOnPort(8080)) {
+        if (p !== process.pid && p !== process.ppid) {
+          try {
+            process.kill(p, "SIGKILL");
+          } catch {
+            /* 이미 없음 */
+          }
+        }
+      }
+      await sleep(20_000); // 워치독 tick(5초) 이상 여유를 둔다
+      const log = await readFile(logFile, "utf8");
+      record("S6 고아 데몬 (알림만 · 종료 없음)", "고아 상태를 알린다", /고아 상태/.test(log), "");
+      record("S6 고아 데몬 (알림만 · 종료 없음)", "그래도 서버는 살아 있다", (await daemonAlive()), "7317/api/health");
+      void pid;
+    },
+  });
 
   // S5 — 명시적 종료.
   await scenario("S5 SIGTERM (명시적 종료)", {

@@ -47,6 +47,14 @@ export interface WsHubOptions {
   /** 연결당 최대 대기 이벤트 수. 넘으면 오래된 것부터 버린다. */
   maxQueue?: number;
   onConnect?: (ws: WebSocket) => void;
+  /**
+   * 마지막 클라이언트가 떠났을 때 한 번만 부른다.
+   *
+   * S3(하트비트 만료)의 기준점을 밖에서 알 수 있게 해 주는 경로다. "창이 연결되었다" 만
+   * 말하고 "떠났다" 를 말하지 않으면, 그 뒤의 모든 판정이 **시작을 알 수 없다** —
+   * S3 도 유휴 정책도 기준점이 없으면 못 센다.
+   */
+  onDisconnect?: () => void;
   onMessage?: (msg: Record<string, unknown>, ws: WebSocket) => void;
 }
 
@@ -66,6 +74,10 @@ export class WsHub {
   /** 최근 이벤트(재접속 재생용). */
   private ring: { seq: number; payload: string }[] = [];
   private ringMax = 2000;
+  /** 한 번이라도 클라이언트가 붙었는가. **S3 판정의 전제** 다. */
+  private sawClient = false;
+  /** 마지막 클라이언트가 사라진 시각. 살아 있는 동안에는 null. */
+  private lastClientGoneAt: number | null = null;
 
   constructor(private opts: WsHubOptions) {
     this.epoch = opts.epoch ?? new Date().toISOString();
@@ -85,6 +97,8 @@ export class WsHub {
   private onConnection(ws: WebSocket, req: IncomingMessage): void {
     const client: Client = { ws, queue: [], alive: true };
     this.clients.add(client);
+    this.sawClient = true;
+    this.lastClientGoneAt = null;
     this.opts.onConnect?.(ws);
 
     // hello 에 이어 붙여 **재생을 요청받는다**: 클라이언트가 sinceSeq 를 보내면
@@ -146,11 +160,33 @@ export class WsHub {
   private remove(c: Client): void {
     c.alive = false;
     this.clients.delete(c);
+    // **마지막 클라이언트가 사라진 시각**을 기록한다(S3 하트비트 만료의 기준점).
+    // 살아 있는 클라이언트가 남아 있으면 기준점을 지운다 — "한 명도 없다" 의 시작은
+    // 마지막 사람이 나간 그때부터다.
+    if (this.clients.size === 0) {
+      this.lastClientGoneAt = Date.now();
+      this.opts.onDisconnect?.();
+    }
     try {
       c.ws.close();
     } catch {
       // 이미 닫힘
     }
+  }
+
+  /**
+   * S3(웹 클라이언트 하트비트 만료) 판정값.
+   *
+   * **한 번도 붙은 적이 없으면 `null` 이다.** 부팅 직후에는 창이 아직 페이지를 못 열
+   * 수 있는데, 그 상태를 "클라이언트 없음" 으로 읽으면 **아직 뜨지 않은 창을 죽인다** —
+   * 실제로 그랬다(창 기동 실패 → 0개 → 곧바로 종료). `null` 과 `0ms` 는 전혀 다른
+   * 사실이므로 구분한다.
+   */
+  msSinceLastClientGone(now = Date.now()): number | null {
+    if (!this.sawClient) return null;
+    if (this.clients.size > 0) return null;
+    if (this.lastClientGoneAt === null) return null;
+    return now - this.lastClientGoneAt;
   }
 
   /** 서버 → 전 클라이언트. 순번을 붙여 재접속 이어받기가 가능하게 한다. */
