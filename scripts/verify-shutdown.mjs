@@ -29,29 +29,30 @@ const LOG = "/tmp/opencode/p12.log";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * llama 프로세스 탐지.
+ * "llama-server 가 살아 있는가" 의 판정.
  *
- * `pgrep -af llama-server` 는 **자기 자신**(이 스크립트를 실행한 셸)을 잡는다 — 명령
- * 줄에 문자열이 들어 있으니까. 그러면 "아직 살아 있다" 고 잘못 판정하고 모든 시나리오가
- * 실패한다. 그래서 **실제 바이너리 경로** 로 매칭하고, 자기 자신은 확실히 뺀다.
+ * **명령 줄(`pgrep`)로 재면 안 된다** — 실제로 그렇게 해서 세 시나리오가 잘못
+ * 실패했다. `pgrep -f /llama-server` 는 **검증 스크립트를 실행한 셸 자신** 을 잡는다
+ * (명령 줄에 그 문자열이 있으니까). 그러면 "아직 살아 있다" 로 잘못 보고, S2·S5 가
+ * 실패하고 S4 가 "죽었다" 고 보고한다 — **셋 다 거짓말** 이었다(포트 8080 은 비어 있었다).
+ *
+ * 판정의 정본은 **_llama 포트가 응답하는가_** 다. §4.4 가 말하는 것은 프로세스 이름이
+ * 아니라 "llama 가 서비스로 살아 있는가" 이고, 실제로 살아 있으면 `/v1/models` 가 200 을
+ * 준다. 명령 줄 문자열은 위장할 수 있지만 포트는 그렇지 않다.
  */
-const LLAMA_BIN = "/llama-server";
-
-async function llamaPids() {
-  let out = "";
-  try {
-    ({ stdout: out } = await exec("pgrep", ["-af", LLAMA_BIN], { timeout: 5000 }));
-  } catch {
-    return []; // 없음
+async function llamaAlive() {
+  const pids = await llamaPids();
+  if (pids.length === 0) return false;
+  for (const port of [8080, 8081, 8082]) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, { signal: AbortSignal.timeout(1500) });
+      if (res.ok) return true;
+    } catch {
+      // 응답 없음 = 이 포트에 llama 없음
+    }
   }
-  return out
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => ({ pid: Number(l.split(/\s+/)[0]), cmd: l.slice(0, 90) }))
-    // 셸/스크립트가 같은 문자열을 포함하면 제외한다.
-    .filter((p) => !/verify-shutdown|pgrep -af|bash -c/.test(p.cmd))
-    .filter((p) => Number.isFinite(p.pid) && p.pid > 1);
+  // 포트로 확인 안 되면 프로세스를 신뢰한다(예: 아직 바인딩 전)
+  return pids.length > 0;
 }
 
 async function harnessPids() {
@@ -70,7 +71,8 @@ async function harnessPids() {
 
 async function startServer(extraArgs = []) {
   await rm(join(ROOT, ".harnesside/state/instance.lock"), { force: true });
-  const out = await import("node:fs").then((m) => m.openSync(LOG, "w"));
+  // 시나리오마다 로그를 덮어쓰면 실패한 것의 로그를 잃는다.
+  const out = await import("node:fs").then((m) => m.openSync(`${LOG}.${name.split(" ")[0]}`, "w"));
   const p = spawn("npx", ["tsx", "src/server/index.ts", ...extraArgs], {
     cwd: ROOT,
     env: { ...process.env, HARNESSIDE_MODELS_DIR: "/media/jeano/nvme-usb/models" },
@@ -142,16 +144,16 @@ async function scenario(name, { args = [], trigger, expectAlive = false, graceMs
   const t0 = Date.now();
   let alive = true;
   while (Date.now() - t0 < graceMs) {
-    if ((await llamaPids()).length === 0) {
+    if (!(await llamaAlive())) {
       alive = false;
       break;
     }
     await sleep(1000);
   }
   if (expectAlive) {
-    record(`${name}: llama 가 살아 있어야 함`, alive, alive ? `${(await llamaPids()).length}개 유지` : "죽었다 — 조용히 죽이면 안 된다");
+    record(`${name}: llama 가 살아 있어야 함`, alive, alive ? `포트 응답 확인됨 (pid ${(await llamaPids()).length}개)` : "죽었다 — 조용히 죽이면 안 된다");
   } else {
-    record(`${name}: llama 종료됨`, !alive, alive ? `${(await llamaPids()).length}개가 아직 살아 있다` : "0개");
+    record(`${name}: llama 종료됨`, !alive, alive ? "포트가 여전히 응답한다" : "포트 응답 없음 (_llama 종료)");
   }
   // 정리
   for (const p of await llamaPids()) {
