@@ -48,6 +48,12 @@ export interface PortPlanResult {
 export interface BootstrapDeps {
   run?: Run;
   probe?: PortProbe;
+  /**
+   * 주입된 하드웨어. 있으면 **실제 탐지를 하지 않고 그대로 쓴다** — 호출자가 진실을
+   * 준 것인데 뒤에서 다시 찾으면 테스트는 그 테스트가 도는 **머신** 을 검증하게 된다.
+   * (실제로 겪은 버그: llama-server 를 멈추자 free VRAM 이 285→7517 MiB 이 되어
+   *  "off 이어야 한다" 는 테스트가 budgeted 를 받았다.)
+   */
   hardware?: Hardware;
   env?: NodeJS.ProcessEnv;
   projectRoot: string;
@@ -69,6 +75,14 @@ export interface BootstrapDeps {
    * 판단해 부팅이 실패한다**(실제로 겪은 버그) — 한 곳에서만 획득해야 한다.
    */
   lock?: InstanceLock;
+  /**
+   * 9~12 단계 구현체. 나중에 Phase(P2/P3)가 자기를 **여기에 꽂는다** — 단계 목록은
+   * 이 파일 하나만 진실원이고, 다른 곳에서 별도로 "부팅 로그"를 만들면 두 진실원이 된다.
+   * 없는 단계는 `pending` 으로 남는다("지났습니다"라고 말하지 않는다).
+   */
+  lateSteps?: Partial<Record<9 | 10 | 11 | 12, () => Promise<{ ok: boolean; detail: string }>>>;
+  /** 부팅 결과로 접근해야 하는 것들(단계 9~12 구현체가 사용). */
+  result?: BootstrapResult;
   log?: (line: string) => void;
   /** 부팅 로그 패널(§5.12)로 흘릴 로거. 같은 싱글턴을 쓴다. */
   logger?: { info(o: unknown, m: string): void; warn(o: unknown, m: string): void; error(o: unknown, m: string): void };
@@ -126,6 +140,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   const steps: BootstrapStep[] = [];
   const errors: string[] = [];
   const result: BootstrapResult = { ok: false, steps, llamaReady: false, errors };
+  opts.result = result; // 단계 9~12 구현체가 앞 단계 결과를 읽을 수 있게
 
   if (opts.dryRun) {
     for (let i = 0; i < STEP_NAMES.length; i++) {
@@ -170,6 +185,12 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   let hw: Hardware | undefined = opts.hardware;
   {
     const { value, seconds } = await timed(async () => {
+      // **주입된 하드웨어가 있으면 실제 탐지를 하지 않는다.** 항상 실제 값을 쓰는 것은
+      // "모킹보다 실기" 와 다르다: 테스트가 주입한 가짜 머신이 무시되면 테스트는
+      // 그 테스트가 돌고 있는 **머신의 VRAM** 을 검증하게 된다.
+      // 실제로 이 버그가 있었다 — llama-server 를 멈추자 free VRAM 이 285→7517 MiB 이 되어
+      // "off 이어야 한다" 는 테스트가 budgeted 를 받았다(기계에 의존한 테스트).
+      if (opts.hardware) return opts.hardware;
       try {
         return (await detectHardware(opts.run)) as Hardware;
       } catch (e) {
@@ -356,17 +377,44 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
     });
   }
 
-  // [9]~[12] 는 P2/P3 에서 구현된다. 지금 단계에서 "지났습니다"라고 말하지 않는다.
-  for (let n = 9; n <= 12; n++) {
-    record({
-      n,
-      name: STEP_NAMES[n - 1],
-      ok: false,
-      detail: `아직 구현되지 않음 (${n <= 11 ? "P2/P3" : "P3"})`,
-      tookSeconds: 0,
-      fatal: false,
-      pending: true,
-    });
+  // [9]~[12] — Phase P2/P3 가 `lateSteps` 로 자기 구현을 꽂는다.
+  // 지금 단계에서 구현되지 않은 것은 "지났습니다"가 아니라 `pending` 이다.
+  const PHASE_LABEL: Record<9 | 10 | 11 | 12, string> = {
+    9: "P2",
+    10: "P1.5",
+    11: "P2",
+    12: "P3",
+  };
+  for (const n of [9, 10, 11, 12] as const) {
+    const impl = opts.lateSteps?.[n];
+    if (!impl) {
+      record({
+        n,
+        name: STEP_NAMES[n - 1],
+        ok: false,
+        detail: `아직 구현되지 않음 (${PHASE_LABEL[n]})`,
+        tookSeconds: 0,
+        fatal: false,
+        pending: true,
+      });
+      continue;
+    }
+    const t0 = Date.now();
+    try {
+      const out = await impl();
+      record({ n, name: STEP_NAMES[n - 1], ok: out.ok, detail: out.detail, tookSeconds: (Date.now() - t0) / 1000, fatal: false });
+    } catch (e) {
+      // 실패해도 부팅은 계속된다 — 창은 떠야 한다(§3.2 [8] 의 degrade 원칙과 같다).
+      errors.push(`단계 ${n} 실패: ${msg(e)}`);
+      record({
+        n,
+        name: STEP_NAMES[n - 1],
+        ok: false,
+        detail: `실패: ${msg(e)}`,
+        tookSeconds: (Date.now() - t0) / 1000,
+        fatal: false,
+      });
+    }
   }
 
   // 중단 조건이 없으므로 여기까지 온다. ok 는 "치명적 실패 없음" 을 뜻한다.

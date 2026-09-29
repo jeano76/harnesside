@@ -21,10 +21,12 @@
 import { bootstrap, type BootstrapResult } from "./bootstrap.js";
 import { LlamaLauncher } from "./llamaLauncher.js";
 import { acquireInstanceLock, type InstanceLock } from "./bootstrap.js";
+import { HttpServer } from "./httpServer.js";
+import { issueToken } from "../auth/token.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdir } from "node:fs/promises";
+import { mkdir, access } from "node:fs/promises";
 
 const argv = process.argv.slice(2);
 const flag = (n: string) => argv.includes(n);
@@ -55,6 +57,7 @@ async function main(): Promise<number> {
   let lock: InstanceLock | null = null;
   let launcher: LlamaLauncher | null = null;
   let boot: BootstrapResult | null = null;
+  let http: HttpServer | null = null;
 
   // SIGTERM/SIGINT = 명시적 종료(S5). SIGHUP 은 터미널을 닫는 것이므로 무시한다.
   const shutdown = async (reason: string) => {
@@ -69,6 +72,10 @@ async function main(): Promise<number> {
     if (launcher) {
       await launcher.stop();
       emit("[shutdown] llama-server 종료 완료");
+    }
+    if (http) {
+      await http.close().catch(() => {});
+      emit("[shutdown] HTTP/WS 종료 완료");
     }
     if (lock) await lock.release();
     emit("[shutdown] 종료합니다");
@@ -112,6 +119,9 @@ async function main(): Promise<number> {
     return 1;
   }
 
+  const webDir = join(projectRoot, "dist", "web");
+  let tokenRec: Awaited<ReturnType<typeof issueToken>> | null = null;
+
   boot = await bootstrap({
     projectRoot,
     modelsDir,
@@ -119,6 +129,43 @@ async function main(): Promise<number> {
     allowBuild: false,
     skipLlamaSpawn: true, // 아래에서 실제 스폰(단계 7/8 을 여기서 이어받는다)
     lock, // 락은 여기서만 획득한다 — 두 곳이 잡으면 자기 자신을 "이미 실행 중" 으로 본다
+    lateSteps: {
+      // [9] 웹 자산 확인 — 없으면 설치 가이드를 보여준다는 사실만 알린다(P2).
+      9: async () => {
+        try {
+          await access(join(webDir, "index.html"));
+          return { ok: true, detail: `dist/web 준비됨 (${webDir})` };
+        } catch {
+          return { ok: false, detail: "dist/web 없음 — 'npm run build' 후 재시작 하세요 (P2)" };
+        }
+      },
+      // [10] HTTP/WS 기동 — 인증은 **처음부터** 들어간다(retrofit 하지 않는다, §12).
+      10: async () => {
+        const r = boot;
+        const port = r?.ports?.idePort ?? 7317;
+        tokenRec = await issueToken(stateDir(projectRoot), port);
+        http = new HttpServer({
+          token: tokenRec,
+          port,
+          logger: (level, o, m) => (level === "error" ? emit(`[http] ${m}`) : undefined),
+        });
+        http
+          .route("GET", "/api/health", () => ({
+            ok: true,
+            llamaUp: r?.llamaReady ?? false,
+            version: "0.1.0",
+          }))
+          .route("GET", "/api/gpu", () => ({ ...r?.gpu, llama: r?.ports?.llamaPort, ide: port }))
+          .route("GET", "/api/system/version", () => ({
+            version: "0.1.0",
+            llama: r?.llama?.source ?? null,
+            model: r?.model?.path ?? null,
+            gpuMode: r?.gpu?.mode ?? null,
+          }));
+        const { port: actual } = await http.start();
+        return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };
+      },
+    },
     log: (l) => emit(l),
   });
 
