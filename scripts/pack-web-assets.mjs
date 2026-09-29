@@ -44,7 +44,7 @@ async function listFiles(dir, base = dir) {
   const out = [];
   for (const d of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, d.name);
-    // 상대 경로를 base 에 붙인다. `p.slice(...)` 로 잘라내면 경로分隔자가 환경에 따라
+    // 상대 경로를 base 에 붙인다. `p.slice(...)` 로 잘라내면 경로 구분자가 환경에 따라
     // 어긋나서 **존재하지 않는 경로** 가 나온다(실제로 그랬다).
     const rel = p.slice(dir.length + 1);
     if (d.isDirectory()) out.push(...(await listFiles(p, join(base, rel))));
