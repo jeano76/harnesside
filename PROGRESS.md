@@ -16,12 +16,12 @@
 ```yaml
 phase: P1            # 현재 Phase
 status: in_progress   # not_started | in_progress | blocked | done
-last_commit: "8272ad4 (P0 완료)"
-next_action: "P1-1 src/server/ 뼈대 + 부트스트랩 12단계 상태 머신 (§3.2)"
+last_commit: "7bae9c1 (P1-1/P1-2/P1-4 완료)"
+next_action: "P1-3 llama-server 실제 스폰 + /v1/models 헬스체크 (src/server/index.ts 엔트리포인트)"
 blocking: 없음
 verified_this_session:
-  - "npm test → 525 pass / 0 fail (P0 게이트 통과)"
-  - "npm run typecheck → exit 0 (legacy-tui 포함 전체)"
+  - "npm test → 544 pass / 0 fail (P0 525 + 신규 19)"
+  - "npm run typecheck → exit 0"
   - "npx tsc -p tsconfig.server.json --noEmit → exit 0"
   - "grep -rni llamacli src scripts package.json tsconfig.json README.md .gitignore → 0건"
 ```
@@ -74,21 +74,24 @@ verified_this_session:
 > `LlamacliConfig` 같은 대문자 변형을 놓치면 `grep -ni` 게이트가 통과해 버린다(치환 스크립트가 규칙 3줄).
 
 ### P1 — llama-server 부트스트랩 (현재 Phase)
-- [ ] P1-1 `src/server/` 뼈대 + 부트스트랩 12단계 상태 머신 (§3.2) — **각 단계는 `BootstrapStep{name, ok, detail, tookSeconds}`**
-- [ ] P1-2 하드웨어 탐지 확장 — `nvidia-smi` **실측 free VRAM** (페이퍼 사양 8192MiB 를 믿지 않는다)
-- [ ] P1-3 llama-server 기동 + `/v1/models` 헬스체크(기동 실패 시에도 뒤 단계 진행 — degrade 원칙)
-- [ ] P1-4 포트 계획 2종(llama 8080 / IDE 7317) + 점유 시 후보 탐색
-- [ ] P1-5 CLI로 "웹 없이" llama-server 기동 확인 = P1 완료 검증
+- [x] P1-1 `src/server/bootstrap.ts` 12단계 상태 머신. `STEP_NAMES` 를 **export** 하여 §3.2 와 이름/순서 일치를 테스트가 지킨다.
+      단계 9~12 는 `pending: true` 로 "지났습니다"라고 말하지 않는다. 각 단계 `tookSeconds` 기록.
+- [x] P1-2 하드웨어/GPU 정책 — `src/setup/gpuPolicy.ts` `decideGpuMode()`. 이식 모듈 `detectHardware()` 가 이미
+      **실측 `vramFreeBytes`** 를 제공하므로 재작업 불필요(재작업하면 두 진실원이 생긴다). `off` 모드의 rationale 에 **측정 근거** 를 실어 둠.
+- [x] P1-4 포트 계획 2종 — `IDE_PORT=7317` 추가, llama 포트와 **절대 겹치지 않도록**(겹치면 "런처 버그"로 오인된다)
+- [ ] P1-3 llama-server **실제 스폰** + `/v1/models` 헬스체크 → `src/server/index.ts` 엔트리포인트
+- [ ] P1-5 "웹 없이" 기동 확인 = P1 완료 검증 (`tsx src/server/index.ts --no-browser`)
 
 ## ④ 지금 바로 할 일 (재개 시 첫 번째 = 1번)
 
-1. **P1-1**: `src/server/bootstrap.ts` 작성 — 12단계 상태 머신. 각 단계는 실패해도 다음으로 진행하되
-   `BootstrapStep` 에 기록한다. **단계 5(브라우저 GPU 정책 + 실측 VRAM)가 §6.3 튜닝의 입력이므로 순서를 지킨다.**
-   검증: `tsx src/server/bootstrap.ts --dry` 로 12단계 이름/순서만 출력되는 것.
-2. P1-2 `src/setup/hardware.ts` 에 `queryFreeVramMiB()` 추가 (nvidia-smi CSV 파싱, GPU 없으면 0).
-   검증: 유닛 테스트 — GPU 없음/이상치(NaN)/빈 출력.
-3. P1-3 `LlamaServerManager` 재사용으로 기동 + 헬스체크. 검증: `harnesside up --no-browser` 로 `/v1/models` 200.
-4. 커밋 후 이 파일 갱신 → P1-4.
+1. **P1-3** `src/server/index.ts` 작성:
+   - `bootstrap()` 호출 → `result.tuning` + `result.ports` 로 `LlamaServerManager` 스폰(§6.3 플래그) → `/v1/models` 폴링(기본 120초).
+   - **헬스체크 실패해도 프로세스를 죽이지 않는다**(§3.2 [8] 실패 → 뒤 단계 진행). 창은 반드시 뜬다.
+   - 종료 시그널 핸들러(§4.4 `shutdown()`): 턴 취소 → 체크포인트 → llama SIGTERM 5s → SIGKILL.
+   - 데몬 모드 플래그: `--daemon`(창 없음). TTY 유무에 무관하게 같은 경로(§3.7).
+   검증: `npx tsx src/server/index.ts --no-browser` → 12단계 로그 + `/v1/models` 200 → `Ctrl+C` 로 llama 종료 확인.
+2. 위가 되면 `npm test` + typecheck → 커밋 → 이 파일 갱신 → **P1 완료 처리**(P1-5 검증 결과 기록).
+3. 다음 Phase 는 **P1.5(보안 경계)** — REST/WS 를 처음부터 토큰 필수로 설계한다(§12 순서 경고).
 
 ## ⑤ 환경 사실 (재측정 불필요 · 2026-09-29 실측)
 
@@ -138,3 +141,4 @@ verified_this_session:
 |---|---|---|---|
 | 1 | `0a31e35` | `chore: fork from llamacli` + PROMPT.md 명세 + **PROGRESS.md 재개 원장** | 파일 114개 커밋 |
 | 2 | `8272ad4` | `refactor!: rename llamacli → harnesside, isolate TUI as legacy-tui` | `npm test` 525/0 · typecheck 0 · grep 0 |
+| 3 | `7bae9c1` | `feat(server): 12단계 부트스트랩 + GPU 정책 결정 + 2포트 계획` | `npm test` **544**/0 (+19) · typecheck 0 |

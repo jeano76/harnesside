@@ -63,6 +63,12 @@ export interface BootstrapDeps {
    * (테스트와 `--dry` 경로). P1-3 에서 index.ts 가 스폰을 연결한다.
    */
   skipLlamaSpawn?: boolean;
+  /**
+   * 이미 획득한 인스턴스 락. 엔트리포인트가 락을 먼저 잡고 부트스트랩에 넘긴다.
+   * 이게 없으면 bootstrap 이 직접 획득한다. **둘 다 하면 자기 자신의 락을 "이미 실행 중" 으로
+   * 판단해 부팅이 실패한다**(실제로 겪은 버그) — 한 곳에서만 획득해야 한다.
+   */
+  lock?: InstanceLock;
   log?: (line: string) => void;
   /** 부팅 로그 패널(§5.12)로 흘릴 로거. 같은 싱글턴을 쓴다. */
   logger?: { info(o: unknown, m: string): void; warn(o: unknown, m: string): void; error(o: unknown, m: string): void };
@@ -148,12 +154,13 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   // [1] 인스턴스 가드 ---------------------------------------------------------
   {
     const t0 = Date.now();
-    const lock = await acquireInstanceLock(opts);
+    const l = opts.lock ?? (await acquireInstanceLock(opts));
+    if (!opts.lock) opts.lock = l;
     record({
       n: 1,
       name: STEP_NAMES[0],
       ok: true,
-      detail: lock.detail,
+      detail: l.detail,
       tookSeconds: (Date.now() - t0) / 1000,
       fatal: false,
     });
