@@ -15,6 +15,8 @@ import { ApiClient, ApiError, type BootStep, type GpuInfo } from "./api.js";
 import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
 import { WorkspaceBar } from "./panels/WorkspaceBar.js";
+import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js";
+import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
 import { MonitorPanel } from "./panels/MonitorPanel.js";
 import { DiffPanel } from "./editor/DiffPanel.js";
@@ -226,13 +228,44 @@ export default function App() {
   // 모르는 상태로 일하게 두지 않는다.
   const [workspace, setWorkspace] = useState<WorkspaceFingerprint | null>(null);
   const [tree, setTree] = useState<{ name: string; kind: "dir" | "file"; size: number }[] | null>(null);
+  // §5.3 Think + §5.4 블록. 델타는 WS 로 온다(폴링이 아니다).
+  const [blocks, setBlocks] = useState<AgentBlock[]>([]);
+  const [think, setThink] = useState<ThinkState>(() => initialThink());
+  const [turnRunning, setTurnRunning] = useState(false);
 
   /** 열린 탭 목록 — 전환 계획을 서버에 보낼 때 필요하다(탭이 새 루트 밖에 있으면 닫혀야 한다). */
   const openTabs = useMemo(() => (openFile ? [openFile.path] : []), [openFile]);
 
+
   const pushToast = useCallback((t: Toast) => {
     setToasts((prev) => [t, ...prev.filter((x) => x.id !== t.id)].slice(0, 5));
   }, []);
+
+  /**
+   * 턴을 보낸다.
+   *
+   * **응답을 기다리지 않는다** — 델타는 WS 로 온다. 여기서 기다리면 "보냈는데 아무 반응이
+   * 없다" 는 12초짜리 침묵이 생기고, 그 침묵을 사용자는 멈춘 것으로 읽는다. 요청이
+   * 실패하면 **즉시** 말하고, 성공 여부도 서버가 WS 로 알려 준다.
+   */
+  const sendTurn = useCallback(async () => {
+    const text = draft.trim();
+    if (!text || turnRunning) return;
+    setTurnRunning(true);
+    // 사용자 입력을 대화 기록에 **먼저** 남긴다. WS 가 늦게 와도 순서가 뒤집히지 않는다.
+    setBlocks((prev) => applyEvent(prev, { type: "agent.status", text: `전송: ${text.slice(0, 60)}`, at: Date.now() }));
+    setDraft("");
+    try {
+      const r = await client.post<{ ok: boolean; detail: string }>("/api/agent/turn", { text });
+      if (!r.ok) {
+        setTurnRunning(false);
+        pushToast({ id: "turn:fail", kind: "error", title: "턴을 시작하지 못했습니다", body: r.detail, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
+      }
+    } catch (e) {
+      setTurnRunning(false);
+      pushToast({ id: "turn:fail", kind: "error", title: "턴 요청이 실패했습니다", body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
+    }
+  }, [draft, turnRunning, pushToast]);
 
   const loadTree = useCallback(async () => {
     try {
@@ -322,6 +355,7 @@ export default function App() {
       port: idePort,
       token,
       onEvent: (ev) => {
+        const evType = String(ev.type);
         if (ev.type === "log.append") {
           const e2 = ev.entry as LogEntry | undefined;
           if (!e2) return;
@@ -337,6 +371,23 @@ export default function App() {
           const m = (ev.metrics ?? null) as Metrics | null;
           setMetrics(m);
           if (m) setMetricSeries((prev) => [...prev, m.cpu.overall].slice(-120));
+        } else if (evType.startsWith("agent.")) {
+          // **모든 에이전트 이벤트를 한 곳에서** 블록으로 바꾼다. 분기마다 따로
+          // 처리하면 순서가 뒤집히고(상태 문구가 답변 뒤에 붙는다) 되돌리기 어렵다.
+          if (evType === "agent.reasoning") {
+            setThink((s) => ({ ...ingest(s, { reasoning: String(ev.text ?? "") }), startedAt: s.startedAt ?? Date.now() }));
+          }
+          if (evType === "agent.done" || evType === "agent.error") setTurnRunning(false);
+          if (evType === "agent.status" && /응답 중/.test(String(ev.text ?? ""))) setTurnRunning(true);
+          if (evType === "agent.done" || evType === "agent.error") setThink((s) => finish(s));
+          setBlocks((prev) =>
+            applyEvent(prev, {
+              type: evType,
+              text: (ev.text ?? ev.path) as string | undefined,
+              tool: ev.tool as AgentBlock["tool"],
+              at: Number(ev.at ?? Date.now()),
+            })
+          );
         } else if (ev.type === "workspace.changed") {
           // 다른 곳(팔레트·다른 창)에서 루트가 바뀌었다. 화면을 **모으지 않으면** 사용자는
           // 옛 폴더에 계속 쓰게 된다.
@@ -496,10 +547,18 @@ export default function App() {
       </div>
     ),
     agent: (
-      <Empty
-        title="아직 메시지가 없습니다"
-        hint="입력창에 무엇을 지시할지 쓰세요. 파괴적인 도구는 승인 게이트를 거칩니다."
-        actions={EXAMPLES.map((t) => ({ label: t.length > 28 ? `${t.slice(0, 27)}…` : t, onClick: () => setDraft(t) }))}
+      <AgentPanel
+        blocks={blocks}
+        running={turnRunning}
+        think={think}
+        onStyle={(s: ThinkStyle) => setThink((prev) => ({ ...prev, style: s }))}
+        onThinking={(on) => {
+          setThink((prev) => initialThink({ enabled: on, style: prev.style }));
+          void client.post("/api/agent/thinking", { enabled: on }).catch((e) =>
+            pushToast({ id: "think:fail", kind: "error", title: "thinking 설정을 보내지 못했습니다", body: String(e), at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "agent" })
+          );
+        }}
+        onCancel={() => void client.post("/api/agent/cancel")}
       />
     ),
     diff: diff ? (
@@ -678,8 +737,13 @@ export default function App() {
                   >
                     지우기
                   </button>
-                  <button type="button" disabled={!draft.trim()} style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 10px", cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
-                    보내기
+                  <button
+                    type="button"
+                    disabled={!draft.trim() || turnRunning}
+                    onClick={() => void sendTurn()}
+                    style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 10px", cursor: draft.trim() && !turnRunning ? "pointer" : "default", font: "inherit" }}
+                  >
+                    {turnRunning ? "응답 중…" : "보내기"}
                   </button>
                 </div>
               </div>

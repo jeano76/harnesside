@@ -31,6 +31,7 @@ import { gitStatus, gitShowHead } from "./gitDiff.js";
 import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
+import { AgentService } from "./agentService.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -40,6 +41,7 @@ import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, access } from "node:fs/promises";
+import stripAnsi from "strip-ansi";
 
 const argv = process.argv.slice(2);
 const flag = (n: string) => argv.includes(n);
@@ -113,6 +115,25 @@ async function main(): Promise<number> {
       emit(`[workspace] ${e.from.root} → ${e.to.root}`);
     },
   });
+  // §5.3: 에이전트 시스템 프롬프트. 워크스페이스의 **규칙 파일**을 여기에 싣는다 —
+  // 규칙을 읽어놓고 프롬프트에 안 넣으면 "규칙이 적용됐다" 고 말할 수 없다.
+  // **함수**로 둔다: 턴마다 읽어야 전환이 반영된다. 상수로 두면 규칙이 옛 폴더 것만 남는다.
+  const systemPrompt = (): string => {
+    const base = [
+      "당신은 로컬 코딩 에이전트입니다. 파일은 현재 워크스페이스 루트 기준 상대경로로 다룹니다.",
+      `현재 작업 루트: ${workspace.root()}`,
+      "파괴적인 도구(삭제·덮어쓰기·셸)는 승인 게이트를 거칩니다. 승인 없이는 실행되지 않습니다.",
+    ];
+    const rules = workspace.rules();
+    if (rules.length === 0) {
+      // **없다고 말한다.** 조용히 비면 "규칙이 적용됐다" 고 오해한다.
+      base.push("이 폴더에는 규칙 파일(CLAUDE.md 등)이 없습니다.");
+    } else {
+      base.push(`규칙 파일 ${rules.length}개가 적용 중입니다: ${rules.map((r) => r.path).join(", ")}`);
+    }
+    return base.join("\n");
+  };
+
   // §5.2: 워크스페이스 파일 변경 감지. 자기 쓰기는 `self:true` 로 표시되어
   // 사용자가 자기 저장을 "외부 변경" 으로 오해하지 않는다.
   const fsWatcher = new WorkspaceWatcher({
@@ -133,6 +154,25 @@ async function main(): Promise<number> {
   // §8.3: 지문을 **한 번** 구한다. 이후 모든 판정이 같은 값을 봐야 전환 중에
   // 트리와 도구의 기준이 어긋나지 않는다.
   await workspace.init();
+
+  // §5.3 에이전트. llama 포트(BaseUrl)는 **부팅 후에** 정해지므로(단계 6·7) 이 시점의
+  // 값으로 박지 않는다 — 부팅 전에 만들어 두면 어차피 옛 값이다.
+  const agent = new AgentService({
+    baseDir: () => workspace.baseDir(),
+    baseUrl: () => `http://127.0.0.1:${boot?.ports?.llamaPort ?? 8080}`,
+    // 모델 이름도 **호출 시점**에 읽는다 — 부팅이 끝나야 정해진다(`boot` 이 아직 없다).
+    model: () => boot?.model?.path ?? process.env.HARNESSIDE_MODEL ?? "",
+    systemPrompt,
+    thresholds: { autoTriggerRatio: 0.6, contextWindowTokens: 32_768 },
+    emit: (e) => hub?.publish({ ...e } as never),
+    logger: (l) => emit(l),
+    diff: (path, diff) => {
+      // 도구 계층이 주는 diff 는 **ANSI 색이 들어 있다**(UI 전용이라고 명시돼 있다).
+      // 색 제어문자를 그대로 WS 로 흘리면 웹이 이스케이프를 문자 그대로 화면에 찍는다 —
+      // 그래서 **색을 벗겨서** 보낸다. 표시는 웹이 한다(한 곳에서만).
+      hub?.publish({ type: "agent.diff", path, diff: stripAnsi(diff) } as never);
+    },
+  });
 
   let lock: InstanceLock | null = null;
   let launcher: LlamaLauncher | null = null;
@@ -416,6 +456,21 @@ async function main(): Promise<number> {
               throw Object.assign(new Error(r.detail), { status, reason: r.reason });
             }
             return { current: workspace.current, change: r.value };
+          })
+          // ── §5.3 에이전트 턴 ────────────────────────────────────────────────
+          // **이전엔 "보내기" 버튼이 죽어 있었다.** 도구·압축·자기보호 로직은 전부
+          // 검증되어 있는데 서버에서 아무것도 호출하지 않았다. 이제 실제로 돈다.
+          .route("GET", "/api/agent/state", () => ({ turn: agent.turn, thinking: agent.thinking, ready: agent.ready }))
+          .route("POST", "/api/agent/thinking", async (c) => {
+            const body = (await readBody(c.req)) as { enabled?: boolean };
+            return agent.setThinking(body.enabled === true);
+          })
+          .route("POST", "/api/agent/cancel", async () => agent.cancel())
+          .route("POST", "/api/agent/turn", async (c) => {
+            const body = (await readBody(c.req)) as { text?: string };
+            // 턴은 **기다린다** — HTTP 응답이 턴의 결과라야 이 라우트는 존재 이유가 없다.
+            // 델타는 WS 로 흘린다(§2.3).
+            return agent.send(String(body.text ?? ""));
           });
         const { port: actual } = await http.start();
         hub.publish({ type: "sys.logs", limits: ring.status } as never);
