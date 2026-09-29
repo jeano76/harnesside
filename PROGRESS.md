@@ -317,3 +317,39 @@ verified_this_session:
 - `grep -oE '[0-9]+'` 를 로그 라인에 쓰면 `[1/12]` 에서 **1 과 12 를 둘 다** 뽑는다.
   대괄호 안 앞 숫자만 꺼낼 것.
 - `${{ env.HOME }}` 는 러너에서 **비어 있다.** 경로는 `github.workspace` 로.
+
+---
+
+## 🔴 미완성 작업이 stash 에 있음 — 새 세션이 먼저 읽어야 함
+
+`git stash@{0}` 에 **작업 중인(컴파일 안 되는) 상태**가 들어 있다. 되돌리면 바로 이어서 할 수 있다.
+
+```bash
+git stash pop            # src/server/bootstrap.ts · src/setup/ports.ts
+npm run typecheck        # 지금은 pop 하지 않아야 통과함
+```
+
+**stash 의 상태 (pop 하면 typecheck 가 깨진다 — 이유가 여기 적혀 있다)**
+
+| 파일 | 한 것 | 남은 것 |
+|---|---|---|
+| `src/setup/ports.ts` | `PortPlan.adopted?: { port; model }` 추가 완료 | — |
+| `src/server/bootstrap.ts` | 단계 [6] 을 "**먼저 adopt 탐지 → 그다음 포트 계획**" 으로 고침. `adopted` 가 있으면 메시지에 "기존 서버를 채택" 표시 | ❌ `BootstrapDeps.detectServer` 시 Seam 없음<br>❌ `defaultDetectRunningServer` 정의 없음<br>❌ `COMMON_PORTS` import 없음<br>❌ 테스트 없음 |
+
+**핵심 발견 (이것이 이 작업의 이유)**
+`tryAdopt(ports.llamaPort)` 은 `planPorts` 가 **"비어 있다고 확인한 포트**" 를 다시 두드렸다.
+따라서 adopt 는 **닿을 수 없는 죽은 코드**였다. 실제로 8080 에 정상 llama-server 가 있어도
+**포트를 8081 로 옮겨 두 번째 모델을 띄웠다** — 실측 OOM 경로.
+주석에는 "§6.2 adopt 한다" 고 적혀 있었지만 실행되지 않았다. **주석과 코드가 다르다.**
+
+**덧붙일 것 (adopt 구현 시)**
+- adopt 한 서버는 **종료 시 죽이면 안 된다** (사용자의 것). spawn 한 것만 죽인다.
+- CI 에 adopt 경로 검사를 다시 넣을 수 있다 — 지난번 "adopt 경로가 없다" 고 해서 뺐는데,
+  이제 구현하므로 되돌린다. 두 경우를 **반대로** 검사해야 한다:
+  spawn 한 llama 는 죽는다 / adopt 한 llama 는 **산다**.
+
+**이번 세션에서 이 밖의 것**
+- Tailscale 1.102.4 설치되어 있고 `tailscaled` 는 `active` + `enabled` + `Restart=on-failure`
+  → **자동 시작은 이미 충족**. 다만 `BackendState: NeedsLogin` 이라 트래픽은 안 나감.
+  로그인은 sudo(비밀번호) 가 필요해 사용자 몫. 보존해야 할 설정: `--advertise-routes=10.0.0.0/24`
+  (잘못 쓰면 초기화된다). IP forwarding 이 꺼져 있어 서브넷 라우팅은 **지금은 동작 안 함**.
