@@ -7,7 +7,7 @@ const execAsync = promisify(exec);
  *  its own, so a wrong change is `git diff HEAD~1` and a revert away. Opt-in
  *  (config.yaml `checkpoint: { git: true }`, default off) — auto-committing
  *  into a repo the user didn't ask for that in is a surprise, not a safety
- *  net, and llamacli already has its own non-git backup-before-overwrite for
+ *  net, and harnesside already has its own non-git backup-before-overwrite for
  *  the case this is off. Best-effort throughout: a checkpoint failing must
  *  never fail or block the edit that triggered it. */
 export interface GitCheckpointResult {
@@ -59,7 +59,7 @@ export async function gitCheckpoint(path: string, message: string, projectRoot: 
 
     await execAsync(
       `git commit --no-verify -m ${JSON.stringify(message)} -- ${JSON.stringify(path)}`,
-      { cwd: root, timeout: 10_000, env: { ...process.env, GIT_AUTHOR_NAME: "llamacli", GIT_AUTHOR_EMAIL: "llamacli@local" } }
+      { cwd: root, timeout: 10_000, env: { ...process.env, GIT_AUTHOR_NAME: "harnesside", GIT_AUTHOR_EMAIL: "harnesside@local" } }
     );
     const { stdout } = await execAsync("git rev-parse --short HEAD", { cwd: root, timeout: 5000 });
     return { committed: true, hash: stdout.trim() };

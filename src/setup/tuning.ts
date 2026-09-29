@@ -1,6 +1,6 @@
 /**
  * The one place that turns "what hardware is this" into "what llama-server
- * flags should llamacli launch with".
+ * flags should harnesside launch with".
  *
  * Reported directly, in Korean, by the user this was written for: on a
  * multi-core machine the initial llama.cpp launch must put the NVIDIA GPU

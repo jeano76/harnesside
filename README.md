@@ -1,4 +1,4 @@
-# llamacli
+# harnesside
 
 An AI coding agent CLI that talks to a local llama.cpp backend directly and is
 fully compatible with the OpenAI Chat Completions API. See
@@ -27,11 +27,11 @@ The banner, a discoverability hint, the input box, and the status bar:
 █   █ █   █ █  █  █  ██ █         █     █
 █   █ █   █ █   █ █   █ █████ ████  ████
                         CLI  v20260928  ⡀
-      https://github.com/jeano76/llamacli
+      https://github.com/jeano76/harnesside
   /help 키보드 단축키 · PageUp/Dn 로그 스크롤 · Esc 강제종료 · /quit 정상종료
 ────────────────────────────────────────────────────────────────────────────
 ────────────────────────────────────────────────────────────────────────────
- /home/jeano/llamacli    │ …5-35B-A3B-Q4_K_M.gguf                    ░░░░░░░░░░░░   0%
+ /home/jeano/harnesside    │ …5-35B-A3B-Q4_K_M.gguf                    ░░░░░░░░░░░░   0%
 ```
 
 Three things are doing work here. The hint line is the only guidance a new
@@ -117,8 +117,8 @@ guesswork with the actual detection result and the reason for it:
 하이퍼링크  : 꺼짐
 마우스(SGR) : 꺼짐 (지원되지만 /mouse 로 켜짐)
 
-강제로 바꾸려면 환경변수로 실행: LLAMACLI_FORCE_ANSI=1, LLAMACLI_NO_ANSI=1,
-LLAMACLI_COLOR_DEPTH=0|4|8|24, LLAMACLI_ASCII=1, LLAMACLI_MOUSE=1, NO_COLOR=1
+강제로 바꾸려면 환경변수로 실행: HARNESSIDE_FORCE_ANSI=1, HARNESSIDE_NO_ANSI=1,
+HARNESSIDE_COLOR_DEPTH=0|4|8|24, HARNESSIDE_ASCII=1, HARNESSIDE_MOUSE=1, NO_COLOR=1
 ```
 
 Every row is a capability that used to differ *silently* between terminals —
@@ -173,7 +173,7 @@ turns it on at runtime.
 
 ## What this program is
 
-llamacli is a single-binary terminal coding agent. It reads a prompt, streams a
+harnesside is a single-binary terminal coding agent. It reads a prompt, streams a
 reply from a local LLM, and executes the tools that reply asks for — reading
 and writing files, running shell commands, diffing, and driving a browser over
 CDP — looping until the model stops asking for tools. It is deliberately built
@@ -207,7 +207,7 @@ keystroke
             ├─ check context usage  ─── over threshold ──▶ compact()
             │                                                   │
             │                                     summarize + write checkpoint
-            │                                     to .llamacli/state/, resume
+            │                                     to .harnesside/state/, resume
             ▼                                                   │
         POST /v1/chat/completions  ──▶ llama-server ──▶ tool_calls?
             │                                                   │
@@ -245,7 +245,7 @@ developer guide below before changing them.
 
 > ## 이 프로그램이 무엇인가
 >
-> llamacli는 단일 바이너리 터미널 코딩 에이전트입니다. 프롬프트를 받아 로컬 LLM
+> harnesside는 단일 바이너리 터미널 코딩 에이전트입니다. 프롬프트를 받아 로컬 LLM
 > 응답을 스트리밍하고, 그 응답이 요구하는 도구(파일 읽기/쓰기, 셸 실행, diff,
 > CDP 브라우저 제어)를 실행하며, 모델이 도구를 더 요구하지 않을 때까지
 > 반복합니다. 호스팅 API가 아니라 **로컬 llama.cpp** 를 전제로 만들기 때문에
@@ -283,7 +283,7 @@ src/
                 diff rendering + browser_* (remote CDP control)
   tui/          Ink-based bottom-anchored UI: input box, status bar, spinner,
                 slash popup (§6)
-.llamacli/
+.harnesside/
   config.yaml   Backend/model/compaction settings
   rules/        Always-applied project rules
   skills/       Trigger-based, lazily-loaded skill docs
@@ -303,7 +303,7 @@ src/
 >                 스킬이 있어 프로젝트 상태와 무관하게 항상 로드됨
 >   tools/        read_file / write_file / edit_file / run_shell 도구 + ANSI 컬러 diff 렌더링 + browser_* (원격 CDP 제어)
 >   tui/          Ink 기반 하단 고정 UI: 입력창, 상태바, 스피너, 슬래시 팝업 (§6)
-> .llamacli/
+> .harnesside/
 >   config.yaml   백엔드/모델/컴팩션 설정
 >   rules/        항상 적용되는 프로젝트 규칙
 >   skills/       트리거 기반 지연 로딩 skill 문서
@@ -314,54 +314,54 @@ src/
 
 ```bash
 npm install
-# set llama.modelPath in .llamacli/config.yaml to a real .gguf path
+# set llama.modelPath in .harnesside/config.yaml to a real .gguf path
 npm run dev
 npm test        # unit tests (node:test via tsx, no extra dependency)
 npm run typecheck
 ```
 
-### Installing the `llamacli` command globally
+### Installing the `harnesside` command globally
 
 ```bash
 npm run build   # compiles to dist/ (bin points here, so build before linking)
-npm link        # symlinks `llamacli` into your global npm bin (npm prefix)
-llamacli         # now runs from any directory
+npm link        # symlinks `harnesside` into your global npm bin (npm prefix)
+harnesside         # now runs from any directory
 ```
 
-Each project gets its own `.llamacli/config.yaml`/`rules/`/`skills/` based on
+Each project gets its own `.harnesside/config.yaml`/`rules/`/`skills/` based on
 its current working directory — the global command is just the entry point;
 per-project state still lives in that project. Verified running both inside
 this repo and from an unrelated directory (`cwd` in the status bar reflects
 wherever you launched it from, and it auto-generates its own default rule
 file there if the project has no rule/skill convention yet — see the
-Skill/Rule section above). To undo: `npm unlink -g llamacli` (from anywhere)
-or `npm rm --global llamacli`.
+Skill/Rule section above). To undo: `npm unlink -g harnesside` (from anywhere)
+or `npm rm --global harnesside`.
 
 > ## 시작하기
 >
 > ```bash
 > npm install
-> # .llamacli/config.yaml 의 llama.modelPath 를 실제 .gguf 경로로 설정
+> # .harnesside/config.yaml 의 llama.modelPath 를 실제 .gguf 경로로 설정
 > npm run dev
 > npm test        # 유닛테스트 (node:test, tsx로 구동, 별도 의존성 없음)
 > npm run typecheck
 > ```
 >
-> ### `llamacli` 명령을 전역으로 설치하기
+> ### `harnesside` 명령을 전역으로 설치하기
 >
 > ```bash
 > npm run build   # dist/로 컴파일 (bin이 dist를 가리키므로 link 전에 반드시 빌드)
-> npm link        # 전역 npm bin(prefix)에 `llamacli`를 심볼릭 링크로 등록
-> llamacli         # 이제 어느 디렉토리에서든 실행 가능
+> npm link        # 전역 npm bin(prefix)에 `harnesside`를 심볼릭 링크로 등록
+> harnesside         # 이제 어느 디렉토리에서든 실행 가능
 > ```
 >
 > 프로젝트마다 실행 시점의 작업 디렉토리를 기준으로 각자의
-> `.llamacli/config.yaml`/`rules`/`skills`를 갖는다 — 전역 명령은 진입점일 뿐,
+> `.harnesside/config.yaml`/`rules`/`skills`를 갖는다 — 전역 명령은 진입점일 뿐,
 > 프로젝트별 상태는 그대로 해당 프로젝트에 남는다. 이 저장소 내부와 무관한 디렉토리
 > (`/tmp`) 양쪽에서 실행해 검증함(상태바의 cwd가 실행한 위치를 정확히 반영하고,
 > 프로젝트에 rule/skill 컨벤션이 없으면 그 자리에 자체 기본 rule을 자동 생성함 —
-> 위 Skill/Rule 섹션 참고). 되돌리려면: 아무 위치에서나 `npm unlink -g llamacli`
-> 또는 `npm rm --global llamacli`.
+> 위 Skill/Rule 섹션 참고). 되돌리려면: 아무 위치에서나 `npm unlink -g harnesside`
+> 또는 `npm rm --global harnesside`.
 
 ## Built-in skills
 
@@ -370,8 +370,8 @@ of what a project provides — the "senior engineer fundamentals" PROMPT.md §4
 calls for, made concrete and triggerable: `architecture-design`, `planning`,
 `implementation`, `code-review`, `whitebox-testing`, `blackbox-testing`,
 `static-analysis`, `security`. Each is a normal skill file (trigger +
-guidance body) using llamacli's own format, so a project can override or add
-to them the same way as any other `.llamacli/skills/*.md` file.
+guidance body) using harnesside's own format, so a project can override or add
+to them the same way as any other `.harnesside/skills/*.md` file.
 
 > ## 빌트인 스킬
 >
@@ -379,8 +379,8 @@ to them the same way as any other `.llamacli/skills/*.md` file.
 > 제공한다 — PROMPT.md §4가 요구하는 "우수 아키텍처 개발자의 기본기"를 트리거
 > 가능한 형태로 구체화한 것: `architecture-design`, `planning`, `implementation`,
 > `code-review`, `whitebox-testing`, `blackbox-testing`, `static-analysis`,
-> `security`. 각각 일반 skill 파일(trigger + 본문)이며 llamacli 자체 포맷을 쓰므로,
-> 프로젝트에서 다른 `.llamacli/skills/*.md` 파일과 똑같은 방식으로 덮어쓰거나
+> `security`. 각각 일반 skill 파일(trigger + 본문)이며 harnesside 자체 포맷을 쓰므로,
+> 프로젝트에서 다른 `.harnesside/skills/*.md` 파일과 똑같은 방식으로 덮어쓰거나
 > 추가할 수 있다.
 
 ## Removed features
@@ -390,15 +390,15 @@ no flag to flip and no code path left to re-enable them.
 
 | Removed | What it did | Why it is gone |
 |---|---|---|
-| **Model search & download** | Queried HuggingFace for a GGUF, picked one to fit the GPU, and downloaded it during first-run bootstrap. | It produced a concrete 20 GB re-download of weights the machine was already serving, because the Hub republishes filenames and the byte counts disagree. A downloader still wired up behind a default-off switch is one `grep` from being re-enabled by accident. **llamacli now runs only the model recorded in `.llamacli/config.yaml`**, or one an already-running llama-server reports. It will never fetch a model. |
+| **Model search & download** | Queried HuggingFace for a GGUF, picked one to fit the GPU, and downloaded it during first-run bootstrap. | It produced a concrete 20 GB re-download of weights the machine was already serving, because the Hub republishes filenames and the byte counts disagree. A downloader still wired up behind a default-off switch is one `grep` from being re-enabled by accident. **harnesside now runs only the model recorded in `.harnesside/config.yaml`**, or one an already-running llama-server reports. It will never fetch a model. |
 | **`/fastcheck`** | Consulted a second "System 1" model before each turn to pick a reasoning budget, and could downgrade a turn to a cheap mode. | Measured over a labelled prompt set: it added ~0.11 s per turn, agreed with "this needs the real model" on 33% of the prompts that did, and could not be made to separate the classes by any prompt wording. See git history for the full measurement. |
 | **`/reset`** | Recomputed the model, llama flags and ports from current hardware, and re-ran backend calibration. | It existed to re-derive what the bootstrap now derives on its own. With model acquisition removed there is nothing for it to choose. |
 
 **Consequences, stated plainly:**
 
 - A machine with **no model** cannot now obtain one by itself. Place a `.gguf`
-  and set `llama.modelPath` in `.llamacli/config.yaml`, or start a
-  `llama-server` and llamacli will adopt it.
+  and set `llama.modelPath` in `.harnesside/config.yaml`, or start a
+  `llama-server` and harnesside will adopt it.
 - Bootstrap reports a missing model as a **failed step with a reason**, rather
   than silently degrading.
 - A `laya:` block left in an old `config.yaml` is **dropped, not preserved** —
@@ -408,8 +408,8 @@ The `laya` gate's risk rail (`highRiskMatches` / `decideGate`) went with it.
 It only ever mattered *because* a turn could be downgraded to a cheap mode; with
 no such mode, there is nothing to protect.
 
-**Binary self-update is unaffected.** `llamacli` still checks GitHub for a new
-release of itself at startup (opt out with `LLAMACLI_NO_UPDATE=1`). That is the
+**Binary self-update is unaffected.** `harnesside` still checks GitHub for a new
+release of itself at startup (opt out with `HARNESSIDE_NO_UPDATE=1`). That is the
 app updating, not the model — a different code path, in `src/selfUpdate.ts`.
 
 ## Validation — what is actually checked, and what is not
@@ -598,7 +598,7 @@ gets a real directory on disk and the real `ensureLocalStack` runs against it.**
 Only the network and the hardware probe are stubbed — the two things a test
 must not depend on. So this covers what pure-function tests structurally
 cannot: a project directory called `my project 28`, or `프로젝트-5`, or
-`proj-7-🚀`, or one whose `.llamacli/config.yaml` is three bytes of garbage, or
+`proj-7-🚀`, or one whose `.harnesside/config.yaml` is three bytes of garbage, or
 a read-only checkout, or a model file sitting inside the repo.
 
 - **10 project kinds** — empty, git repo, dirty git repo, monorepo, already
@@ -617,7 +617,7 @@ Two real bugs, in the same shape, one layer apart:
 
 - **`ensureLocalStack` threw on an unwritable project.** `writeConfig` was the
   one call in the whole function not wrapped in the error-catching `step()`
-  helper, so `mkdir .llamacli` failing with `EACCES` rejected the entire
+  helper, so `mkdir .harnesside` failing with `EACCES` rejected the entire
   bootstrap — directly contradicting this module's own contract that a
   bootstrap "degrades instead of failing". A read-only mount, a checkout owned
   by someone else, or a container running as a non-owner all reach it.
@@ -625,11 +625,11 @@ Two real bugs, in the same shape, one layer apart:
 - **`loadConfig` had the identical defect, and it was worse.** The same
   unguarded `mkdir` + `writeFile`, inside the `catch` block that handles a
   *missing* config. Since that path runs on **every launch**, a read-only
-  project could not start `llamacli` at all. It now starts with in-memory
+  project could not start `harnesside` at all. It now starts with in-memory
   defaults and says so honestly, instead of showing a stack trace.
 
 Both are now regression-tested — and the tests were themselves wrong at first:
-the read-only probe created `.llamacli` as a side effect, so on a system where
+the read-only probe created `.harnesside` as a side effect, so on a system where
 the directory was *not* actually read-only the test passed without exercising
 anything. Reverting the fixes and watching the tests fail is the only reason
 that got caught.
@@ -769,8 +769,8 @@ All four are covered by unit tests (`src/agent/loop.test.ts`,
 
 ### Crash fix: backend/compaction network failures no longer kill the process
 
-Found via a screen recording: running `llamacli` in a directory with no
-`.llamacli/config.yaml` falls back to a default backend URL nothing is
+Found via a screen recording: running `harnesside` in a directory with no
+`.harnesside/config.yaml` falls back to a default backend URL nothing is
 listening on. The resulting `ECONNREFUSED` was an uncaught exception that
 crashed the whole Node process instead of staying inside the TUI.
 `AgentLoop` now catches both the main chat request and the compaction
@@ -803,14 +803,14 @@ ever slightly off again.
 ### Backend auto-detection: stopped guessing a dead default port
 
 The same recording also showed a real message never reaching any model:
-with no `.llamacli/config.yaml`, the CLI fell back to a hardcoded default
+with no `.harnesside/config.yaml`, the CLI fell back to a hardcoded default
 backend URL (127.0.0.1:8081) that's usually nothing — even on a machine
 that had a real server running on a different port the whole time.
 `loadConfig()` now follows the same pattern already used for rules/skills
 (§5): when no config exists yet, it probes common local ports (see
 `src/backend/detect.ts` — llama-server's typical 8080, the old default
 8081, Ollama's 11434) for a real OpenAI-compatible `/v1/models` responder,
-and if it finds one, generates `.llamacli/config.yaml` pointing at it
+and if it finds one, generates `.harnesside/config.yaml` pointing at it
 automatically, with a `[setup]` status message announcing what it found.
 If nothing answers, it still writes a placeholder config and says so
 clearly, instead of silently guessing. Verified end-to-end: run from a
@@ -1061,7 +1061,7 @@ instead of stranded near the top of a 40-row terminal.
 stops working. That's an inherent trade-off of the alternate screen buffer
 switch from the previous fix — vim, htop, and less have exactly the same
 limitation, since a dedicated alt-screen is by definition not part of the
-terminal's regular scrollback. llamacli doesn't currently have its own
+terminal's regular scrollback. harnesside doesn't currently have its own
 in-app scrollback (Page Up/Down) to compensate; that would be a genuine new
 feature, not a bug fix, and is a reasonable follow-up if wanted.)
 
@@ -1069,10 +1069,10 @@ feature, not a bug fix, and is a reasonable follow-up if wanted.)
 
 Reported live, mid-session: a response ended with literal
 `</parameter>\n</function>\n</tool_call>` text visible in the log.
-Reproduced directly against the real backend (bypassing llamacli entirely)
+Reproduced directly against the real backend (bypassing harnesside entirely)
 with a moderately complex `run_shell` request — the *raw* API response
 already contained the leaked tags in `message.content`, confirming this
-isn't a bug in llamacli's own SSE parsing. It's the model occasionally
+isn't a bug in harnesside's own SSE parsing. It's the model occasionally
 failing to trigger llama-server's grammar-constrained tool-calling mode and
 instead emitting a fragment of its own fine-tuning chat template as plain
 text. It's intermittent — the exact same prompt reproduced it once and then
@@ -1116,7 +1116,7 @@ follow-up assistant response rendering correctly right after.
 ### Ctrl-C exited the whole app instead of doing nothing
 
 Reported directly: some terminals/users treat Ctrl-C as copy, not an
-interrupt, and it shouldn't kill llamacli either way it's configured. Cause:
+interrupt, and it shouldn't kill harnesside either way it's configured. Cause:
 Ink's `render()` defaults to `exitOnCtrlC: true` — the instant Ctrl-C is
 pressed, Ink tears the whole app down itself, independent of anything the
 app's own code does. Fixed by passing `{ exitOnCtrlC: false }` to `render()`
@@ -1164,7 +1164,7 @@ truncation marker.
 Reported live via a pasted real session: `[compaction complete]` followed
 immediately by `[turn ended] Compaction interrupted this task` — repeating
 turn after turn, never letting any actual work finish. Root cause: the
-project's `.llamacli/config.yaml` had `contextSize: 8192`, but the real
+project's `.harnesside/config.yaml` had `contextSize: 8192`, but the real
 `llama-server` it was talking to was actually running with `-c 65536` —
 eight times larger. `AgentLoop` had no way to know that; it trusted the
 config value completely, so `autoTriggerRatio: 0.85` was being evaluated
@@ -1396,7 +1396,7 @@ in this project, not just the other, already-diagnosed bugs. Separately
 runs against): its `cwd` was hardcoded to `process.cwd()` — the whole CLI
 process's own working directory, not necessarily the project actually
 being worked on. It only ever happened to line up correctly because
-`llamacli` is conventionally launched from inside the project directory;
+`harnesside` is conventionally launched from inside the project directory;
 nothing actually guaranteed it.
 
 Fixed both in `tools/index.ts`: `run_shell` now passes a `timeout`
@@ -1644,7 +1644,7 @@ the identical `max_tokens` correctly stopped with `finish_reason:
 "length"`; the exact same request with `stream: true` did not. `max_tokens`
 genuinely isn't honored for **streaming** requests on this llama.cpp
 build — a streaming-only gap in the backend itself, not something
-adjustable from llamacli's side, and not a case of the earlier fix being
+adjustable from harnesside's side, and not a case of the earlier fix being
 wrong; the cap being sent was always correct, the server just wasn't
 respecting it for this request shape.
 
@@ -1896,7 +1896,7 @@ progress.
 >
 > ### 크래시 수정: 백엔드/컴팩션 네트워크 실패로 프로세스가 죽던 문제
 >
-> 스크린 레코딩으로 발견: `.llamacli/config.yaml`이 없는 디렉토리에서 `llamacli`를
+> 스크린 레코딩으로 발견: `.harnesside/config.yaml`이 없는 디렉토리에서 `harnesside`를
 > 실행하면 아무것도 안 떠 있는 기본 백엔드 URL로 폴백되는데, 이때 `ECONNREFUSED`가
 > 잡히지 않은 예외로 전체 Node 프로세스를 그대로 죽여버렸음. 이제 `AgentLoop`가 메인
 > chat 요청과 컴팩션 요약 요청 양쪽 모두를 캐치해서 크래시 대신 `[error]`/`[compaction
@@ -1922,13 +1922,13 @@ progress.
 > ### 백엔드 자동 감지: 죽은 기본 포트를 그냥 찍던 문제 해결
 >
 > 같은 영상에서 메시지를 보내도 어떤 모델에도 도달하지 못하는 것도 확인됨:
-> `.llamacli/config.yaml`이 없으면 하드코딩된 기본 백엔드 URL(127.0.0.1:8081)로
+> `.harnesside/config.yaml`이 없으면 하드코딩된 기본 백엔드 URL(127.0.0.1:8081)로
 > 폴백하는데, 실제로 다른 포트에 서버가 떠 있는 이 기기에서조차 그 포트엔 아무것도
 > 없었음. 이제 `loadConfig()`가 rule/skill에 이미 쓰던 것과 같은 패턴(§5)을 따른다:
 > 설정이 없으면 흔한 로컬 포트(`src/backend/detect.ts` 참고 — llama-server의 기본
 > 8080, 예전 기본값 8081, Ollama의 11434)를 탐색해 실제 OpenAI 호환
 > `/v1/models`에 응답하는 서버를 찾고, 찾으면 그걸 가리키는
-> `.llamacli/config.yaml`을 자동 생성하며 무엇을 찾았는지 `[setup]` 상태 메시지로
+> `.harnesside/config.yaml`을 자동 생성하며 무엇을 찾았는지 `[setup]` 상태 메시지로
 > 알려준다. 아무 데도 없으면 여전히 플레이스홀더 설정을 쓰고 그 사실을 명확히
 > 알린다(조용히 잘못 찍지 않음). 사전 설정이 전혀 없는 디렉토리에서 실행해
 > 실제로 이 기기의 실행 중인 서버를 찾아 수동 설정 없이 연결되는 것까지 확인함.
@@ -2126,16 +2126,16 @@ progress.
 > (별개로 같은 메시지에서 터미널 자체의 우측 스크롤바가 더 이상 동작하지 않는다는
 > 것도 언급하셨음. 이건 이전 수정에서 켠 alternate screen buffer의 본질적인
 > 트레이드오프임 — vim, htop, less도 정확히 같은 한계가 있는데, 전용 alt-screen은
-> 정의상 터미널의 일반 스크롤백에 포함되지 않기 때문. llamacli는 현재 이를 보완할
+> 정의상 터미널의 일반 스크롤백에 포함되지 않기 때문. harnesside는 현재 이를 보완할
 > 자체 인앱 스크롤백(Page Up/Down)이 없음 — 이건 버그 수정이 아니라 진짜 새 기능이라,
 > 원하시면 후속 작업으로 진행할 만함.)
 >
 > ### tool-call 템플릿 태그가 원본 응답에 새는 문제
 >
 > 세션 도중 실시간으로 신고됨: 응답 끝에 `</parameter>\n</function>\n</tool_call>`라는
-> 리터럴 텍스트가 그대로 보임. llamacli를 완전히 우회해서 실제 백엔드로 직접 재현 —
+> 리터럴 텍스트가 그대로 보임. harnesside를 완전히 우회해서 실제 백엔드로 직접 재현 —
 > 적당히 복잡한 `run_shell` 요청을 보내니 **원시** API 응답 자체에 이미 leak된 태그가
-> `message.content`에 들어있어서, llamacli 자체의 SSE 파싱 버그가 아님을 확인함. 모델이
+> `message.content`에 들어있어서, harnesside 자체의 SSE 파싱 버그가 아님을 확인함. 모델이
 > 가끔 llama-server의 그래머 제약 tool-calling 모드를 제대로 트리거하지 못하고, 대신
 > 자기 파인튜닝 챗 템플릿의 일부를 평범한 텍스트로 그대로 뱉어내는 것. 확률적으로
 > 발생함 — 똑같은 프롬프트가 한 번은 재현됐다가 연속 세 번은 깨끗하게 나옴 — 그리고
@@ -2172,7 +2172,7 @@ progress.
 > ### Ctrl-C가 앱 전체를 종료시키던 문제
 >
 > 직접 신고됨: 일부 터미널/사용자에게는 Ctrl-C가 인터럽트가 아니라 복사이고,
-> 어느 쪽이든 llamacli를 죽이면 안 됨. 원인: Ink의 `render()`가 기본값으로
+> 어느 쪽이든 harnesside를 죽이면 안 됨. 원인: Ink의 `render()`가 기본값으로
 > `exitOnCtrlC: true`를 씀 — Ctrl-C를 누르는 순간 앱 자체 코드와 무관하게 Ink가
 > 스스로 앱 전체를 무너뜨림. `index.tsx`의 `render()`에 `{ exitOnCtrlC: false }`를
 > 넘기고, `App.tsx`의 `useInput`에서 `Ctrl-C`를 명시적으로 아무것도 안 하도록
@@ -2215,7 +2215,7 @@ progress.
 > 실제 세션 출력을 그대로 붙여넣은 신고로 발견함: `[compaction complete]`
 > 바로 다음에 `[turn ended] Compaction interrupted this task`가 턴마다
 > 계속 반복되고, 실제 작업은 하나도 끝나지 못함. 근본 원인: 프로젝트의
-> `.llamacli/config.yaml`에 `contextSize: 8192`로 박혀있었는데, 실제로
+> `.harnesside/config.yaml`에 `contextSize: 8192`로 박혀있었는데, 실제로
 > 대화하고 있던 `llama-server`는 `-c 65536`로 떠 있었음 — 8배 차이.
 > `AgentLoop`는 이걸 알 방법이 없어서 설정값을 그대로 믿었고, 그 결과
 > `autoTriggerRatio: 0.85`가 실제보다 8배 작은 컨텍스트 윈도우 기준으로
@@ -2415,7 +2415,7 @@ progress.
 > 실제 원인이었을 개연성이 매우 큼 — 이미 진단해서 고친 다른 버그들만이 아니라.
 > 별개로(위 수정을 고치면서 `run_shell`이 실제로 무엇을 대상으로 실행되는지
 > 확인하다가 발견함): `cwd`가 `process.cwd()`로 하드코딩돼 있었음 — CLI 프로세스
-> 자체의 작업 디렉토리이지, 실제로 작업 중인 프로젝트가 아님. `llamacli`가 관례상
+> 자체의 작업 디렉토리이지, 실제로 작업 중인 프로젝트가 아님. `harnesside`가 관례상
 > 프로젝트 디렉토리 안에서 실행되기 때문에 우연히 맞아떨어졌을 뿐, 실제로 보장된
 > 적은 없었음.
 >
@@ -2625,7 +2625,7 @@ progress.
 > 좁혀짐: 똑같은 `max_tokens`를 넣은 `stream: false` 요청은 정확히
 > `finish_reason: "length"`로 멈췄는데, 똑같은 요청을 `stream: true`로만
 > 바꾸면 안 멈췄음. 이 llama.cpp 빌드에서 `max_tokens`가 **스트리밍** 요청에서는
-> 정말로 지켜지지 않음 — 백엔드 자체의 스트리밍 전용 결함이라 llamacli 쪽에서
+> 정말로 지켜지지 않음 — 백엔드 자체의 스트리밍 전용 결함이라 harnesside 쪽에서
 > 조정할 수 있는 부분이 아니고, 앞선 수정이 잘못됐던 것도 아님; 보낸 상한값
 > 자체는 항상 맞았고, 서버가 이 요청 형태에서만 그걸 안 지켰던 것.
 >
@@ -2833,13 +2833,13 @@ progress.
 ## Skill / Rule — reusing existing AI CLI conventions
 
 `src/skills/loader.ts` reuses whatever rule/skill files another AI coding CLI
-has already left in the project, and only generates llamacli's own defaults
+has already left in the project, and only generates harnesside's own defaults
 when none exist. Every source that's found gets loaded and merged — it's not
 "pick one," it's "load everything present":
 
 **Rules (always injected into the system prompt)** — all of the following are
 searched, in no particular order:
-- `.llamacli/rules/` (llamacli's own)
+- `.harnesside/rules/` (harnesside's own)
 - `.clinerules` (Cline)
 - `CLAUDE.md` (Claude Code)
 - `GEMINI.md` (Gemini CLI)
@@ -2848,25 +2848,25 @@ searched, in no particular order:
 - `AGENTS.md` (a convention several CLIs are converging on)
 - `.github/copilot-instructions.md` (GitHub Copilot)
 
-If none of these exist, `.llamacli/rules/00-core.md` is auto-generated as
-llamacli's own default rule.
+If none of these exist, `.harnesside/rules/00-core.md` is auto-generated as
+harnesside's own default rule.
 
 **Skills (lazily loaded on trigger match)**:
-- `.llamacli/skills/*.md` (llamacli's own format, `trigger:` frontmatter)
+- `.harnesside/skills/*.md` (harnesside's own format, `trigger:` frontmatter)
 - `.claude/skills/<name>/SKILL.md` (Claude Code's format, `name`/`description`
   frontmatter)
 
-If neither exists, `.llamacli/skills/write-tests.md` is auto-generated as
-llamacli's own default skill.
+If neither exists, `.harnesside/skills/write-tests.md` is auto-generated as
+harnesside's own default skill.
 
 > ## Skill / Rule — 기존 AI CLI 컨벤션 재사용
 >
 > `src/skills/loader.ts`는 다른 AI 코딩 CLI가 이미 프로젝트에 남겨둔 rule/skill 파일이
-> 있으면 그것을 그대로 쓰고, 아무것도 없을 때만 llamacli 자체 기본값을 자동 생성한다
+> 있으면 그것을 그대로 쓰고, 아무것도 없을 때만 harnesside 자체 기본값을 자동 생성한다
 > (모든 발견된 소스는 합쳐서 로드됨 — 하나만 쓰는 게 아니라 프로젝트에 있는 만큼 전부 반영):
 >
 > **Rule (항상 시스템 프롬프트에 주입)** — 다음을 순서 무관하게 전부 탐색:
-> - `.llamacli/rules/` (llamacli 자체)
+> - `.harnesside/rules/` (harnesside 자체)
 > - `.clinerules` (Cline)
 > - `CLAUDE.md` (Claude Code)
 > - `GEMINI.md` (Gemini CLI)
@@ -2875,13 +2875,13 @@ llamacli's own default skill.
 > - `AGENTS.md` (여러 CLI가 채택 중인 범용 컨벤션)
 > - `.github/copilot-instructions.md` (GitHub Copilot)
 >
-> 위 중 하나도 없으면 `.llamacli/rules/00-core.md`를 llamacli 자체 기본 rule로 자동 생성한다.
+> 위 중 하나도 없으면 `.harnesside/rules/00-core.md`를 harnesside 자체 기본 rule로 자동 생성한다.
 >
 > **Skill (트리거 매칭 시 지연 로딩)**:
-> - `.llamacli/skills/*.md` (llamacli 자체 포맷, `trigger:` frontmatter)
+> - `.harnesside/skills/*.md` (harnesside 자체 포맷, `trigger:` frontmatter)
 > - `.claude/skills/<name>/SKILL.md` (Claude Code 포맷, `name`/`description` frontmatter)
 >
-> 둘 다 없으면 `.llamacli/skills/write-tests.md`를 자체 기본 skill로 자동 생성한다.
+> 둘 다 없으면 `.harnesside/skills/write-tests.md`를 자체 기본 skill로 자동 생성한다.
 
 ## Hermes self-improvement proposal loop
 
@@ -2893,7 +2893,7 @@ requires the user to review it and approve with a separate command:
 - `/improve` — analyzes the accumulated failure log and shows a proposal (no
   files are touched).
 - `/improve-apply` — saves the last `/improve` proposal to
-  `.llamacli/rules/hermes-proposed-<timestamp>.md`. It's always written as a
+  `.harnesside/rules/hermes-proposed-<timestamp>.md`. It's always written as a
   new file, never overwriting an existing rule, so approving a bad proposal
   can't destroy prior rules.
 - `/quit` — if there's an unreviewed failure log at session end, quitting
@@ -2906,7 +2906,7 @@ requires the user to review it and approve with a separate command:
 Rather than waiting for `/improve` or session end, `AgentLoop` re-checks the
 failure log immediately after every new tool/backend failure and, the first
 time a pattern crosses the recurrence threshold, appends it to a running,
-append-only journal — `.llamacli/state/improvement-log.md` — with an
+append-only journal — `.harnesside/state/improvement-log.md` — with an
 `[auto-improve]` status line pointing at it. This is fire-and-forget
 background analysis (it calls the model, so it must never block the
 tool-call loop it's reacting to) and, critically, **writing to this log file
@@ -2941,7 +2941,7 @@ only ever appears after the turn's own final response.
 > 제안은 항상 사용자가 직접 확인 후 별도 명령으로 승인해야 한다:
 >
 > - `/improve` — 지금까지 쌓인 실패 로그를 분석해 제안을 보여준다(파일 변경 없음).
-> - `/improve-apply` — 직전 `/improve` 제안을 `.llamacli/rules/hermes-proposed-<timestamp>.md`
+> - `/improve-apply` — 직전 `/improve` 제안을 `.harnesside/rules/hermes-proposed-<timestamp>.md`
 >   로 저장한다. 기존 rule 파일을 덮어쓰지 않고 항상 새 파일로 저장되므로, 잘못된 제안을
 >   승인해도 기존 rule이 파괴되지 않는다.
 > - `/quit` — 세션 종료 시 미검토 실패 로그가 있으면 즉시 종료하지 않고 자동으로 제안을
@@ -2952,7 +2952,7 @@ only ever appears after the turn's own final response.
 >
 > `/improve`나 세션 종료를 기다리지 않고, `AgentLoop`가 새 도구/백엔드 실패가 발생할
 > 때마다 즉시 실패 로그를 다시 확인해서, 어떤 패턴이 반복 임계치를 처음 넘는 순간
-> 실시간·append-only 저널인 `.llamacli/state/improvement-log.md`에 기록하고
+> 실시간·append-only 저널인 `.harnesside/state/improvement-log.md`에 기록하고
 > `[auto-improve]` 상태 메시지로 알려준다. 이건 fire-and-forget 백그라운드 분석이라
 > (모델을 호출하므로 반응 대상인 도구 호출 루프를 절대 막으면 안 됨) — 중요한 건
 > **이 로그 파일에 쓰는 것 자체는 에이전트 동작을 전혀 바꾸지 않는다**는 것. 순수한
@@ -3001,7 +3001,7 @@ compaction:
   message *is* the injected `[resuming after compaction] previous goal: ...`
   text, so the next checkpoint's goal wrapped the previous resume message
   inside itself, and the one after that wrapped *that* — found live in
-  `.llamacli/state/checkpoint.json` as a goal field containing
+  `.harnesside/state/checkpoint.json` as a goal field containing
   `[resuming after compaction] previous goal: [resuming after compaction]
   previous goal: ...`, several turns deep.
 - Excluding the system message from the summarization slice (a prior fix, to
@@ -3034,7 +3034,7 @@ one that reproduces the exact nested-goal string pulled from a real
 passing against the fix. Second, live: restarted the real `llama-server`
 backing this at `-c 24576` (a stale-VRAM autodetect script had been landing
 it at `-c 4096`, the proximate trigger for how badly this showed up) and
-monitored a real, separate llamacli session end-to-end through two real
+monitored a real, separate harnesside session end-to-end through two real
 auto-threshold compactions — confirmed via the live checkpoint and the
 server's own `/slots` + logs that each compaction fired only once per
 threshold crossing (17,329 → 8,518 tokens on the first), never nested the
@@ -3044,7 +3044,7 @@ re-trigger.
 ## Remote browser control (Chrome DevTools Protocol)
 
 `src/tools/browser.ts` attaches to a browser the user already has running with
-`--remote-debugging-port=<port>` (default `9222`, set in `.llamacli/config.yaml`
+`--remote-debugging-port=<port>` (default `9222`, set in `.harnesside/config.yaml`
 under `browser:`). It **never launches or manages a browser process itself** —
 only connects to one that's already listening, over Node's built-in
 `WebSocket` (no extra dependency). Four tools are exposed to the model:
@@ -3052,7 +3052,7 @@ only connects to one that's already listening, over Node's built-in
 - `browser_list_tabs` — list open page tabs (id/title/url).
 - `browser_navigate` — navigate a tab to a URL and wait for load.
 - `browser_eval` — evaluate JS in the page, returns the value.
-- `browser_screenshot` — capture a PNG to `.llamacli/state/screenshots/`.
+- `browser_screenshot` — capture a PNG to `.harnesside/state/screenshots/`.
 
 Verified end-to-end against a real headless Chrome instance: navigate,
 evaluate (both string and non-string return values), and a real screenshot
@@ -3061,7 +3061,7 @@ that renders correctly.
 > ## 브라우저 원격 제어 (Chrome DevTools Protocol)
 >
 > `src/tools/browser.ts`는 사용자가 이미 `--remote-debugging-port=<port>`
-> (기본 `9222`, `.llamacli/config.yaml`의 `browser:`에서 설정)로 띄워둔 브라우저에
+> (기본 `9222`, `.harnesside/config.yaml`의 `browser:`에서 설정)로 띄워둔 브라우저에
 > 붙는다. **절대 브라우저 프로세스를 직접 실행하거나 관리하지 않으며**, 이미 떠 있는
 > 브라우저에만 Node 내장 `WebSocket`(별도 의존성 없음)으로 연결한다. 모델에게 4개
 > 도구를 노출한다:
@@ -3069,7 +3069,7 @@ that renders correctly.
 > - `browser_list_tabs` — 열린 탭 목록(id/title/url) 조회
 > - `browser_navigate` — 탭을 특정 URL로 이동, 로드 완료까지 대기
 > - `browser_eval` — 페이지에서 JS 표현식 실행 후 값 반환
-> - `browser_screenshot` — PNG 스크린샷을 `.llamacli/state/screenshots/`에 저장
+> - `browser_screenshot` — PNG 스크린샷을 `.harnesside/state/screenshots/`에 저장
 >
 > 실제 headless Chrome으로 end-to-end 검증 완료: navigate, eval(문자열/비문자열
 > 반환값 모두), 실제로 렌더링되는 스크린샷까지 확인.

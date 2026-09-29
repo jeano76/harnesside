@@ -11,10 +11,10 @@ import { loadSkillBody } from "../skills/loader.js";
 
 const execAsync = promisify(exec);
 
-/** Set once at startup from .llamacli/config.yaml (PROMPT.md new requirement:
+/** Set once at startup from .harnesside/config.yaml (PROMPT.md new requirement:
  *  remote-control an already-running browser over its CDP debug port). */
 let browserConfig: BrowserConfig = { debugPort: 9222, host: "127.0.0.1" };
-let browserScreenshotDir = join(process.cwd(), ".llamacli", "state", "screenshots");
+let browserScreenshotDir = join(process.cwd(), ".harnesside", "state", "screenshots");
 
 /** Whether the 4 browser tools are offered to the model at all. Off by
  *  default: measured against the real backend, the tool schema costs
@@ -28,11 +28,11 @@ let browserToolsEnabled = false;
 export function configureBrowserTools(config: BrowserConfig, projectRoot: string, enabled = false): void {
   browserConfig = config;
   browserToolsEnabled = enabled;
-  browserScreenshotDir = join(projectRoot, ".llamacli", "state", "screenshots");
+  browserScreenshotDir = join(projectRoot, ".harnesside", "state", "screenshots");
 }
 
 const BROWSER_DISABLED_MESSAGE =
-  "browser tools are disabled for this project — set `browser.enabled: true` in .llamacli/config.yaml to use them";
+  "browser tools are disabled for this project — set `browser.enabled: true` in .harnesside/config.yaml to use them";
 
 const BROWSER_TOOL_NAMES = new Set(["browser_list_tabs", "browser_navigate", "browser_eval", "browser_screenshot"]);
 
@@ -244,7 +244,7 @@ export const TOOL_DEFS: ToolDef[] = [
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Optional output path; defaults to .llamacli/state/screenshots/<timestamp>.png" },
+          path: { type: "string", description: "Optional output path; defaults to .harnesside/state/screenshots/<timestamp>.png" },
           target_id: { type: "string", description: "Tab id from browser_list_tabs; defaults to the first tab." },
         },
       },
@@ -296,7 +296,7 @@ export function setRunShellTimeoutForTests(ms: number): void {
  *  cap applies at all. Read only up to the cap directly instead. */
 const READ_FILE_MAX_BYTES = 5 * 1024 * 1024;
 
-/** Backups kept under .llamacli/state/backups/ before pruning the oldest. */
+/** Backups kept under .harnesside/state/backups/ before pruning the oldest. */
 export const MAX_FILE_BACKUPS = 200;
 
 /** Saves a file's current content before a tool overwrites or edits it,
@@ -307,7 +307,7 @@ export const MAX_FILE_BACKUPS = 200;
 export async function backupBeforeOverwrite(path: string, previous: string, next: string, projectRoot: string): Promise<string | null> {
   if (!previous || previous === next) return null;
   try {
-    const dir = join(projectRoot, ".llamacli", "state", "backups");
+    const dir = join(projectRoot, ".harnesside", "state", "backups");
     await mkdir(dir, { recursive: true });
     const rel = isAbsolute(path) ? relative(projectRoot, path) : path;
     const name = `${new Date().toISOString().replace(/[:.]/g, "-")}__${rel.replace(/[\\/:]/g, "_")}`;
@@ -436,7 +436,7 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
       // cwd was previously always process.cwd() — the whole CLI process's
       // own working directory, not necessarily the project actually being
       // worked on (it only happened to match in normal single-project use
-      // because llamacli is launched from inside the project). Use the
+      // because harnesside is launched from inside the project). Use the
       // real project root explicitly instead of relying on that
       // coincidence. `timeout` means a command that blocks forever (stuck
       // on network, waiting on stdin, a runaway build) gets killed and

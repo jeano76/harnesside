@@ -1,12 +1,12 @@
 /**
  * Auto-detects an already-running local OpenAI-compatible server so a fresh
- * project (no .llamacli/config.yaml yet) doesn't silently guess a dead port
+ * project (no .harnesside/config.yaml yet) doesn't silently guess a dead port
  * — the previous default (127.0.0.1:8081) pointed at nothing on a machine
  * that actually had a real server running on 8080, which surfaced as a
  * confusing ECONNREFUSED instead of "just working" or explaining itself.
  */
 
-export const COMMON_PORTS = [8080, 8081, 11434]; // llama-server, llamacli's old spawn default, Ollama
+export const COMMON_PORTS = [8080, 8081, 11434]; // llama-server, harnesside's old spawn default, Ollama
 const PROBE_TIMEOUT_MS = 800;
 
 export interface DetectedServer {

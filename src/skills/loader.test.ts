@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { loadRules, loadSkillIndex, injectRulesIntoSystemPrompt } from "./loader.js";
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     await fn(dir);
   } finally {
@@ -14,11 +14,11 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   }
 }
 
-test("loadRules generates llamacli's own default rule when no convention exists", () =>
+test("loadRules generates harnesside's own default rule when no convention exists", () =>
   withTempDir(async (dir) => {
     const rules = await loadRules(dir);
     assert.equal(rules.length, 1);
-    assert.match(rules[0].path, /\.llamacli[/\\]rules[/\\]00-core\.md$/);
+    assert.match(rules[0].path, /\.harnesside[/\\]rules[/\\]00-core\.md$/);
     // it should also have been written to disk, not just returned in memory
     assert.equal(await readFile(rules[0].path, "utf8"), rules[0].content);
   }));
@@ -45,11 +45,11 @@ test("loadRules merges multiple existing conventions rather than picking just on
     assert.ok(contents.includes("cursor rules"));
   }));
 
-test("loadRules reads .llamacli/rules/ as a directory of multiple files", () =>
+test("loadRules reads .harnesside/rules/ as a directory of multiple files", () =>
   withTempDir(async (dir) => {
-    await mkdir(join(dir, ".llamacli", "rules"), { recursive: true });
-    await writeFile(join(dir, ".llamacli", "rules", "a.md"), "rule a", "utf8");
-    await writeFile(join(dir, ".llamacli", "rules", "b.md"), "rule b", "utf8");
+    await mkdir(join(dir, ".harnesside", "rules"), { recursive: true });
+    await writeFile(join(dir, ".harnesside", "rules", "a.md"), "rule a", "utf8");
+    await writeFile(join(dir, ".harnesside", "rules", "b.md"), "rule b", "utf8");
     const rules = await loadRules(dir);
     assert.equal(rules.length, 2);
   }));
@@ -65,7 +65,7 @@ test("injectRulesIntoSystemPrompt appends every rule's path and content", () => 
   assert.match(out, /do X/);
 });
 
-test("loadSkillIndex always includes llamacli's built-in skill set", () =>
+test("loadSkillIndex always includes harnesside's built-in skill set", () =>
   withTempDir(async (dir) => {
     const index = await loadSkillIndex(dir);
     const names = index.map((s) => s.name);
@@ -87,11 +87,11 @@ test("loadSkillIndex always includes llamacli's built-in skill set", () =>
     }
   }));
 
-test("loadSkillIndex merges the project's own .llamacli/skills on top of built-ins", () =>
+test("loadSkillIndex merges the project's own .harnesside/skills on top of built-ins", () =>
   withTempDir(async (dir) => {
-    await mkdir(join(dir, ".llamacli", "skills"), { recursive: true });
+    await mkdir(join(dir, ".harnesside", "skills"), { recursive: true });
     await writeFile(
-      join(dir, ".llamacli", "skills", "custom.md"),
+      join(dir, ".harnesside", "skills", "custom.md"),
       "---\ntrigger: user asks for the custom thing\n---\nbody",
       "utf8"
     );

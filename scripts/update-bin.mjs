@@ -20,7 +20,7 @@ import { dirname, join } from "node:path";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = join(root, "dist");
 const binDir = join(root, "bin");
-const archivePath = join(binDir, "llamacli-dist.tar.gz");
+const archivePath = join(binDir, "harnesside-dist.tar.gz");
 const manifestPath = join(binDir, "manifest.json");
 
 mkdirSync(binDir, { recursive: true });

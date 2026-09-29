@@ -92,25 +92,25 @@ export interface DetectOptions {
 }
 
 /**
- * Environment overrides, in precedence order. `LLAMACLI_*` is this app's own
+ * Environment overrides, in precedence order. `HARNESSIDE_*` is this app's own
  * escape hatch and beats every heuristic, including the platform defaults;
  * the rest are cross-tool conventions we should honor.
  *
- *   LLAMACLI_FORCE_ANSI=1   treat as fully capable (still downgraded by
- *                           LLAMACLI_COLOR_DEPTH if that is also set)
- *   LLAMACLI_NO_ANSI=1      treat as incapable of anything
+ *   HARNESSIDE_FORCE_ANSI=1   treat as fully capable (still downgraded by
+ *                           HARNESSIDE_COLOR_DEPTH if that is also set)
+ *   HARNESSIDE_NO_ANSI=1      treat as incapable of anything
  *   NO_COLOR=<anything>     no color at all (https://no-color.org)
  *   CLICOLOR_FORCE=1        force color even when TERM looks dumb
- *   LLAMACLI_COLOR_DEPTH=N  0 | 4 | 8 | 24
- *   LLAMACLI_ASCII=1        ASCII-only glyphs
- *   LLAMACLI_MOUSE=0|1      mouse reporting off / on
- *   LLAMACLI_NO_SMOOTH=1    never emit DECSET 2026
+ *   HARNESSIDE_COLOR_DEPTH=N  0 | 4 | 8 | 24
+ *   HARNESSIDE_ASCII=1        ASCII-only glyphs
+ *   HARNESSIDE_MOUSE=0|1      mouse reporting off / on
+ *   HARNESSIDE_NO_SMOOTH=1    never emit DECSET 2026
  *   TERM, COLORTERM, WT_SESSION, TERM_PROGRAM, TERMINAL_EMULATOR,
  *   ConEmuANSI, ANSICON, MSYSTEM, VTE_VERSION, LC_ALL, LC_CTYPE, LANG
  */
 const ENV_OVERRIDES = [
-  "LLAMACLI_FORCE_ANSI", "LLAMACLI_NO_ANSI", "LLAMACLI_COLOR_DEPTH", "LLAMACLI_ASCII",
-  "LLAMACLI_MOUSE", "LLAMACLI_NO_SMOOTH", "NO_COLOR", "CLICOLOR_FORCE", "COLORTERM",
+  "HARNESSIDE_FORCE_ANSI", "HARNESSIDE_NO_ANSI", "HARNESSIDE_COLOR_DEPTH", "HARNESSIDE_ASCII",
+  "HARNESSIDE_MOUSE", "HARNESSIDE_NO_SMOOTH", "NO_COLOR", "CLICOLOR_FORCE", "COLORTERM",
   "TERM", "WT_SESSION", "TERM_PROGRAM", "TERMINAL_EMULATOR", "ConEmuANSI", "ANSICON",
   "MSYSTEM", "VTE_VERSION", "LC_ALL", "LC_CTYPE", "LANG",
 ] as const;
@@ -167,8 +167,8 @@ function identifyTerminal(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): st
  * should be able to say so.
  */
 function detectAltScreen(env: NodeJS.ProcessEnv, term: string): boolean {
-  if (env.LLAMACLI_ALT_SCREEN === "0") return false;
-  if (env.LLAMACLI_ALT_SCREEN === "1") return true;
+  if (env.HARNESSIDE_ALT_SCREEN === "0") return false;
+  if (env.HARNESSIDE_ALT_SCREEN === "1") return true;
   const t = (term ?? "").toLowerCase();
   if (/^vt(100|102|220|320|420)$/.test(t)) return false;
   if (/^(dumb|cons25|emacs)$/.test(t)) return false;
@@ -179,7 +179,7 @@ function detectAltScreen(env: NodeJS.ProcessEnv, term: string): boolean {
 function detectColorDepth(env: NodeJS.ProcessEnv, ansi: boolean, terminal: string): ColorDepth {  if (!ansi) return 0;
   if (isSet(env.NO_COLOR)) return 0;
 
-  const override = env.LLAMACLI_COLOR_DEPTH;
+  const override = env.HARNESSIDE_COLOR_DEPTH;
   if (override !== undefined) {
     const n = Number(override);
     // Accept 0/4/8/24 and also 16/256/truecolor spellings, because a user
@@ -245,7 +245,7 @@ function detectColorDepth(env: NodeJS.ProcessEnv, ansi: boolean, terminal: strin
  *     where the code page genuinely may not be UTF-8.
  */
 function detectUnicode(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, terminal: string): boolean {
-  if (env.LLAMACLI_ASCII === "1") return false;
+  if (env.HARNESSIDE_ASCII === "1") return false;
   const locale = env.LC_ALL || env.LC_CTYPE || env.LANG || "";
   if (locale !== "") {
     if (/utf-?8/i.test(locale)) return true;
@@ -287,8 +287,8 @@ export function detectTerminal(
   const terminal = identifyTerminal(env, platform);
   const inMultiplexer = /^(screen|tmux)/.test(term) || isSet(env.TMUX);
 
-  const noAnsi = env.LLAMACLI_NO_ANSI === "1";
-  const forceAnsi = env.LLAMACLI_FORCE_ANSI === "1";
+  const noAnsi = env.HARNESSIDE_NO_ANSI === "1";
+  const forceAnsi = env.HARNESSIDE_FORCE_ANSI === "1";
   const notATTY = !stdoutIsTTY || !stdinIsTTY;
   const dumbTerm = term === "dumb";
 
@@ -307,10 +307,10 @@ export function detectTerminal(
   let reason: string;
   if (noAnsi) {
     ansi = false;
-    reason = "LLAMACLI_NO_ANSI=1";
+    reason = "HARNESSIDE_NO_ANSI=1";
   } else if (forceAnsi) {
     ansi = true;
-    reason = "LLAMACLI_FORCE_ANSI=1";
+    reason = "HARNESSIDE_FORCE_ANSI=1";
   } else if (notATTY) {
     ansi = false;
     reason = notATTY
@@ -380,11 +380,11 @@ export function detectTerminal(
   // the edge, the log auto-scrolls and the selection keeps growing, release
   // copies to the clipboard with a file fallback. Shift+drag still reaches the
   // terminal for native selection — runHintText tells the user so — and
-  // `/mouse` (or LLAMACLI_MOUSE=0) turns this back off for anyone who prefers
+  // `/mouse` (or HARNESSIDE_MOUSE=0) turns this back off for anyone who prefers
   // to keep every mouse gesture for the terminal.
   let mouse: boolean;
-  if (env.LLAMACLI_MOUSE === "1") mouse = mouseSgr;
-  else if (env.LLAMACLI_MOUSE === "0") mouse = false;
+  if (env.HARNESSIDE_MOUSE === "1") mouse = mouseSgr;
+  else if (env.HARNESSIDE_MOUSE === "0") mouse = false;
   else mouse = opts.mouseDefault ?? true;
 
   return {
@@ -392,7 +392,7 @@ export function detectTerminal(
     colorDepth,
     unicode,
     altScreen,
-    synchronizedOutput: ansi && modern && env.LLAMACLI_NO_SMOOTH !== "1",
+    synchronizedOutput: ansi && modern && env.HARNESSIDE_NO_SMOOTH !== "1",
     hyperlink: ansi && modern,
     mouse: mouse && mouseSgr,
     mouseSgr,
@@ -468,7 +468,7 @@ export function buildSequences(caps: TerminalCapabilities): Sequences {
   return {
     altScreenOn: caps.altScreen ? `${csi("?1049h")}${csi("?25l")}` : "",
     altScreenOff: caps.altScreen ? `${csi("?25h")}${csi("?1049l")}` : "",
-    // Requested directly: "llamacli 의 배경을 검은색으로 해줘 그게 가독성이
+    // Requested directly: "harnesside 의 배경을 검은색으로 해줘 그게 가독성이
     // 더 있는거 같아" — a black background reads better than a light one.
     //
     // Two things make this more than a one-line SGR, and both were the failure

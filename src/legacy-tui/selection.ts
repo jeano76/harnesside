@@ -8,7 +8,7 @@
  * can copy content that is off-screen.
  *
  * The obvious answer is "let the terminal do it", and for a normal program that
- * is correct. It is impossible here, for one structural reason: llamacli draws
+ * is correct. It is impossible here, for one structural reason: harnesside draws
  * on the **alternate screen buffer** (index.tsx's enterAltScreen). The alt
  * screen has no scrollback at all — when it fills, the top line is simply
  * overwritten. So a drag that runs off the top edge has nothing to scroll to,
@@ -239,7 +239,7 @@ export interface CopyResult {
  *  directory: this is a scratch artifact of a UI action, not project state, and
  *  writing it into the project would put a file the user didn't ask for into
  *  their git status. */
-export const CLIPBOARD_FALLBACK_PATH = "/tmp/llamacli-copy.txt";
+export const CLIPBOARD_FALLBACK_PATH = "/tmp/harnesside-copy.txt";
 
 /** I/O seam so tests can assert the fallback without touching /tmp. */
 export interface CopyDeps {

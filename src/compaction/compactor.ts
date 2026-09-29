@@ -504,7 +504,7 @@ export async function runCompaction(
   });
   const summaryText = res.choices[0]?.message.content ?? "(summary unavailable)";
 
-  // Preserve the ORIGINAL system prompt (base prompt + injected .llamacli/rules),
+  // Preserve the ORIGINAL system prompt (base prompt + injected .harnesside/rules),
   // not just the compaction summary. selectKeptTail() keeps only the size-budgeted
   // tail of `messages`, so the system prompt — always messages[0] — is otherwise
   // always pushed into `toSummarize` and replaced wholesale the moment a session

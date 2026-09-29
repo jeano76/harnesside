@@ -14,7 +14,7 @@
  * The distinction from the earlier synthetic matrix matters and is the point of
  * this harness: `tuning.test.ts` proves the setup DECISION FUNCTIONS are correct
  * for every hardware shape. It cannot tell you what happens when the project
- * directory is called `프로젝트 with spaces`, or when `.llamacli/config.yaml` is
+ * directory is called `프로젝트 with spaces`, or when `.harnesside/config.yaml` is
  * a 3-byte corrupt file, or when the project root is a symlink into another
  * disk. Those are I/O and path problems, and the only honest way to find them
  * is to build the directories and run the real code against them.
@@ -55,7 +55,7 @@ type ProjectKind =
   | "git-repo-dirty"   // a repo mid-work
   | "monorepo"         // nested packages, each with their own config
   | "has-config"       // already bootstrapped
-  | "corrupt-config"   // .llamacli/config.yaml is garbage
+  | "corrupt-config"   // .harnesside/config.yaml is garbage
   | "truncated-config" // config cut off mid-write
   | "read-only"        // project dir not writable
   | "model-in-project" // a .gguf inside the project (should NOT be committed)
@@ -196,7 +196,7 @@ async function materialize(p: Persona, root: string): Promise<{ projectRoot: str
   }
 
   // Config states.
-  const cfgDir = join(projectRoot, ".llamacli");
+  const cfgDir = join(projectRoot, ".harnesside");
   if (p.kind === "corrupt-config" || p.kind === "truncated-config" || p.preexisting || p.kind === "has-config") {
     await mkdir(cfgDir, { recursive: true });
     if (p.kind === "corrupt-config") {
@@ -296,7 +296,7 @@ async function invariantBootstrapSurvives(p: Persona, root: string): Promise<voi
 
   // I5. The config, if written, must be parseable and must not be a lie.
   try {
-    const raw = await readFile(join(projectRoot, ".llamacli", "config.yaml"), "utf8");
+    const raw = await readFile(join(projectRoot, ".harnesside", "config.yaml"), "utf8");
     const parsed = load(raw) as any;
     check(p.name, "written config is valid YAML", parsed !== null && typeof parsed === "object");
     if (parsed?.llama?.modelPath) {
@@ -316,7 +316,7 @@ async function invariantBootstrapSurvives(p: Persona, root: string): Promise<voi
 /** I6. A user's own keys survive a relaunch, in EVERY persona. */
 async function invariantUserKeysSurvive(p: Persona, root: string): Promise<void> {
   const { projectRoot, modelsDir, home } = await materialize(p, root);
-  const cfgDir = join(projectRoot, ".llamacli");
+  const cfgDir = join(projectRoot, ".harnesside");
   // On a read-only persona the harness cannot even seed a config. That is the
   // point of the persona, so it is not a finding — the app's own behaviour on
   // such a project is asserted by invariantBootstrapSurvives instead.
@@ -352,7 +352,7 @@ async function invariantUserKeysSurvive(p: Persona, root: string): Promise<void>
 
   let after: any;
   try {
-    after = load(await readFile(join(projectRoot, ".llamacli", "config.yaml"), "utf8"));
+    after = load(await readFile(join(projectRoot, ".harnesside", "config.yaml"), "utf8"));
   } catch {
     return; // read-only; the previous invariant already covered reporting it
   }
@@ -397,7 +397,7 @@ async function invariantDiskRefusalIsExplicit(p: Persona, root: string): Promise
         json: async () => ({}),
       } as any;
     }) as unknown as typeof fetch,
-    env: { ...process.env, HOME: home, LLAMACLI_MODELS_DIR: modelsDir } as any,
+    env: { ...process.env, HOME: home, HARNESSIDE_MODELS_DIR: modelsDir } as any,
   });
   check(p.name, "bootstrap survives a no-network model resolve", Array.isArray(report.steps));
   for (const s of report.steps) {
@@ -410,8 +410,8 @@ async function invariantExistingModelIsKept(p: Persona, root: string): Promise<v
   const { projectRoot, modelsDir, home } = await materialize(p, root);
   const gguf = join(modelsDir, "Ornith-1.5-35B-A3B-Q4_K_M.gguf");
   try {
-    await mkdir(join(projectRoot, ".llamacli"), { recursive: true });
-    await writeFile(join(projectRoot, ".llamacli", "config.yaml"), dump({ backend: "local-llama", llama: { modelPath: gguf, port: 8080 } }));
+    await mkdir(join(projectRoot, ".harnesside"), { recursive: true });
+    await writeFile(join(projectRoot, ".harnesside", "config.yaml"), dump({ backend: "local-llama", llama: { modelPath: gguf, port: 8080 } }));
   } catch {
     return; // read-only persona
   }
@@ -523,7 +523,7 @@ function invariantRemovedFeaturesAreGone(p: Persona): void {
 
 const personas = buildPersonas();
 const verbose = process.argv.includes("--verbose");
-const root = await mkdtemp(join(tmpdir(), "llamacli-personas-"));
+const root = await mkdtemp(join(tmpdir(), "harnesside-personas-"));
 
 for (const p of personas) {
   // Each invariant is isolated so one awkward project cannot hide the other
@@ -565,7 +565,7 @@ for (const f of failures) {
 }
 
 console.log("=".repeat(80));
-console.log("llamacli project validation — 100 developers, 100 projects");
+console.log("harnesside project validation — 100 developers, 100 projects");
 console.log("=".repeat(80));
 console.log(`\nchecks run : ${checks}`);
 console.log(`failures   : ${failures.length}`);

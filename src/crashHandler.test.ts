@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { formatCrashReport, writeCrashLogSync, installCrashHandlers } from "./crashHandler.js";
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-crash-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-crash-test-"));
   try {
     await fn(dir);
   } finally {
@@ -29,11 +29,11 @@ test("formatCrashReport handles a non-Error rejection value (e.g. a thrown strin
   assert.match(report, /just a string reason/);
 });
 
-test("writeCrashLogSync appends to .llamacli/crash.log, creating the directory if needed", () =>
+test("writeCrashLogSync appends to .harnesside/crash.log, creating the directory if needed", () =>
   withTempDir(async (dir) => {
     writeCrashLogSync(dir, "first report\n");
     writeCrashLogSync(dir, "second report\n");
-    const content = await readFile(join(dir, ".llamacli", "crash.log"), "utf8");
+    const content = await readFile(join(dir, ".harnesside", "crash.log"), "utf8");
     assert.match(content, /first report/);
     assert.match(content, /second report/);
     assert.ok(content.indexOf("first report") < content.indexOf("second report"), "appends, doesn't overwrite");
@@ -63,7 +63,7 @@ test("installCrashHandlers: an uncaughtException calls onBeforeExit, writes the 
       assert.throws(() => ours(new Error("simulated crash")), /__test_process_exit__/);
       assert.equal(beforeExitCalled, true);
       assert.equal(exitCode, 1);
-      const log = await readFile(join(dir, ".llamacli", "crash.log"), "utf8");
+      const log = await readFile(join(dir, ".harnesside", "crash.log"), "utf8");
       assert.match(log, /simulated crash/);
       assert.match(log, /uncaughtException/);
     } finally {

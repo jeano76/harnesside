@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * Reported directly: "llamacli 를 윈도우즈 쉘에서 프롬프트를 입력했는데 왜
+ * Reported directly: "harnesside 를 윈도우즈 쉘에서 프롬프트를 입력했는데 왜
  * 바로 쉘 프롬프트로 떨어지지?" — with no top-level uncaughtException /
  * unhandledRejection handler anywhere in this codebase, ANY error thrown
  * outside the one try/catch around loop.send() in index.tsx (a React
@@ -24,17 +24,17 @@ import { join } from "node:path";
 export function formatCrashReport(kind: "uncaughtException" | "unhandledRejection", err: unknown): string {
   const timestamp = new Date().toISOString();
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
-  return `\n[${timestamp}] llamacli fatal error (${kind}):\n${detail}\n`;
+  return `\n[${timestamp}] harnesside fatal error (${kind}):\n${detail}\n`;
 }
 
-const CRASH_LOG_RELATIVE_PATH = join(".llamacli", "crash.log");
+const CRASH_LOG_RELATIVE_PATH = join(".harnesside", "crash.log");
 
 /** Best-effort: a failure to write the crash log must never prevent the
  *  crash message itself from still reaching stderr, and never throw
  *  recursively out of a handler that is itself already handling a crash. */
 export function writeCrashLogSync(projectRoot: string, report: string): void {
   try {
-    mkdirSync(join(projectRoot, ".llamacli"), { recursive: true });
+    mkdirSync(join(projectRoot, ".harnesside"), { recursive: true });
     appendFileSync(join(projectRoot, CRASH_LOG_RELATIVE_PATH), report);
   } catch {
     // Nothing more we can do — the stderr write (the handler's other

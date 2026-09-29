@@ -35,7 +35,7 @@ test("an occupied llama port is moved, and the move is reported rather than abso
 
 test("a port the firewall silently drops is treated as usable, not as a failure", async () => {
   // 'unknown' means a DROP, not a REJECT. Refusing to start on that evidence
-  // would make llamacli unusable on a locked-down network for no reason.
+  // would make harnesside unusable on a locked-down network for no reason.
   const plan = await planPorts({ probe: async () => "unknown" });
   assert.equal(plan.llamaPort, LLAMA_PORT);
   assert.ok(plan.notes.some((n) => /방화벽/.test(n)));
@@ -47,7 +47,7 @@ test("an already-recorded port is kept when it is free, so an install does not m
   assert.deepEqual(plan.moved, [], "and nothing is reported as moved");
 });
 
-test("the probe list leads with our own port so a running llamacli is the obvious match", () => {
+test("the probe list leads with our own port so a running harnesside is the obvious match", () => {
   assert.equal(COMMON_PORTS[0], LLAMA_PORT);
 });
 
@@ -59,9 +59,9 @@ const only = (...paths: string[]) => {
   return async (p: string) => set.has(p);
 };
 
-test("an explicit LLAMACLI_LLAMA_SERVER wins over everything else", async () => {
+test("an explicit HARNESSIDE_LLAMA_SERVER wins over everything else", async () => {
   const found = await findLlamaServer({
-    env: { LLAMACLI_LLAMA_SERVER: "/opt/mine/llama-server", PATH: "/usr/bin" },
+    env: { HARNESSIDE_LLAMA_SERVER: "/opt/mine/llama-server", PATH: "/usr/bin" },
     exists: only("/opt/mine/llama-server", "/usr/bin/llama-server"),
   });
   assert.equal(found?.binPath, "/opt/mine/llama-server");

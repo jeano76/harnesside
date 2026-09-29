@@ -5,7 +5,7 @@
  * confirmed directly against the real backend: the *raw* API response
  * itself already contains trailing tags like `</parameter>\n</function>\n
  * </tool_call>` or `</parameter>\n</invoke>`, so this isn't something
- * llamacli's own SSE parsing introduces. It's intermittent (sampling-
+ * harnesside's own SSE parsing introduces. It's intermittent (sampling-
  * dependent — the same prompt sometimes reproduces it, sometimes doesn't),
  * so it can't be fixed by changing how we parse; the pragmatic mitigation
  * is to strip these known tool-calling template tags before they're shown

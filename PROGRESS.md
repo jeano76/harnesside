@@ -14,11 +14,16 @@
 ## ① 현재 상태 (마지막 갱신: 2026-09-29)
 
 ```yaml
-phase: P0            # 현재 Phase
+phase: P1            # 현재 Phase
 status: in_progress   # not_started | in_progress | blocked | done
-last_commit: "(P0 착수 전 — 커밋 없음)"
-next_action: "P0-1 식별자 일괄 치환 (llamacli → harnesside)"
+last_commit: "P0 완료 커밋 (아래 ⑨ 참조)"
+next_action: "P1-1 src/server/ 뼈대 + 부트스트랩 12단계 상태 머신 (§3.2)"
 blocking: 없음
+verified_this_session:
+  - "npm test → 525 pass / 0 fail (P0 게이트 통과)"
+  - "npm run typecheck → exit 0 (legacy-tui 포함 전체)"
+  - "npx tsc -p tsconfig.server.json --noEmit → exit 0"
+  - "grep -rni llamacli src scripts package.json tsconfig.json README.md .gitignore → 0건"
 ```
 
 ## ② Phase 대시보드
@@ -27,7 +32,7 @@ blocking: 없음
 
 | Phase | 내용 | 상태 | 완료 검증 | 커밋 |
 |---|---|---|---|---|
-| **P0** | §1 복사·치환. 이식 모듈 빌드/테스트 통과 | ◐ | `npm test` 38개 파일 통과, `grep -r llamacli` 0 | — |
+| **P0** | §1 복사·치환. 이식 모듈 빌드/테스트 통과 | ☑ | `npm test` **525 pass/0 fail**, `grep -rni llamacli` **0건**, typecheck exit 0 | `0a31e35`+P0 |
 | P1 | llama-server 부트스트랩 + §3.2 [1]~[8] | ☐ | 웹 없이 기동, `/v1/models` 200 | — |
 | P1.5 | §3.6 보안 경계 + §6.4 설정 규약 | ☐ | §10.3.1 보안 시나리오 전부 통과 | — |
 | P2 | Chrome `--app` + §4.6 VRAM 예산 + **§4.7 GPU off** | ☐ | 창 뜸, 라운드 확인, 30분 무 OOM, `glRenderer==="Disabled"` | — |
@@ -51,31 +56,39 @@ blocking: 없음
 
 ## ③ 세부 진행 (Phase 안의 작업 목록)
 
-### P0 — 복사·치환
+### P0 — 복사·치환 ☑ 완료
 - [x] P0-0 원본에서 소스 복사 (`src/ scripts/ bin/ docs/` + 설정 파일). `.git`·`.llamacli`·`node_modules`·`dist` 제외
-- [ ] P0-1 식별자 일괄 치환: `llamacli`→`harnesside`, `LLAMACLI_*`→`HARNESSIDE_*`, `.llamacli/`→`.harnesside/`
-- [ ] P0-2 `package.json` 개편 (name/bin/scripts/deps, §1.5)
-- [ ] P0-3 `src/tui/*` → `src/legacy-tui/` 격리 (§1.4)
-- [ ] P0-4 `npm install` (신규 의존성: ws, chokidar, monaco, vite, react-dom)
-- [ ] P0-5 `npm test` 38개 파일 통과 확인 (이식 검증의 핵심 게이트)
-- [ ] P0-6 `npm run typecheck` 통과
-- [ ] P0-7 `grep -rni llamacli` 결과 0 확인
+- [x] P0-1 식별자 일괄 치환 — `scripts/rename-identifiers.mjs` (**토큰 단위 파서** 사용: 문자열/줄주석/블록주석을 구분해 치환, §1.2 의 `*` 함정 회피).
+      규칙 순서 `LLAMACLI_`→`Llamacli`→`llamacli` (대소문자 변형 누락 방지 — 검출이 `grep -ni` 라 함).
+      자기 자신·`PROGRESS.md` 는 제외(규칙 문자열/원본 프로젝트 참조 보존). `.py` 포함.
+- [x] P0-2 `package.json` 개편 — name/bin(`dist/server/index.js`)/scripts(§1.5)/의존성 재편
+- [x] P0-3 `src/tui/*` + `src/index.tsx` → `src/legacy-tui/` 격리. 상대 import 경로 교정(`scripts/fix-legacy-tui-imports.mjs`).
+      `tsconfig.server.json` 에서 제외. **legacy-tui 는 빌드 대상이 아니지만 테스트는 계속 돈다**(ink 를 devDependency 로 유지)
+- [x] P0-4 `npm install` — 신규: `ws`(dependency 로 승격), `chokidar`, `react-dom`, `vite`, `@vitejs/plugin-react`, `concurrently`; `monaco-editor` 는 optionalDependency(§1.5 lazy load)
+- [x] P0-5 `npm test` → **525 pass / 0 fail** (이식 검증 게이트 통과)
+- [x] P0-6 `npm run typecheck` → exit 0 · `tsc -p tsconfig.server.json --noEmit` → exit 0
+- [x] P0-7 `grep -rni llamacli src scripts package.json tsconfig.json README.md .gitignore` → **0건**
 
-### P1 — llama-server 부트스트랩
-- [ ] P1-1 `src/server/` 뼈대 + 부트스트랩 12단계 상태 머신 (§3.2)
-- [ ] P1-2 하드웨어 탐지 확장 (실측 free VRAM)
-- [ ] P1-3 llama-server 기동 + `/v1/models` 헬스체크
-- [ ] P1-4 `tsconfig.server.json` 분리
+> **P0 에서 배운 것(재발 방지)**: `ink` 를 dependencies 에서 지우면 legacy-tui 테스트 20여 개가
+> import 에서 죽는다. **격리는 삭제가 아니다** — devDependency 로 남겨 검증을 보존한다.
+> `LlamacliConfig` 같은 대문자 변형을 놓치면 `grep -ni` 게이트가 통과해 버린다(치환 스크립트가 규칙 3줄).
+
+### P1 — llama-server 부트스트랩 (현재 Phase)
+- [ ] P1-1 `src/server/` 뼈대 + 부트스트랩 12단계 상태 머신 (§3.2) — **각 단계는 `BootstrapStep{name, ok, detail, tookSeconds}`**
+- [ ] P1-2 하드웨어 탐지 확장 — `nvidia-smi` **실측 free VRAM** (페이퍼 사양 8192MiB 를 믿지 않는다)
+- [ ] P1-3 llama-server 기동 + `/v1/models` 헬스체크(기동 실패 시에도 뒤 단계 진행 — degrade 원칙)
+- [ ] P1-4 포트 계획 2종(llama 8080 / IDE 7317) + 점유 시 후보 탐색
+- [ ] P1-5 CLI로 "웹 없이" llama-server 기동 확인 = P1 완료 검증
 
 ## ④ 지금 바로 할 일 (재개 시 첫 번째 = 1번)
 
-1. **P0-1 식별자 일괄 치환.** `node` 스크립트로 **토큰 단위** 치환(§1.2 주의: 정규식 `*` 를 주석에 쓰면 블록 주석이 조기 종료됨).
-   대상: `src/ scripts/ package.json tsconfig.json README.md` 에서 `llamacli`→`harnesside`, `LLAMACLI_`→`HARNESSIDE_`, `.llamacli`→`.harnesside`.
-   검증: `grep -rni "llamacli" src scripts package.json tsconfig.json | grep -v "원본\|fork"` 가 **0건**.
-2. P0-2 `package.json` 개편.
-3. P0-3 TUI 격리.
-4. P0-4 `npm install`.
-5. P0-5 `npm test` — **여기서 막히면 이 파일의 "열린 이슈" 에 적고 넘어가지 말 것.**
+1. **P1-1**: `src/server/bootstrap.ts` 작성 — 12단계 상태 머신. 각 단계는 실패해도 다음으로 진행하되
+   `BootstrapStep` 에 기록한다. **단계 5(브라우저 GPU 정책 + 실측 VRAM)가 §6.3 튜닝의 입력이므로 순서를 지킨다.**
+   검증: `tsx src/server/bootstrap.ts --dry` 로 12단계 이름/순서만 출력되는 것.
+2. P1-2 `src/setup/hardware.ts` 에 `queryFreeVramMiB()` 추가 (nvidia-smi CSV 파싱, GPU 없으면 0).
+   검증: 유닛 테스트 — GPU 없음/이상치(NaN)/빈 출력.
+3. P1-3 `LlamaServerManager` 재사용으로 기동 + 헬스체크. 검증: `harnesside up --no-browser` 로 `/v1/models` 200.
+4. 커밋 후 이 파일 갱신 → P1-4.
 
 ## ⑤ 환경 사실 (재측정 불필요 · 2026-09-29 실측)
 
@@ -121,6 +134,7 @@ blocking: 없음
 
 ## ⑨ 변경 이력 (커밋 로그)
 
-| # | 커밋 | 내용 |
-|---|---|---|
-| — | — | 아직 커밋 없음 |
+| # | 커밋 | 내용 | 검증 |
+|---|---|---|---|
+| 1 | `0a31e35` | `chore: fork from llamacli` + PROMPT.md 명세 + **PROGRESS.md 재개 원장** | 파일 114개 커밋 |
+| 2 | (다음 커밋에서 기입) | `refactor!: rename llamacli → harnesside, isolate TUI as legacy-tui` | `npm test` 525/0 · typecheck 0 · grep 0 |

@@ -1,7 +1,7 @@
 /**
  * Finding an existing llama.cpp, and building one when there isn't one.
  *
- * Requested directly: "llamacli 의 초기 구동 시 llama.cpp 가 존재를 하지
+ * Requested directly: "harnesside 의 초기 구동 시 llama.cpp 가 존재를 하지
  * 않는다면 관련 설치 패키지와 llama.cpp 를 설치하고" — on first launch, if
  * llama.cpp is missing, install the build packages and llama.cpp itself.
  *
@@ -14,7 +14,7 @@
  *   1. `$LLAMA_SERVER_BIN` — the user already told us.
  *   2. `llama-server` on PATH.
  *   3. A conventional `~/llama.cpp/buildX/bin/llama-server`.
- *   4. A llamacli-owned `~/.llamacli/llama.cpp/buildX/bin/llama-server`.
+ *   4. A harnesside-owned `~/.harnesside/llama.cpp/buildX/bin/llama-server`.
  *   5. Only then: clone + build.
  *
  * (Written as `buildX` rather than a glob on purpose: a literal glob star-slash
@@ -38,8 +38,8 @@ import type { Hardware } from "./hardware.js";
 const execFileAsync = promisify(execFile);
 
 export const LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp";
-/** Where llamacli keeps its OWN build, so it never touches a user's checkout. */
-export const LLAMA_CPP_HOME = join(homedir(), ".llamacli", "llama.cpp");
+/** Where harnesside keeps its OWN build, so it never touches a user's checkout. */
+export const LLAMA_CPP_HOME = join(homedir(), ".harnesside", "llama.cpp");
 
 export type Run = (file: string, args: string[], opts?: { cwd?: string; timeout?: number }) => Promise<string>;
 
@@ -58,7 +58,7 @@ async function isExecutable(path: string): Promise<boolean> {
 export interface LlamaLocation {
   binPath: string;
   /** Where it was found, for an honest status line ("PATH", "기존 빌드", …). */
-  source: "env" | "path" | "existing-build" | "llamacli-build" | "built";
+  source: "env" | "path" | "existing-build" | "harnesside-build" | "built";
   /** Best guess at the accelerator it was compiled for, from the directory
    *  name / build flags. Verified separately by probeLlamaServer. */
   backend: "cuda" | "vulkan" | "cpu" | "unknown";
@@ -97,8 +97,8 @@ export async function findLlamaServer(opts: {
   const home = opts.home ?? homedir();
 
   // 1. Explicit override. Cheapest and unambiguous, so it wins outright.
-  if (env.LLAMACLI_LLAMA_SERVER && (await exists(env.LLAMACLI_LLAMA_SERVER))) {
-    return { binPath: env.LLAMACLI_LLAMA_SERVER, source: "env", backend: "unknown" };
+  if (env.HARNESSIDE_LLAMA_SERVER && (await exists(env.HARNESSIDE_LLAMA_SERVER))) {
+    return { binPath: env.HARNESSIDE_LLAMA_SERVER, source: "env", backend: "unknown" };
   }
 
   // 2. PATH. Note we check the name directly rather than running `command -v`,
@@ -122,7 +122,7 @@ export async function findLlamaServer(opts: {
       if (await exists(candidate)) {
         return {
           binPath: candidate,
-          source: root === LLAMA_CPP_HOME ? "llamacli-build" : "existing-build",
+          source: root === LLAMA_CPP_HOME ? "harnesside-build" : "existing-build",
           backend: backendFromPath(candidate),
         };
       }

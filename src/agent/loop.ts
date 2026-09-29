@@ -388,7 +388,7 @@ export class AgentLoop {
    *  after the turn fully completes (see `send()`) rather than triggering
    *  the improvement-check model call immediately inside the turn. This
    *  server only has one inference slot (`-np 1`, confirmed from real
-   *  llama-server logs — llamacli's own background call was racing the
+   *  llama-server logs — harnesside's own background call was racing the
    *  turn's own next request for that single slot and could delay it),
    *  so a background analysis call must never fire while a turn is still
    *  actively in flight. */
@@ -628,7 +628,7 @@ export class AgentLoop {
     const MAX_BACKEND_TIMEOUT_RETRIES = 1;
     let backendTimeoutRetries = 0;
     // Reported live: llama-server (llama.cpp, via nlohmann::json — this is
-    // NOT a llamacli/JS error, the message format is that library's own)
+    // NOT a harnesside/JS error, the message format is that library's own)
     // returned HTTP 500 with `[json.exception.type_error.316] invalid
     // UTF-8 byte at index N: 0xED` — a known llama.cpp class of bug where a
     // multi-byte UTF-8 character (0xED is a lead byte of the 3-byte range
@@ -695,7 +695,7 @@ export class AgentLoop {
       } else if (verdict === "stop") {
         this.opts.onStatus?.(
           "[stopped] still no progress after a progress check — no edit to an existing file and no plan step completed. " +
-            "Tell it what to do next (its working notes are in .llamacli/state/notes.md)."
+            "Tell it what to do next (its working notes are in .harnesside/state/notes.md)."
         );
         logFailure({
           timestamp: new Date().toISOString(),
@@ -789,7 +789,7 @@ export class AgentLoop {
         if (this.cancelRequested) {
           this.cancelRequested = false;
           this.opts.onStatus?.(
-            "[cancelled] work saved — it will resume automatically the next time llamacli starts in this project."
+            "[cancelled] work saved — it will resume automatically the next time harnesside starts in this project."
           );
           return;
         }
@@ -996,7 +996,7 @@ export class AgentLoop {
         }
         // A network/backend failure here must never crash the whole CLI —
         // this is exactly the crash reproduced when running from a project
-        // with no .llamacli/config.yaml (falls back to an unreachable
+        // with no .harnesside/config.yaml (falls back to an unreachable
         // default backend URL): report it and end the turn gracefully so
         // the user can fix config/connectivity and try again.
         this.opts.onStatus?.(`[error] couldn't reach the model backend: ${summarizeErrorForDisplay(err.message)}`);
@@ -1084,7 +1084,7 @@ export class AgentLoop {
         if (this.cancelRequested) {
           this.cancelRequested = false;
           this.opts.onStatus?.(
-            "[cancelled] work saved — it will resume automatically the next time llamacli starts in this project."
+            "[cancelled] work saved — it will resume automatically the next time harnesside starts in this project."
           );
           return;
         }
@@ -1223,7 +1223,7 @@ export class AgentLoop {
             }
 
             if (!checkFailed && this.opts.gitCheckpoint) {
-              const label = `llamacli: ${call.function.name} ${this.summarizeArgs(call.function.arguments)}`.slice(0, 72);
+              const label = `harnesside: ${call.function.name} ${this.summarizeArgs(call.function.arguments)}`.slice(0, 72);
               const cp = await gitCheckpoint(editPath, label, this.opts.projectRoot);
               if (cp.committed) content = `${content}\n\n[checkpoint] committed as ${cp.hash} — revertable with git revert/reset.`;
             }
@@ -1594,12 +1594,12 @@ export class AgentLoop {
     // trigger (falls through to "continuing with the current context",
     // silently skipping the compaction the caller actually needed).
     // Reported live: repeated "[compaction failed] chat timed out after
-    // 120000ms" on a session sharing the server with other active llamacli
+    // 120000ms" on a session sharing the server with other active harnesside
     // processes. A single IMMEDIATE retry (the original fix) turned out not
     // to be enough — this machine's own self-improve log recorded the exact
     // same "compact timed out after 120000ms" pattern recurring 37 times
     // across one long session sharing a single-slot server with several
-    // other concurrent llamacli/laya processes all day. An immediate retry
+    // other concurrent harnesside/laya processes all day. An immediate retry
     // re-issues into the SAME still-busy slot if the congestion is a
     // sustained period rather than a brief blip — it only helps the blip
     // case. Raised to 3 retries with a growing backoff (2s/5s/10s) between
@@ -1675,7 +1675,7 @@ export class AgentLoop {
    * PROMPT.md §3 real-time extension: rather than waiting for the user to
    * run /improve or for the session to end, re-check the failure log right
    * after every new failure and — if a pattern is now recurring — append it
-   * to `.llamacli/state/improvement-log.md` immediately. This is
+   * to `.harnesside/state/improvement-log.md` immediately. This is
    * fire-and-forget on purpose: analysis calls the model, which must never
    * block the tool-call loop it's reacting to, and a failure here is
    * itself just logged, never surfaced as a hard error (it's best-effort
@@ -1707,7 +1707,7 @@ export class AgentLoop {
     return proposal;
   }
 
-  /** Writes the last proposed rule as a NEW file under .llamacli/rules/ — only
+  /** Writes the last proposed rule as a NEW file under .harnesside/rules/ — only
    *  called after the user has explicitly seen and approved the proposal. */
   async applyPendingImprovement(): Promise<string | null> {
     if (!this.pendingImprovement) return null;

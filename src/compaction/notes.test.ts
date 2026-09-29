@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { appendNote, readNotes, clearNotes, stripNotesBlock, NOTES_HEADER, MAX_NOTES_CHARS } from "./notes.js";
 
 test("notes append as timestamped lines, keep only the newest past the cap, and clear", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-notes-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-notes-"));
   try {
     assert.equal(await readNotes(dir), "");
     await appendNote(dir, "page script is built\nwithout newlines", new Date(2026, 8, 24, 18, 5));

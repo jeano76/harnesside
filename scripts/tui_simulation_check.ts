@@ -358,7 +358,7 @@ function invariantSelectionAndEdgeScroll(): void {
 /** TC-39: a terminal that refuses OSC 52 must still leave the text somewhere. */
 async function invariantClipboardFallback(): Promise<void> {
   const sim = "clipboard";
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-clip-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-clip-"));
   try {
     // Case 1: the terminal ACCEPTS OSC 52 (X11, tmux with clipboard on).
     let written: string | null = null;
@@ -683,7 +683,7 @@ for (const f of failures) {
 }
 
 console.log("=".repeat(80));
-console.log("llamacli TUI / terminal simulation");
+console.log("harnesside TUI / terminal simulation");
 console.log("=".repeat(80));
 console.log(`\nchecks run : ${checks}`);
 console.log(`failures   : ${failures.length}`);

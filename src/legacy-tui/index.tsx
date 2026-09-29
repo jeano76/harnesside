@@ -1,34 +1,34 @@
 #!/usr/bin/env node
 import React from "react";
 import { render } from "ink";
-import { App } from "./tui/App.js";
-import { loadConfig } from "./config.js";
-import { loadRules, loadSkillIndex, injectRulesIntoSystemPrompt, injectSkillIndexIntoSystemPrompt } from "./skills/loader.js";
-import { SLASH_MENU_ITEMS } from "./tui/SlashMenu.js";
-import { LlamaServerManager } from "./backend/llamaServer.js";
-import { OpenAICompatibleClient } from "./backend/openaiClient.js";
-import { AgentLoop, summarizeErrorForDisplay } from "./agent/loop.js";
-import { configureBrowserTools, configureSkills } from "./tools/index.js";
-import { isBrowserAvailable } from "./tools/browser.js";
-import { loadPromptHistory, savePromptHistory } from "./tui/promptHistory.js";
-import { readCheckpoint, clearCheckpoint } from "./compaction/checkpoint.js";
-import { clearNotes } from "./compaction/notes.js";
-import { findOtherInstances, terminateInstance } from "./instanceGuard.js";
+import { App } from "./App.js";
+import { loadConfig } from "../config.js";
+import { loadRules, loadSkillIndex, injectRulesIntoSystemPrompt, injectSkillIndexIntoSystemPrompt } from "../skills/loader.js";
+import { SLASH_MENU_ITEMS } from "./SlashMenu.js";
+import { LlamaServerManager } from "../backend/llamaServer.js";
+import { OpenAICompatibleClient } from "../backend/openaiClient.js";
+import { AgentLoop, summarizeErrorForDisplay } from "../agent/loop.js";
+import { configureBrowserTools, configureSkills } from "../tools/index.js";
+import { isBrowserAvailable } from "../tools/browser.js";
+import { loadPromptHistory, savePromptHistory } from "./promptHistory.js";
+import { readCheckpoint, clearCheckpoint } from "../compaction/checkpoint.js";
+import { clearNotes } from "../compaction/notes.js";
+import { findOtherInstances, terminateInstance } from "../instanceGuard.js";
 import { createInterface } from "node:readline/promises";
 import { statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as pathResolve } from "node:path";
 import { spawn, execFileSync, ChildProcess } from "node:child_process";
-import { buildVersionString } from "./tui/banner.js";
-import { checkAndApplyUpdate, spawnRestart } from "./selfUpdate.js";
-import { getCapabilities, setTerminalCapabilities, buildSequences, withMouse, applyColorDepth } from "./tui/terminal.js";
-import { copySelection, stripAnsiForCopy } from "./tui/selection.js";
-import { getCursorPlacement } from "./tui/cursorPlacement.js";
-import { ensureLocalStack } from "./setup/bootstrap.js";
-import { KEY_BINDINGS, formatKeyRow } from "./tui/keybindings.js";
-import { installCrashHandlers } from "./crashHandler.js";
+import { buildVersionString } from "./banner.js";
+import { checkAndApplyUpdate, spawnRestart } from "../selfUpdate.js";
+import { getCapabilities, setTerminalCapabilities, buildSequences, withMouse, applyColorDepth } from "./terminal.js";
+import { copySelection, stripAnsiForCopy } from "./selection.js";
+import { getCursorPlacement } from "./cursorPlacement.js";
+import { ensureLocalStack } from "../setup/bootstrap.js";
+import { KEY_BINDINGS, formatKeyRow } from "./keybindings.js";
+import { installCrashHandlers } from "../crashHandler.js";
 
-const BASE_SYSTEM_PROMPT = `You are llamacli, a coding agent running on a local llama.cpp backend.
+const BASE_SYSTEM_PROMPT = `You are harnesside, a coding agent running on a local llama.cpp backend.
 Always follow the fundamentals of a strong software architect: minimal diffs, respect existing
 conventions, never make unverified changes, and confirm before destructive commands.
 
@@ -94,7 +94,7 @@ function enterAltScreen(): void {
   // Mouse reporting is off by default now (see terminal.ts's `mouse` field):
   // enabling it means text selection requires holding Shift on nearly every
   // terminal — a silent cost paid for a convenience feature. It stays
-  // reachable via `/mouse` (or LLAMACLI_MOUSE=1), and the wheel/click
+  // reachable via `/mouse` (or HARNESSIDE_MOUSE=1), and the wheel/click
   // handling is now also on the keyboard, so nothing is actually lost.
   //
   // Reported directly: "입력 프롬프트가 화면 제일 하단 좌측에 있는 경우도
@@ -201,14 +201,14 @@ function wrapStdoutWithCursorReassertion<T extends NodeJS.WriteStream>(stdout: T
   return Object.create(stdout, { write: { value: patched, configurable: true } });
 }
 
-/** Before taking over the screen: if llamacli is already running in this
+/** Before taking over the screen: if harnesside is already running in this
  *  project, ask whether to stop it (see instanceGuard.ts). Declining exits
  *  instead of running two sessions side by side. */
 async function ensureSingleInstance(): Promise<void> {
   const others = findOtherInstances(process.cwd(), process.pid, process.argv[1] ?? "");
   if (others.length === 0) return;
   process.stdout.write(
-    `이 프로젝트에서 llamacli가 이미 실행 중입니다 (PID ${others.join(", ")}).\n` +
+    `이 프로젝트에서 harnesside가 이미 실행 중입니다 (PID ${others.join(", ")}).\n` +
       "기존 프로세스를 종료하고 새로 시작할까요? 저장된 체크포인트는 그대로 남습니다.\n"
   );
   let answer = "";
@@ -228,7 +228,7 @@ async function ensureSingleInstance(): Promise<void> {
   }
 }
 
-const REPO_URL = "https://github.com/jeano76/llamacli";
+const REPO_URL = "https://github.com/jeano76/harnesside";
 
 /** "vYYYYMMDD" — dist/index.js's own mtime (no separate build-info step
  *  exists to read a date from). Computed here (needs fs access) and handed
@@ -306,7 +306,7 @@ async function maybeSelfUpdateAndRestart(): Promise<void> {
       announcedUpdateFound = true;
       process.stdout.write(
         "\n" +
-          "==================== llamacli 자동 업데이트 ====================\n" +
+          "==================== harnesside 자동 업데이트 ====================\n" +
           `새 버전(${manifest.version})을 발견했습니다. 지금 다운로드하고 검증합니다.\n` +
           "완료되면 이 프로그램이 자동으로 종료됐다가 다시 시작됩니다 — 화면이\n" +
           "잠깐 사라졌다가 나타나는 것은 오작동이 아니라 정상적인 업데이트\n" +
@@ -345,9 +345,9 @@ async function main() {
   // few stat() calls on an already-set-up machine and a real install on a fresh
   // one — with no prompt anywhere. It is also allowed to fail: the report is
   // surfaced and the app continues, because a bootstrap that throws would take
-  // down a working install. `LLAMACLI_NO_BOOTSTRAP=1` skips it entirely.
+  // down a working install. `HARNESSIDE_NO_BOOTSTRAP=1` skips it entirely.
   let bootstrapReport: Awaited<ReturnType<typeof ensureLocalStack>> | undefined;
-  if (process.env.LLAMACLI_NO_BOOTSTRAP !== "1") {
+  if (process.env.HARNESSIDE_NO_BOOTSTRAP !== "1") {
     try {
       bootstrapReport = await ensureLocalStack({
         projectRoot,
@@ -376,7 +376,7 @@ async function main() {
     cleanup();
     process.exit(0);
   });
-  // Reported directly: "llamacli 를 윈도우즈 쉘에서 프롬프트를 입력했는데
+  // Reported directly: "harnesside 를 윈도우즈 쉘에서 프롬프트를 입력했는데
   // 왜 바로 쉘 프롬프트로 떨어지지?" — with no top-level crash handler,
   // ANY error thrown outside the one try/catch around loop.send() below
   // (a React render error, a rejected promise from a fire-and-forget
@@ -461,13 +461,13 @@ async function main() {
     verify: config.verify?.afterEdit,
     gitCheckpoint: config.checkpoint?.git ?? false,
     repeatPenalty: config.repeatPenalty,
-    onAssistantDelta: (t) => (globalThis as any).__llamacli_ui?.pushAssistantDelta(t),
+    onAssistantDelta: (t) => (globalThis as any).__harnesside_ui?.pushAssistantDelta(t),
     onAssistantDone: () => {
-      (globalThis as any).__llamacli_ui?.finalizeAssistant();
-      (globalThis as any).__llamacli_ui?.finalizeReasoning();
+      (globalThis as any).__harnesside_ui?.finalizeAssistant();
+      (globalThis as any).__harnesside_ui?.finalizeReasoning();
     },
-    onReasoningDelta: (t) => (globalThis as any).__llamacli_ui?.pushReasoningDelta(t),
-    onQueueChange: (q) => (globalThis as any).__llamacli_ui?.setQueue(q),
+    onReasoningDelta: (t) => (globalThis as any).__harnesside_ui?.pushReasoningDelta(t),
+    onQueueChange: (q) => (globalThis as any).__harnesside_ui?.setQueue(q),
     onToolCall: (name, args) => {
       let preview = "";
       try {
@@ -477,20 +477,20 @@ async function main() {
         preview = args.slice(0, 60);
       }
       const label = preview ? `${name}(${preview})` : name;
-      (globalThis as any).__llamacli_ui?.pushTool(label);
+      (globalThis as any).__harnesside_ui?.pushTool(label);
     },
-    onToolCallDone: () => (globalThis as any).__llamacli_ui?.finalizeToolCall(),
-    onDiff: (_path, diff) => (globalThis as any).__llamacli_ui?.pushDiff(diff),
+    onToolCallDone: () => (globalThis as any).__harnesside_ui?.finalizeToolCall(),
+    onDiff: (_path, diff) => (globalThis as any).__harnesside_ui?.pushDiff(diff),
     onToolResult: (command, output) => {
-      (globalThis as any).__llamacli_ui?.pushToolResult(command, output);
+      (globalThis as any).__harnesside_ui?.pushToolResult(command, output);
     },
-    onStatus: (s) => (globalThis as any).__llamacli_ui?.pushStatus(s),
+    onStatus: (s) => (globalThis as any).__harnesside_ui?.pushStatus(s),
     onContextUsage: (used, total) =>
-      (globalThis as any).__llamacli_ui?.setContextUsedRatio(total > 0 ? Math.min(1, used / total) : 0),
-    onPlanProgress: (done, total) => (globalThis as any).__llamacli_ui?.setPlanProgress(done, total),
-    onCompactionStatus: (status, timestamp) => (globalThis as any).__llamacli_ui?.setCompactionStatus(status, timestamp),
-    onCompactionDetail: (detail) => (globalThis as any).__llamacli_ui?.pushCompactionDetail(detail),
-    onTurnStart: () => (globalThis as any).__llamacli_ui?.collapseDiffs(),
+      (globalThis as any).__harnesside_ui?.setContextUsedRatio(total > 0 ? Math.min(1, used / total) : 0),
+    onPlanProgress: (done, total) => (globalThis as any).__harnesside_ui?.setPlanProgress(done, total),
+    onCompactionStatus: (status, timestamp) => (globalThis as any).__harnesside_ui?.setCompactionStatus(status, timestamp),
+    onCompactionDetail: (detail) => (globalThis as any).__harnesside_ui?.pushCompactionDetail(detail),
+    onTurnStart: () => (globalThis as any).__harnesside_ui?.collapseDiffs(),
   });
 
   // Session-end self-improvement gate (PROMPT.md §3): if failures were
@@ -516,7 +516,7 @@ async function main() {
     process.exit(0);
   };
   const exitAfterSaving = () => {
-    const ui = (globalThis as any).__llamacli_ui;
+    const ui = (globalThis as any).__harnesside_ui;
     const save = ui?.isBusy?.() ? loop.cancelCurrentTurn() : loop.saveStateOnQuit();
     ui?.beginQuitting?.();
     const timeout = new Promise<void>((resolve) =>
@@ -564,7 +564,7 @@ async function main() {
       }}
       pendingResumeGoal={pendingCheckpoint?.goal ?? null}
       onResumeDecision={(resume) => {
-        const ui = (globalThis as any).__llamacli_ui;
+        const ui = (globalThis as any).__harnesside_ui;
         if (!resume) {
           // Declined — this checkpoint must not linger and get silently
           // picked up by a later automatic path (e.g. a mid-turn compaction
@@ -589,7 +589,7 @@ async function main() {
       }}
       onQuitWithoutSaving={exitNow}
       onSubmit={async (text) => {
-        const ui = (globalThis as any).__llamacli_ui;
+        const ui = (globalThis as any).__harnesside_ui;
         ui?.setBusy(true);
         try {
           await loop.send(text);
@@ -610,7 +610,7 @@ async function main() {
       }}
       onQueueMessage={(text) => loop.queueMessage(text)}
       onSlashCommand={async (key, argument = "") => {
-        const ui = (globalThis as any).__llamacli_ui;
+        const ui = (globalThis as any).__harnesside_ui;
         switch (key) {
           case "quit": {
             if (quitConfirmed || !loop.hasFailureLog()) {
@@ -699,8 +699,8 @@ async function main() {
                 `하이퍼링크  : ${onOff(caps.hyperlink)}`,
                 `마우스(SGR) : ${caps.mouse ? "켜짐" : caps.mouseSgr ? "꺼짐 (지원되지만 /mouse 로 켜짐)" : "꺼짐 (이 터미널 미지원)"}`,
                 "",
-                "강제로 바꾸려면 환경변수로 실행: LLAMACLI_FORCE_ANSI=1, LLAMACLI_NO_ANSI=1,",
-                "LLAMACLI_COLOR_DEPTH=0|4|8|24, LLAMACLI_ASCII=1, LLAMACLI_MOUSE=1, NO_COLOR=1",
+                "강제로 바꾸려면 환경변수로 실행: HARNESSIDE_FORCE_ANSI=1, HARNESSIDE_NO_ANSI=1,",
+                "HARNESSIDE_COLOR_DEPTH=0|4|8|24, HARNESSIDE_ASCII=1, HARNESSIDE_MOUSE=1, NO_COLOR=1",
               ].join("\n")
             );
             break;
@@ -738,7 +738,7 @@ async function main() {
             break;
           }
           case "copy": {
-            const rows: string[] = (globalThis as any).__llamacli_ui?.getVisibleLogText?.() ?? [];
+            const rows: string[] = (globalThis as any).__harnesside_ui?.getVisibleLogText?.() ?? [];
             if (rows.length === 0) {
               ui?.pushStatus("[복사] 로그에 복사할 내용이 없습니다.");
               break;
@@ -769,14 +769,14 @@ async function main() {
             ui?.pushStatus(
               skillIndex.length
                 ? `Loaded skills:\n${skillIndex.map((s) => `- ${s.name}: ${s.trigger}`).join("\n")}`
-                : "No skills registered (.llamacli/skills/*.md)."
+                : "No skills registered (.harnesside/skills/*.md)."
             );
             break;
           case "rules":
             ui?.pushStatus(
               rules.length
                 ? `Loaded rules:\n${rules.map((r) => `- ${r.path}`).join("\n")}`
-                : "No rules applied (.llamacli/rules/ or .clinerules)."
+                : "No rules applied (.harnesside/rules/ or .clinerules)."
             );
             break;
           case "improve":
@@ -843,7 +843,7 @@ async function main() {
     { exitOnCtrlC: false, stdout: wrapStdoutWithCursorReassertion(process.stdout) }
   );
 
-  if (setupMessage) (globalThis as any).__llamacli_ui?.pushStatus(setupMessage);
+  if (setupMessage) (globalThis as any).__harnesside_ui?.pushStatus(setupMessage);
 
   // Resuming (or discarding) a found checkpoint now happens via the
   // App-rendered Y/N question (pendingResumeGoal/onResumeDecision above)

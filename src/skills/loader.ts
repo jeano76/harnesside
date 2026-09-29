@@ -16,12 +16,12 @@ export interface RuleFile {
 /**
  * PROMPT.md §5: reuse whatever rule/skill convention an existing AI coding
  * CLI already left in this project, instead of forcing everyone onto
- * llamacli's own format. Every source that exists gets loaded (a project
- * may have several); llamacli's own `.llamacli/rules/` is generated as a
+ * harnesside's own format. Every source that exists gets loaded (a project
+ * may have several); harnesside's own `.harnesside/rules/` is generated as a
  * fallback only when NONE of these are present.
  */
 const RULE_SOURCES = [
-  ".llamacli/rules", // llamacli's own
+  ".harnesside/rules", // harnesside's own
   ".clinerules", // Cline
   "CLAUDE.md", // Claude Code project memory
   "GEMINI.md", // Gemini CLI project memory
@@ -31,11 +31,11 @@ const RULE_SOURCES = [
   ".github/copilot-instructions.md", // GitHub Copilot
 ];
 
-const OWN_SKILLS_DIR = ".llamacli/skills";
+const OWN_SKILLS_DIR = ".harnesside/skills";
 /** Claude Code's skill convention: one subdirectory per skill, each with a
  *  SKILL.md carrying `name`/`description` YAML frontmatter. */
 const CLAUDE_CODE_SKILLS_DIR = ".claude/skills";
-/** Skills llamacli ships with itself (PROMPT.md §4/§5): a coding agent
+/** Skills harnesside ships with itself (PROMPT.md §4/§5): a coding agent
  *  should have these fundamentals built in regardless of what a given
  *  project provides. Resolved relative to this module so it works the same
  *  whether running from src/ (tsx) or dist/ (built). */
@@ -80,7 +80,7 @@ const DEFAULT_OWN_RULE = `# Core rules (always applied)
 
 /** Rules are always-on: load full content and inject into the system prompt
  *  at session start. Reuses whatever convention already exists in the
- *  project (§5); only falls back to generating llamacli's own default rule
+ *  project (§5); only falls back to generating harnesside's own default rule
  *  file when literally none of the known conventions are present. */
 export async function loadRules(projectRoot: string): Promise<RuleFile[]> {
   const rules: RuleFile[] = [];
@@ -91,8 +91,8 @@ export async function loadRules(projectRoot: string): Promise<RuleFile[]> {
 
   // Nothing from any known CLI convention — generate our own default so the
   // agent always has a baseline project rule to work from.
-  const path = join(projectRoot, ".llamacli", "rules", "00-core.md");
-  await mkdir(join(projectRoot, ".llamacli", "rules"), { recursive: true });
+  const path = join(projectRoot, ".harnesside", "rules", "00-core.md");
+  await mkdir(join(projectRoot, ".harnesside", "rules"), { recursive: true });
   await writeFile(path, DEFAULT_OWN_RULE, "utf8");
   return [{ path, content: DEFAULT_OWN_RULE }];
 }
@@ -113,7 +113,7 @@ async function loadOwnSkillIndex(projectRoot: string): Promise<SkillIndexEntry[]
       });
     }
   } catch {
-    // no .llamacli/skills directory
+    // no .harnesside/skills directory
   }
   return index;
 }
@@ -145,7 +145,7 @@ async function loadClaudeCodeSkillIndex(projectRoot: string): Promise<SkillIndex
   return index;
 }
 
-/** llamacli's built-in skill set: architecture design, planning,
+/** harnesside's built-in skill set: architecture design, planning,
  *  implementation, code review, white-box/black-box testing, static
  *  analysis, security. Always loaded, independent of what the project has —
  *  these are the "senior engineer fundamentals" PROMPT.md §4 asks for. */
@@ -170,8 +170,8 @@ async function loadBuiltinSkillIndex(): Promise<SkillIndexEntry[]> {
 }
 
 /** Skills are lazily loaded: only the name+trigger index is read up front
- *  (§5). Always includes llamacli's built-in skill set, plus whatever the
- *  project itself provides via `.llamacli/skills/*.md` or Claude Code's
+ *  (§5). Always includes harnesside's built-in skill set, plus whatever the
+ *  project itself provides via `.harnesside/skills/*.md` or Claude Code's
  *  `.claude/skills/`. */
 export async function loadSkillIndex(projectRoot: string): Promise<SkillIndexEntry[]> {
   return [

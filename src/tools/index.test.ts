@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { executeTool, setRunShellTimeoutForTests, configureSkills, MAX_FILE_BACKUPS, backupBeforeOverwrite } from "./index.js";
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-tools-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-tools-test-"));
   try {
     await fn(dir);
   } finally {
@@ -41,7 +41,7 @@ test("run_shell still completes normally for a fast command well under the timeo
 
 // cwd was previously always process.cwd() — the whole CLI process's own
 // working directory — instead of the actual project being worked on; it
-// only happened to line up in normal single-project use because llamacli
+// only happened to line up in normal single-project use because harnesside
 // is launched from inside the project. Verify the command genuinely runs
 // in the passed project root, not wherever this test process happens to be.
 test("run_shell executes in the given project root, not the CLI process's own cwd", () =>
@@ -293,10 +293,10 @@ test("write_file backs up the previous content before overwriting an existing fi
     const path = join(dir, "wrangler.toml");
     await writeFile(path, 'name = "netproxy"\n');
     const result = await executeTool("write_file", JSON.stringify({ path, content: "[70 characters written to disk]" }), dir);
-    const backups = await readdir(join(dir, ".llamacli", "state", "backups"));
+    const backups = await readdir(join(dir, ".harnesside", "state", "backups"));
     assert.equal(backups.length, 1);
     assert.match(backups[0], /__wrangler\.toml$/);
-    assert.equal(await readFile(join(dir, ".llamacli", "state", "backups", backups[0]), "utf8"), 'name = "netproxy"\n');
+    assert.equal(await readFile(join(dir, ".harnesside", "state", "backups", backups[0]), "utf8"), 'name = "netproxy"\n');
     assert.match(result.content, /previous version saved to .*wrangler\.toml/);
   }));
 
@@ -306,9 +306,9 @@ test("write_file makes no backup for a new file, and edit_file backs up before e
     const first = await executeTool("write_file", JSON.stringify({ path, content: "one\n" }), dir);
     assert.equal(first.content, `wrote ${path}`);
     await executeTool("edit_file", JSON.stringify({ path, old_text: "one", new_text: "two" }), dir);
-    const backups = await readdir(join(dir, ".llamacli", "state", "backups"));
+    const backups = await readdir(join(dir, ".harnesside", "state", "backups"));
     assert.equal(backups.length, 1);
-    assert.equal(await readFile(join(dir, ".llamacli", "state", "backups", backups[0]), "utf8"), "one\n");
+    assert.equal(await readFile(join(dir, ".harnesside", "state", "backups", backups[0]), "utf8"), "one\n");
   }));
 
 test(`backups are pruned to the newest ${MAX_FILE_BACKUPS}`, () =>
@@ -318,7 +318,7 @@ test(`backups are pruned to the newest ${MAX_FILE_BACKUPS}`, () =>
       await backupBeforeOverwrite(path, `v${String(i).padStart(4, "0")}`, "next", dir);
       await new Promise((r) => setTimeout(r, 2)); // distinct millisecond timestamps
     }
-    const backups = (await readdir(join(dir, ".llamacli", "state", "backups"))).sort();
+    const backups = (await readdir(join(dir, ".harnesside", "state", "backups"))).sort();
     assert.equal(backups.length, MAX_FILE_BACKUPS);
-    assert.equal(await readFile(join(dir, ".llamacli", "state", "backups", backups[0]), "utf8"), "v0005");
+    assert.equal(await readFile(join(dir, ".harnesside", "state", "backups", backups[0]), "utf8"), "v0005");
   }));

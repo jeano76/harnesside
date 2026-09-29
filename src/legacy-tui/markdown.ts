@@ -47,7 +47,7 @@ function instanceForWidth(width: number): InstanceType<typeof Marked> {
 /** Renders assistant markdown (headings, bold/italic, fenced code with
  *  syntax highlighting, tables, lists, etc.) to an ANSI string ready for
  *  the terminal, sized to `width` columns — mirrors how Claude Code's own
- *  CLI output looks, instead of the flat, unstyled text llamacli was
+ *  CLI output looks, instead of the flat, unstyled text harnesside was
  *  showing before this existed. Callers should still pass non-table
  *  content through wrapAnsiSafe() afterward as a backstop (prose can still
  *  run past `width` in edge cases marked-terminal doesn't wrap), but a

@@ -14,7 +14,7 @@ import type {
 } from "../backend/types.js";
 
 async function withTempProject(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     await fn(dir);
   } finally {
@@ -430,8 +430,8 @@ test("resumeIfCheckpointExists is a no-op when there's no checkpoint", () =>
     assert.equal(turnRequests.length, 0);
   }));
 
-// Reproduces the crash seen when running llamacli in a directory with no
-// .llamacli/config.yaml: it falls back to a default backend URL nothing is
+// Reproduces the crash seen when running harnesside in a directory with no
+// .harnesside/config.yaml: it falls back to a default backend URL nothing is
 // listening on, and the resulting ECONNREFUSED must never crash the whole
 // CLI — it should surface as a status message and end the turn gracefully.
 test("send() does not throw when the backend is unreachable — reports a status message instead", () =>
@@ -556,7 +556,7 @@ test("a repeated real tool failure triggers a real-time improvement-log entry, n
     await loop.send("read two files");
 
     await waitUntil(() => statusMessages.some((s) => s.includes("[auto-improve]")));
-    const logPath = join(dir, ".llamacli", "state", "improvement-log.md");
+    const logPath = join(dir, ".harnesside", "state", "improvement-log.md");
     const content = await readFile(logPath, "utf8");
     assert.match(content, /read_file/);
   }));

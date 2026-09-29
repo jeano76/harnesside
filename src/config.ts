@@ -4,7 +4,7 @@ import { parse, stringify } from "yaml";
 import { DEFAULT_8GB_PROFILE } from "./backend/llamaServer.js";
 import { detectRunningServer, detectModelAt, COMMON_PORTS } from "./backend/detect.js";
 
-export interface LlamacliConfig {
+export interface HarnessideConfig {
   backend: "local-llama" | "openai-compatible";
   model: string;
   baseUrl?: string; // for openai-compatible / attach-existing
@@ -57,7 +57,7 @@ export interface LlamacliConfig {
     host?: string;
     /** Whether to offer the 4 browser tools to the model.
      *
-     *  LEFT UNSET (the default) this is AUTOMATIC: llamacli probes the
+     *  LEFT UNSET (the default) this is AUTOMATIC: harnesside probes the
      *  debug port at startup and offers the tools only if a debuggable
      *  browser actually answers. They're useless without one — every call
      *  would just fail with "couldn't reach the browser debug port" —
@@ -84,20 +84,20 @@ export interface LlamacliConfig {
    *  With it on, the model spent the ENTIRE max_tokens budget on thinking
    *  and never even began the tool call — so nothing was written, nothing
    *  could be salvaged (there were no tool_call deltas to recover), and
-   *  the UI showed nothing at all while it happened (llamacli renders
+   *  the UI showed nothing at all while it happened (harnesside renders
    *  `content` deltas, not `reasoning_content`), which is what "it looks
    *  stuck" actually was. llama-server itself warns about this at startup:
    *  "chat template supports preserving reasoning, it is enabled by
    *  default (may use more tokens, disable via --no-reasoning-preserve)".
    *
    *  Set true to opt back in (a model/task where visible deliberation is
-   *  worth the budget); llamacli then also streams the reasoning to the UI
+   *  worth the budget); harnesside then also streams the reasoning to the UI
    *  rather than going silent. */
   enableThinking?: boolean;
 
 }
 
-export const DEFAULT_CONFIG: LlamacliConfig = {
+export const DEFAULT_CONFIG: HarnessideConfig = {
   backend: "local-llama",
   model: "local-model",
   // Found via real monitoring data: with the previous 0.85, the worst case
@@ -123,7 +123,7 @@ export const DEFAULT_CONFIG: LlamacliConfig = {
 };
 
 export interface LoadConfigResult {
-  config: LlamacliConfig;
+  config: HarnessideConfig;
   /** Set only when no config.yaml existed yet and one was just generated —
    *  a human-readable note (what was auto-detected, or what needs manual
    *  setup) meant for a one-time startup status message. */
@@ -133,7 +133,7 @@ export interface LoadConfigResult {
 /** Path to this project's config.yaml, so callers can read/write it directly
  *  without re-deriving the join(). */
 export function configPath(projectRoot: string): string {
-  return join(projectRoot, ".llamacli", "config.yaml");
+  return join(projectRoot, ".harnesside", "config.yaml");
 }
 
 
@@ -147,19 +147,19 @@ export async function loadConfig(
   // openai-compatible config — see below.
   detectModel: (baseUrl: string) => Promise<string | null> = detectModelAt
 ): Promise<LoadConfigResult> {
-  const path = join(projectRoot, ".llamacli", "config.yaml");
+  const path = join(projectRoot, ".harnesside", "config.yaml");
   try {
     const raw = await readFile(path, "utf8");
-    const parsed = parse(raw) as Partial<LlamacliConfig>;
+    const parsed = parse(raw) as Partial<HarnessideConfig>;
     // A plain top-level spread would let an existing config.yaml that
     // predates a new compaction field (e.g. old files only have
     // autoTriggerRatio) silently drop that field's default entirely,
     // since `parsed.compaction` — present but incomplete — replaces
     // DEFAULT_CONFIG.compaction wholesale instead of filling the gap.
     // Caught adding autoResume: every project's pre-existing
-    // .llamacli/config.yaml would otherwise load with autoResume
+    // .harnesside/config.yaml would otherwise load with autoResume
     // `undefined` (falsy) instead of the intended default of `true`.
-    const config: LlamacliConfig = {
+    const config: HarnessideConfig = {
       ...DEFAULT_CONFIG,
       ...parsed,
       compaction: { ...DEFAULT_CONFIG.compaction, ...parsed.compaction },
@@ -187,7 +187,7 @@ export async function loadConfig(
     // config from it — same "reuse what's there, else generate our own
     // default" pattern already used for rules/skills (PROMPT.md §5).
     const detected = await detect();
-    const config: LlamacliConfig = detected
+    const config: HarnessideConfig = detected
       ? { ...DEFAULT_CONFIG, backend: "openai-compatible", baseUrl: detected.baseUrl, model: detected.model }
       : DEFAULT_CONFIG;
 
@@ -204,20 +204,20 @@ export async function loadConfig(
     // being shown a stack trace.
     let saved = true;
     try {
-      await mkdir(join(projectRoot, ".llamacli"), { recursive: true });
+      await mkdir(join(projectRoot, ".harnesside"), { recursive: true });
       await writeFile(path, stringify(config), "utf8");
     } catch {
       saved = false;
     }
 
     const setupMessage = !saved
-      ? `[setup] No .llamacli/config.yaml found, and this project directory is not writable, so the generated config could not be saved. ` +
-        `llamacli is using in-memory defaults for this session only — they will be re-derived on every launch. ` +
-        `Run llamacli in a directory you own, or make this one writable, to persist them.`
+      ? `[setup] No .harnesside/config.yaml found, and this project directory is not writable, so the generated config could not be saved. ` +
+        `harnesside is using in-memory defaults for this session only — they will be re-derived on every launch. ` +
+        `Run harnesside in a directory you own, or make this one writable, to persist them.`
       : detected
-      ? `[setup] No .llamacli/config.yaml found — detected a running server at ${detected.baseUrl} and created one pointing at it.`
-      : `[setup] No .llamacli/config.yaml found and no local server detected on common ports (${COMMON_PORTS.join(", ")}). ` +
-        `Created a placeholder — edit .llamacli/config.yaml to point at your backend.`;
+      ? `[setup] No .harnesside/config.yaml found — detected a running server at ${detected.baseUrl} and created one pointing at it.`
+      : `[setup] No .harnesside/config.yaml found and no local server detected on common ports (${COMMON_PORTS.join(", ")}). ` +
+        `Created a placeholder — edit .harnesside/config.yaml to point at your backend.`;
 
     return { config, setupMessage };
   }

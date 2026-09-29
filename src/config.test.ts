@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { loadConfig, DEFAULT_CONFIG } from "./config.js";
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     await fn(dir);
   } finally {
@@ -16,8 +16,8 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
 
 test("loadConfig reads an existing config.yaml as-is, without touching the filesystem", () =>
   withTempDir(async (dir) => {
-    await mkdir(join(dir, ".llamacli"), { recursive: true });
-    const path = join(dir, ".llamacli", "config.yaml");
+    await mkdir(join(dir, ".harnesside"), { recursive: true });
+    const path = join(dir, ".harnesside", "config.yaml");
     await writeFile(path, "backend: openai-compatible\nmodel: my-model\nbaseUrl: http://example.invalid\n", "utf8");
 
     const { config, setupMessage } = await loadConfig(dir);
@@ -36,9 +36,9 @@ test("loadConfig falls back to the placeholder default and writes it when nothin
   withTempDir(async (dir) => {
     const { config, setupMessage } = await loadConfig(dir, async () => null);
     assert.equal(config.backend, "local-llama");
-    assert.match(setupMessage ?? "", /No \.llamacli\/config\.yaml found/);
+    assert.match(setupMessage ?? "", /No \.harnesside\/config\.yaml found/);
 
-    const written = await readFile(join(dir, ".llamacli", "config.yaml"), "utf8");
+    const written = await readFile(join(dir, ".harnesside", "config.yaml"), "utf8");
     assert.match(written, /backend: local-llama/);
   }));
 
@@ -53,7 +53,7 @@ test("loadConfig writes a config pointing at a detected server and says so in th
     assert.equal(config.model, "ornith-1.5-35b");
     assert.match(setupMessage ?? "", /detected a running server at http:\/\/127\.0\.0\.1:8080/);
 
-    const written = await readFile(join(dir, ".llamacli", "config.yaml"), "utf8");
+    const written = await readFile(join(dir, ".harnesside", "config.yaml"), "utf8");
     assert.match(written, /backend: openai-compatible/);
     assert.match(written, /baseUrl: http:\/\/127\.0\.0\.1:8080/);
   }));
@@ -94,11 +94,11 @@ test("DEFAULT_CONFIG's autoTriggerRatio leaves real headroom under the max_token
 // launch reject with EACCES -- a worse failure than the missing file it was
 // already handling. Found by a project-axis sweep over 100 project states.
 test("loadConfig survives a read-only project directory instead of throwing", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-ro-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-ro-"));
   const project = join(dir, "project");
   await mkdir(project);
   await chmod(project, 0o555);
-  // Probe with a throwaway name, NOT `.llamacli`: probing with the real name
+  // Probe with a throwaway name, NOT `.harnesside`: probing with the real name
   // created the very directory the test is about, so on a system where the
   // mkdir succeeded the test then passed vacuously. See the same fix in
   // setup/reset.test.ts.

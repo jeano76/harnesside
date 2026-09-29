@@ -124,7 +124,7 @@ const SIZES = [
 const COLOR_MODES = [
   { tag: "truecolor", extra: { COLORTERM: "truecolor" } },
   { tag: "256", extra: {} },
-  { tag: "16", extra: { LLAMACLI_COLOR_DEPTH: "4" } },
+  { tag: "16", extra: { HARNESSIDE_COLOR_DEPTH: "4" } },
   { tag: "none(NO_COLOR)", extra: { NO_COLOR: "1" } },
 ];
 
@@ -361,7 +361,7 @@ for (const f of failures) {
 }
 
 console.log("=".repeat(80));
-console.log("llamacli usability validation — 100 developer personas");
+console.log("harnesside usability validation — 100 developer personas");
 console.log("=".repeat(80));
 console.log(`\nchecks run : ${checks}`);
 console.log(`failures   : ${failures.length}`);
@@ -370,7 +370,7 @@ console.log(`\ncoverage: platforms ${new Set(personas.map((p) => p.platform)).si
   `  terminals ${new Set(personas.map((p) => p.env.TERM)).size}` +
   `  locales ${new Set(personas.map((p) => p.env.LANG)).size}` +
   `  sizes ${new Set(personas.map((p) => `${p.columns}x${p.rows}`)).size}` +
-  `  color modes ${new Set(personas.map((p) => (p.env.NO_COLOR ? "none" : p.env.LLAMACLI_COLOR_DEPTH ?? (p.env.COLORTERM ? "true" : "auto")))).size}`);
+  `  color modes ${new Set(personas.map((p) => (p.env.NO_COLOR ? "none" : p.env.HARNESSIDE_COLOR_DEPTH ?? (p.env.COLORTERM ? "true" : "auto")))).size}`);
 
 if (failures.length === 0) {
   console.log("\nPASS — no invariant violations across any persona.");

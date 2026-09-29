@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture REAL terminal frames from the built llamacli, rendered as text.
+"""Capture REAL terminal frames from the built harnesside, rendered as text.
 
 Every screenshot in docs/screenshots/ was produced by this script: it forks a
 pty, runs the actual built binary, replays keystrokes, and interprets the VT100
@@ -25,7 +25,7 @@ import sys
 import termios
 import time
 
-CLI = ["node", "/home/jeano/llamacli/dist/index.js"]
+CLI = ["node", "/home/jeano/harnesside/dist/index.js"]
 
 
 class Screen:
@@ -177,14 +177,14 @@ def type_realistic(text: str, at: float, per: float = 0.13) -> list[tuple[float,
 def run(keys: list[tuple[float, bytes]], cols: int, rows: int, settle: float = 6.0) -> Screen:
     env = dict(os.environ)
     env.update({"TERM": "xterm-256color", "COLORTERM": "truecolor", "LANG": "ko_KR.UTF-8",
-                "COLUMNS": str(cols), "LINES": str(rows), "LLAMACLI_NO_UPDATE": "1"})
+                "COLUMNS": str(cols), "LINES": str(rows), "HARNESSIDE_NO_UPDATE": "1"})
     for k in ("TMUX", "NO_COLOR", "WT_SESSION", "TERM_PROGRAM"):
         env.pop(k, None)
 
     pid, fd = pty.fork()
     if pid == 0:
         fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-        os.chdir("/home/jeano/llamacli")
+        os.chdir("/home/jeano/harnesside")
         os.execvpe(CLI[0], CLI, env)
         os._exit(1)
 

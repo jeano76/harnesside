@@ -45,7 +45,7 @@ export interface AppProps {
   /** Esc or Ctrl-C while the quit-time save is still running: exit right
    *  away without waiting for it (see index.tsx exitAfterSaving). */
   onQuitWithoutSaving: () => void;
-  /** Loaded once at startup (index.tsx) from .llamacli/state/prompt-history.json
+  /** Loaded once at startup (index.tsx) from .harnesside/state/prompt-history.json
    *  — kept as the initial value here rather than App loading it itself, so
    *  App stays pure UI/presentation and all filesystem I/O stays in
    *  index.tsx, matching how config/rules/skills are already loaded there. */
@@ -930,7 +930,7 @@ export function App({
   // Authoritative copy now lives in AgentLoop (queueMessage/onQueueChange —
   // see AppProps.onQueueMessage), so it's applied at the next turnLoop
   // iteration instead of only after the whole turn finishes; this is a
-  // display-only mirror kept in sync via the __llamacli_ui.setQueue below.
+  // display-only mirror kept in sync via the __harnesside_ui.setQueue below.
   const [queue, setQueue] = useState<string[]>([]);
   // Tracks which log line the currently-streaming assistant message is
   // appending to, so successive deltas mutate one line instead of spawning
@@ -1438,7 +1438,7 @@ export function App({
     // Ink's default Ctrl-C-exits-the-app behavior is disabled in index.tsx
     // (exitOnCtrlC: false) specifically so this reaches here instead —
     // reported directly: some terminals/users treat Ctrl-C as copy, not an
-    // interrupt, and it shouldn't kill llamacli either way. Make it an
+    // interrupt, and it shouldn't kill harnesside either way. Make it an
     // explicit no-op (not inserted into the input, doesn't touch the
     // menu) rather than falling through to the generic "append this
     // character" branch, which would otherwise insert the raw control
@@ -1816,7 +1816,7 @@ export function App({
 
   // TODO: replace with a proper imperative handle / event emitter once the
   // agent loop is wired to real streaming; global is a placeholder only.
-  (globalThis as any).__llamacli_ui = {
+  (globalThis as any).__harnesside_ui = {
     pushAssistantDelta,
     finalizeAssistant,
     pushReasoningDelta,
@@ -1843,7 +1843,7 @@ export function App({
     getVisibleLogText: () => allRowsRef.current.map((r) => r.text),
   };
 
-  // Reported directly: llamacli flickers, especially noticeable on Windows
+  // Reported directly: harnesside flickers, especially noticeable on Windows
   // consoles/WSL windows. Traced to Ink itself (node_modules/ink/build/ink.js
   // onRender): whenever the rendered tree's height is >= the terminal's row
   // count, Ink can't safely do its normal cheap redraw (move cursor up N

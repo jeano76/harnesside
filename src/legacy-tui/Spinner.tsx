@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Text } from "ink";
 
-// Reported directly: llamacli flickers on Windows, one line in particular
+// Reported directly: harnesside flickers on Windows, one line in particular
 // (the input prompt's own row — exactly where this spinner sits) and
 // occasionally stray special characters show up there too. The original
 // Braille-pattern frames (⠋⠙⠹...) are Unicode glyphs whose rendered column

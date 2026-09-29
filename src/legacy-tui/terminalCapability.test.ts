@@ -67,8 +67,8 @@ test("a terminal that does have an alternate screen still gets it", () => {
     assert.equal(caps({ TERM: term }).altScreen, true, `TERM=${term} does support the alternate screen`);
   }
   // The user who knows their multiplexer is configured can say so.
-  assert.equal(caps({ TERM: "tmux-256color", LLAMACLI_ALT_SCREEN: "1" }).altScreen, true, "explicit opt-in was ignored");
-  assert.equal(caps({ TERM: "xterm-256color", LLAMACLI_ALT_SCREEN: "0" }).altScreen, false, "explicit opt-out was ignored");
+  assert.equal(caps({ TERM: "tmux-256color", HARNESSIDE_ALT_SCREEN: "1" }).altScreen, true, "explicit opt-in was ignored");
+  assert.equal(caps({ TERM: "xterm-256color", HARNESSIDE_ALT_SCREEN: "0" }).altScreen, false, "explicit opt-out was ignored");
 });
 
 test("no alt screen means no alt-screen sequences are emitted", () => {

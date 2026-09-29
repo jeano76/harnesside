@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import { ensureLocalStack } from "./bootstrap.js";
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-order-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-order-"));
   try { await fn(dir); } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
@@ -40,7 +40,7 @@ test("a running server short-circuits BEFORE any Hub lookup — no download is a
 
     assert.equal(fetches, 0, "no Hub search, no model probe, no download");
     assert.ok(report.steps.some((s) => s.name === "기존 서버 연결"));
-    const cfg = parse(await readFile(join(dir, ".llamacli", "config.yaml"), "utf8"));
+    const cfg = parse(await readFile(join(dir, ".harnesside", "config.yaml"), "utf8"));
     assert.equal(cfg.model, "/media/usb/models/Ornith-A3B-Q4_K_M.gguf",
       "the model comes from the running server, not from a Hub search");
     assert.equal(cfg.backend, "openai-compatible");
@@ -62,7 +62,7 @@ test("the adoption path is taken even when the served model file is NOT in the m
     });
     assert.ok(report.ok);
     assert.equal(report.ports?.llamaPort, 8080);
-    const cfg = parse(await readFile(join(dir, ".llamacli", "config.yaml"), "utf8"));
+    const cfg = parse(await readFile(join(dir, ".harnesside", "config.yaml"), "utf8"));
     assert.equal(cfg.model, "/some/other/place/old-build.gguf");
   }));
 
@@ -76,9 +76,9 @@ test("a second launch with everything in place does no network work at all", () 
       fetchImpl: (async () => { throw new Error("must not reach the network on a set-up machine"); }) as unknown as typeof fetch,
     });
     await run();
-    const first = await readFile(join(dir, ".llamacli", "config.yaml"), "utf8");
+    const first = await readFile(join(dir, ".harnesside", "config.yaml"), "utf8");
     await run();
-    const second = await readFile(join(dir, ".llamacli", "config.yaml"), "utf8");
+    const second = await readFile(join(dir, ".harnesside", "config.yaml"), "utf8");
     assert.equal(second, first, "byte-identical: a set-up machine does no work on launch");
   }));
 

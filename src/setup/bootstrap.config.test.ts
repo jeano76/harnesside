@@ -8,7 +8,7 @@ import { buildConfig, writeConfig, ensureLocalStack } from "./bootstrap.js";
 import type { LlamaTuning } from "./tuning.js";
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-bs-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-bs-"));
   try { await fn(dir); } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
@@ -86,18 +86,18 @@ test("the tuned llama flags reach the config, not just the log", () => {
 test("writeConfig is atomic — a crash mid-write cannot leave an unparseable config", async () =>
   withTempDir(async (dir) => {
     await writeConfig(dir, { backend: "local-llama", llama: { port: 8080 } });
-    const written = parse(await readFile(join(dir, ".llamacli", "config.yaml"), "utf8"));
+    const written = parse(await readFile(join(dir, ".harnesside", "config.yaml"), "utf8"));
     assert.equal(written.backend, "local-llama");
     // No temp file left behind.
     const { readdir } = await import("node:fs/promises");
-    const files = await readdir(join(dir, ".llamacli"));
+    const files = await readdir(join(dir, ".harnesside"));
     assert.deepEqual(files, ["config.yaml"], `stray files: ${files.join(", ")}`);
   }));
 
 test("an existing config is read back and merged, not discarded", async () =>
   withTempDir(async (dir) => {
-    await mkdir(join(dir, ".llamacli"), { recursive: true });
-    await writeFile(join(dir, ".llamacli", "config.yaml"), "apiKey: sk-keepme\nbrowser:\n  debugPort: 9999\n");
+    await mkdir(join(dir, ".harnesside"), { recursive: true });
+    await writeFile(join(dir, ".harnesside", "config.yaml"), "apiKey: sk-keepme\nbrowser:\n  debugPort: 9999\n");
     const report = await ensureLocalStack({
       projectRoot: dir,
       offline: true,
@@ -108,7 +108,7 @@ test("an existing config is read back and merged, not discarded", async () =>
       },
       probe: async () => "free",
     });
-    const after = parse(await readFile(join(dir, ".llamacli", "config.yaml"), "utf8"));
+    const after = parse(await readFile(join(dir, ".harnesside", "config.yaml"), "utf8"));
     assert.equal(after.apiKey, "sk-keepme", "the user's own key is still there after a bootstrap");
     assert.equal(after.browser.debugPort, 9999);
     assert.equal(report.ports?.llamaPort, 8080);
@@ -151,7 +151,7 @@ test("a bootstrap that cannot fully do its job still returns a report and a usab
     // No model, so it must NOT have claimed local-llama — that is the state
     // index.tsx treats as unconfigured and silently falls through to a dead
     // default URL.
-    const after = parse(await readFile(join(dir, ".llamacli", "config.yaml"), "utf8"));
+    const after = parse(await readFile(join(dir, ".harnesside", "config.yaml"), "utf8"));
     assert.notEqual(after.backend, "local-llama", "never claims a local backend it cannot serve");
     assert.ok(after.llama?.port, "ports were still decided and recorded");
     assert.ok(report.ports?.llamaPort);

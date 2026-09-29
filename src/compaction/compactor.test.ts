@@ -95,7 +95,7 @@ test("shouldCompact is false below the threshold and true at/above it", async ()
 });
 
 test("buildResumePrompt returns null when there's no checkpoint", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     assert.equal(await buildResumePrompt(dir), null);
   } finally {
@@ -104,7 +104,7 @@ test("buildResumePrompt returns null when there's no checkpoint", async () => {
 });
 
 test("buildResumePrompt summarizes goal, remaining steps, pending tool call, and files", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     const checkpoint: Checkpoint = {
       version: 1,
@@ -137,7 +137,7 @@ test("buildResumePrompt summarizes goal, remaining steps, pending tool call, and
 });
 
 test("buildResumePrompt says all steps were done when nothing remains", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     const checkpoint: Checkpoint = {
       version: 1,
@@ -193,7 +193,7 @@ function strictNoToolsBackend(): { backend: ModelBackend; lastRequest: () => Cha
 
 test("runCompaction sanitizes tool_calls/tool-role messages so a strict backend never rejects the summary request", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       // Reproduces the exact production scenario: messages.slice(0, -6) cuts
       // right after an assistant message with tool_calls, leaving its
@@ -268,7 +268,7 @@ test("runCompaction sanitizes tool_calls/tool-role messages so a strict backend 
 // before/after, what got dropped vs what the summary kept/emphasized.
 test("runCompaction returns a detail report naming what was dropped and what replaced it", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const messages: ChatMessage[] = [
         { role: "system", content: "sys" },
@@ -316,7 +316,7 @@ const LONG_FILLER_TEXT = "The quick brown fox jumps over the lazy dog. ".repeat(
 
 test("runCompaction sets max_tokens on the summary request, scaled to the real context window", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const { backend, lastRequest } = strictNoToolsBackend();
       const messages: ChatMessage[] = [
@@ -360,7 +360,7 @@ test("runCompaction sets max_tokens on the summary request, scaled to the real c
 
 test("the summary budget defaults to 1024 and the retry cap can only tighten it", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const { backend, lastRequest } = strictNoToolsBackend();
       const messages: ChatMessage[] = [
@@ -400,7 +400,7 @@ test("the summary budget defaults to 1024 and the retry cap can only tighten it"
 
 test("runCompaction's summary max_tokens has a floor for a small context window, and a ceiling for a very large one", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const { backend, lastRequest } = strictNoToolsBackend();
       // A trailing short assistant turn (matching the previous test's shape)
@@ -435,7 +435,7 @@ test("runCompaction's summary max_tokens is scaled down when there's little hist
     // almost nothing to condense, letting a verbose model burn real
     // generation time on a summary far longer than the source material
     // could ever justify.
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const { backend, lastRequest } = strictNoToolsBackend();
       // A tiny amount of real history: well under the ~11,750-token
@@ -474,7 +474,7 @@ test("runCompaction's summary request preserves the original system message verb
     // request's system message means [system, ...toSummarize] is a literal
     // PREFIX of the just-completed turn's own prompt, so llama-server's
     // cache can serve it instead of recomputing it.
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const { backend, lastRequest } = strictNoToolsBackend();
       const ORIGINAL_SYSTEM = "You are a coding assistant. Some base rules here.";
@@ -500,7 +500,7 @@ test("runCompaction's summary request preserves the original system message verb
 
 test("runCompaction preserves the original system prompt (base prompt + injected project rules) across compaction, not just the summary", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       // A long-enough conversation that the system prompt (messages[0]) is
       // guaranteed to fall into toSummarize under any real budget — this is
@@ -541,7 +541,7 @@ test("runCompaction preserves the original system prompt (base prompt + injected
 
 test("runCompaction never leaves an orphaned role:tool message (no matching tool_calls) at the start of the compacted result", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       // Sweeps the tool-result size so the size-based cut point lands right
       // on the boundary between a tool_calls-bearing assistant message and
@@ -594,7 +594,7 @@ test("runCompaction never leaves an orphaned role:tool message (no matching tool
 // real configured context window instead.
 test("runCompaction sizes the kept tail against the real context window, not a fixed message count", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       // 10 messages, each ~2000 chars — under the old fixed rule, all 6
       // of the last messages (12,000 chars) would be kept verbatim
@@ -640,7 +640,7 @@ test("runCompaction sizes the kept tail against the real context window, not a f
 
 test("runCompaction's kept tail always includes at least the single most recent message, even if it alone exceeds the window budget", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const messages: ChatMessage[] = [
         { role: "system", content: "sys" },
@@ -703,7 +703,7 @@ test("shouldCompact accounts for extraText too — a request that fits without i
 // reply reservation already summed past what was actually usable.
 test("a tighter tailBudgetFraction produces a smaller kept tail than the default, given the same messages", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const backend: ModelBackend = {
         async chat() {
@@ -737,7 +737,7 @@ test("a tighter tailBudgetFraction produces a smaller kept tail than the default
 
 test("runCompaction's kept-tail budget accounts for the next reply's own reserved room, not just the raw window size", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const backend: ModelBackend = {
         async chat() {
@@ -913,7 +913,7 @@ test("stripResumePrefix unwraps a goal that nested previous resume messages insi
 });
 
 test("buildResumePrompt never nests a previous resume message inside the goal", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     await writeCheckpoint(dir, {
       version: 1,
@@ -935,7 +935,7 @@ test("buildResumePrompt never nests a previous resume message inside the goal", 
 
 test("a second runCompaction feeds the previous summary (via the preserved system message) to the summary model and replaces it, instead of losing or stacking it", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const requests: ChatCompletionRequest[] = [];
       let n = 0;
@@ -977,7 +977,7 @@ test("a second runCompaction feeds the previous summary (via the preserved syste
 
 test("runCompaction keeps the summary request itself inside the window and honours a caller summary cap", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       let req: ChatCompletionRequest | undefined;
       const backend: ModelBackend = {
@@ -1007,7 +1007,7 @@ test("runCompaction keeps the summary request itself inside the window and honou
 
 test("runCompaction keeps the newest tool result by pulling its assistant tool_calls message into the tail, instead of dropping it", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const backend: ModelBackend = {
         async chat() {
@@ -1043,7 +1043,7 @@ test("runCompaction keeps the newest tool result by pulling its assistant tool_c
 
 test("the summary request always ends with a user turn, so the backend summarizes instead of continuing an assistant prefill", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       let req: ChatCompletionRequest | undefined;
       const backend: ModelBackend = {
@@ -1077,7 +1077,7 @@ test("the summary request always ends with a user turn, so the backend summarize
 
 test("a compacted conversation always contains a user message, since some chat templates reject one without", () =>
   (async () => {
-    const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
       const backend: ModelBackend = {
         async chat() {
@@ -1113,7 +1113,7 @@ test("a compacted conversation always contains a user message, since some chat t
   })());
 
 test("buildResumePrompt leaves the summary out when the live conversation already carries it", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     await writeCheckpoint(dir, {
       version: 1,

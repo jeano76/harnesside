@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 export const MAX_PROMPT_HISTORY = 50;
 
 function historyPath(projectRoot: string): string {
-  return join(projectRoot, ".llamacli", "state", "prompt-history.json");
+  return join(projectRoot, ".harnesside", "state", "prompt-history.json");
 }
 
 export async function loadPromptHistory(projectRoot: string): Promise<string[]> {

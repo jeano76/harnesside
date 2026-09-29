@@ -13,7 +13,7 @@
  *  dist/tui/App.js, dist/agent/loop.js, and so on — so hashing/replacing
  *  index.js alone would silently miss every change to a file it imports.
  *  See scripts/update-bin.mjs, which produces bin/manifest.json and
- *  bin/llamacli-dist.tar.gz from the real dist/ output.
+ *  bin/harnesside-dist.tar.gz from the real dist/ output.
  *
  *  What the hash check proves and what it doesn't: it proves the bytes
  *  written to disk are exactly the bytes the manifest declared (catching
@@ -63,14 +63,14 @@ export function updateAvailable(localSha256: string, manifest: UpdateManifest): 
  *  every startup just to find out nothing changed. */
 export const LOCAL_HASH_FILE = ".self-update-sha256";
 
-export const DEFAULT_MANIFEST_URL = "https://raw.githubusercontent.com/jeano76/llamacli/main/bin/manifest.json";
-export const DEFAULT_ARCHIVE_URL = "https://raw.githubusercontent.com/jeano76/llamacli/main/bin/llamacli-dist.tar.gz";
+export const DEFAULT_MANIFEST_URL = "https://raw.githubusercontent.com/jeano76/harnesside/main/bin/manifest.json";
+export const DEFAULT_ARCHIVE_URL = "https://raw.githubusercontent.com/jeano76/harnesside/main/bin/harnesside-dist.tar.gz";
 
 /**
  * Opt-outs. Both matter for anyone who is *developing* this tool rather
  * than just using it.
  *
- * `LLAMACLI_NO_UPDATE=1` was a real gap, hit while building this: the
+ * `HARNESSIDE_NO_UPDATE=1` was a real gap, hit while building this: the
  * updater downloads the published archive straight over `dist/`, so
  * `npm run build` followed by one launch was silently undone — you end up
  * testing the published binary and believing you tested your change. There
@@ -80,7 +80,7 @@ export const DEFAULT_ARCHIVE_URL = "https://raw.githubusercontent.com/jeano76/ll
  * manifest to test the update path itself without publishing).
  */
 export function selfUpdateDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.LLAMACLI_NO_UPDATE === "1";
+  return env.HARNESSIDE_NO_UPDATE === "1";
 }
 
 export interface SelfUpdateResult {
@@ -120,11 +120,11 @@ export async function checkAndApplyUpdate(
   // download, and above all no write to dist/. See selfUpdateDisabled's
   // comment for why this matters when working on the tool itself.
   if (selfUpdateDisabled(opts.env)) {
-    return { updated: false, reason: "self-update disabled via LLAMACLI_NO_UPDATE=1" };
+    return { updated: false, reason: "self-update disabled via HARNESSIDE_NO_UPDATE=1" };
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const manifestUrl = opts.manifestUrl ?? opts.env?.LLAMACLI_UPDATE_MANIFEST_URL ?? DEFAULT_MANIFEST_URL;
-  const archiveUrl = opts.archiveUrl ?? opts.env?.LLAMACLI_UPDATE_ARCHIVE_URL ?? DEFAULT_ARCHIVE_URL;
+  const manifestUrl = opts.manifestUrl ?? opts.env?.HARNESSIDE_UPDATE_MANIFEST_URL ?? DEFAULT_MANIFEST_URL;
+  const archiveUrl = opts.archiveUrl ?? opts.env?.HARNESSIDE_UPDATE_ARCHIVE_URL ?? DEFAULT_ARCHIVE_URL;
 
   let manifest: UpdateManifest;
   try {

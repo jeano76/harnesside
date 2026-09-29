@@ -11,7 +11,7 @@ import { sha256Hex, parseManifest, updateAvailable, checkAndApplyUpdate, LOCAL_H
 const execFileAsync = promisify(execFile);
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-selfupdate-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-selfupdate-test-"));
   try {
     await fn(dir);
   } finally {
@@ -40,7 +40,7 @@ async function buildFixtureArchive(files: Record<string, string>): Promise<{ byt
 }
 
 async function withTempDirReturning<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-fixture-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-fixture-"));
   try {
     return await fn(dir);
   } finally {
@@ -266,7 +266,7 @@ test("checkAndApplyUpdate never calls onUpdateFound when the manifest fetch itse
 // over dist/, so you end up testing the published binary and believing you
 // tested your change, with no way to stop it.
 
-test("LLAMACLI_NO_UPDATE=1 disables the check entirely — no fetch, no write", async () => {
+test("HARNESSIDE_NO_UPDATE=1 disables the check entirely — no fetch, no write", async () => {
   await withTempDir(async (dir) => {
     // A fetchImpl that throws if called at all: the opt-out has to be
     // absolute, not merely "skip the install step".
@@ -275,10 +275,10 @@ test("LLAMACLI_NO_UPDATE=1 disables the check entirely — no fetch, no write", 
     }) as unknown as typeof fetch;
     const result = await checkAndApplyUpdate(dir, {
       fetchImpl: boom,
-      env: { LLAMACLI_NO_UPDATE: "1" },
+      env: { HARNESSIDE_NO_UPDATE: "1" },
     });
     assert.equal(result.updated, false);
-    assert.match(result.reason, /LLAMACLI_NO_UPDATE/);
+    assert.match(result.reason, /HARNESSIDE_NO_UPDATE/);
   });
 });
 
@@ -314,7 +314,7 @@ test("the update URLs are overridable from the environment", async () => {
 
     const result = await checkAndApplyUpdate(dir, {
       fetchImpl,
-      env: { LLAMACLI_UPDATE_MANIFEST_URL: manifestUrl, LLAMACLI_UPDATE_ARCHIVE_URL: archiveUrl },
+      env: { HARNESSIDE_UPDATE_MANIFEST_URL: manifestUrl, HARNESSIDE_UPDATE_ARCHIVE_URL: archiveUrl },
     });
     assert.ok(seen.includes(manifestUrl), "should have fetched the overridden manifest URL");
     assert.ok(seen.includes(archiveUrl), "should have fetched the overridden archive URL");

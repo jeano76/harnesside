@@ -26,7 +26,7 @@ import type { ChatCompletionRequest, ChatCompletionResponse, ModelBackend } from
  */
 
 async function withTempProject(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-scenario-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-scenario-"));
   try {
     await fn(dir);
   } finally {
@@ -278,7 +278,7 @@ function fakeDeveloperBackend(
 
 async function runOneDeveloper(devIndex: number, turnsPerDeveloper: number): Promise<{ dir: string; turnErrors: string[] }> {
   const profile = LANGUAGE_PROFILES[devIndex % LANGUAGE_PROFILES.length];
-  const dir = await mkdtemp(join(tmpdir(), `llamacli-scenario-dev${devIndex}-`));
+  const dir = await mkdtemp(join(tmpdir(), `harnesside-scenario-dev${devIndex}-`));
   await writeFileFs(
     join(dir, "README.md"),
     `# dev ${devIndex} project (${profile.name})\n\nThis is ${profile.programType}, written in ${profile.name}.\n`.repeat(20),

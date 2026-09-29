@@ -7,9 +7,9 @@ import { join } from "node:path";
 import { findOtherInstances, terminateInstance } from "./instanceGuard.js";
 
 test("finds another process running the same script in the same project, and terminates it", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-guard-"));
-  const other = await mkdtemp(join(tmpdir(), "llamacli-guard-other-"));
-  const script = join(dir, "fake-llamacli.js");
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-guard-"));
+  const other = await mkdtemp(join(tmpdir(), "harnesside-guard-other-"));
+  const script = join(dir, "fake-harnesside.js");
   await writeFile(script, "setInterval(() => {}, 1000);\n");
   const child = spawn(process.execPath, [script], { cwd: dir, stdio: "ignore" });
   try {

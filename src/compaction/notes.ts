@@ -15,7 +15,7 @@ export const NOTES_HEADER = "[Working notes — kept across compaction]";
 export const MAX_NOTES_CHARS = 3000;
 
 function notesPath(projectRoot: string): string {
-  return join(projectRoot, ".llamacli", "state", "notes.md");
+  return join(projectRoot, ".harnesside", "state", "notes.md");
 }
 
 export async function readNotes(projectRoot: string): Promise<string> {

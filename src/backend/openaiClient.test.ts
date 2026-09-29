@@ -22,7 +22,7 @@ async function withFakeServer(
   }
 }
 
-// The config-drift bug this guards against: llamacli trusted a static
+// The config-drift bug this guards against: harnesside trusted a static
 // contextSize from config.yaml, which can silently go stale relative to
 // what the server is actually running (seen live: config said 8192, the
 // real server was -c 65536 — compaction fired 8x too eagerly and

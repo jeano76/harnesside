@@ -1,5 +1,5 @@
 /**
- * The one place that decides which port llamacli talks to, so the configured
+ * The one place that decides which port harnesside talks to, so the configured
  * port and the port llama-server binds cannot disagree.
  *
  * ── What this used to do, and why it is smaller now ─────────────────────────
@@ -15,16 +15,16 @@
  * The port was once an independent fact per component: `detect.ts` probed
  * 8080/8081/11434 and took the first responder, while a separate spawn default
  * said 8081. Which port the next run used therefore depended on what else
- * happened to be running. The requirement is simply that the port llamacli
+ * happened to be running. The requirement is simply that the port harnesside
  * talks to and the port llama-server binds are the same number by
  * construction — decided once, written once, and re-asserted on every launch.
  */
 
 export const LLAMA_PORT = 8080;
 
-/** Ports llamacli will probe for an already-running OpenAI-compatible server
+/** Ports harnesside will probe for an already-running OpenAI-compatible server
  *  when a project has no config yet. The candidates are ORDERED and the first
- *  responder wins, so our own port leads: if llamacli is already serving, that
+ *  responder wins, so our own port leads: if harnesside is already serving, that
  *  is unambiguously the right answer. */
 export const COMMON_PORTS = [LLAMA_PORT, 11434];
 
@@ -65,7 +65,7 @@ export interface PortPlan {
  * Resolves the port.
  *
  * `wanted` lets a caller pass a port that is already recorded in a config
- * (i.e. one this llamacli install set up before), so an established install
+ * (i.e. one this harnesside install set up before), so an established install
  * keeps its port instead of being migrated on every launch. A port that is
  * already occupied by something *else* is moved, because a port conflict is
  * precisely the failure this whole module exists to prevent — and it is
@@ -85,7 +85,7 @@ export async function planPorts(opts: {
     if (llamaState === "unknown") {
       // Treated as usable: a firewall that DROPs the probe says nothing about
       // whether the port is bindable, and refusing to start on that evidence
-      // would make llamacli fail on a locked-down network for no reason.
+      // would make harnesside fail on a locked-down network for no reason.
       notes.push(`llama 포트 ${llamaPort} 응답 없음(방화벽) — 그대로 사용을 시도합니다.`);
     }
   } else {

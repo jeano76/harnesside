@@ -1,4 +1,4 @@
-// OpenAI Chat Completions-compatible wire types (subset used by llamacli).
+// OpenAI Chat Completions-compatible wire types (subset used by harnesside).
 
 export type Role = "system" | "user" | "assistant" | "tool";
 

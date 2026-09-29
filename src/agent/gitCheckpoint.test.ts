@@ -10,7 +10,7 @@ import { gitCheckpoint, resetGitCheckpointCacheForTests } from "./gitCheckpoint.
 const execAsync = promisify(exec);
 
 async function initRepo(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-git-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-git-"));
   await execAsync("git init -q", { cwd: dir });
   await execAsync('git config user.email "t@t.com" && git config user.name t', { cwd: dir });
   resetGitCheckpointCacheForTests();
@@ -45,7 +45,7 @@ test("gitCheckpoint commits a changed file and returns a revertable hash", async
 
 test("gitCheckpoint no-ops outside a git repo and on a gitignored file, without throwing", async () => {
   const plain = await (async () => {
-    const d = await mkdtemp(join(tmpdir(), "llamacli-nogit-"));
+    const d = await mkdtemp(join(tmpdir(), "harnesside-nogit-"));
     resetGitCheckpointCacheForTests();
     return d;
   })();

@@ -41,7 +41,7 @@ export interface Checkpoint {
 }
 
 function checkpointPath(projectRoot: string): string {
-  return join(projectRoot, ".llamacli", "state", "checkpoint.json");
+  return join(projectRoot, ".harnesside", "state", "checkpoint.json");
 }
 
 export async function writeCheckpoint(

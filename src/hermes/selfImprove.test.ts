@@ -86,8 +86,8 @@ test("proposeImprovement returns null if the model's draft is empty/whitespace",
   assert.equal(result, null);
 });
 
-test("writeProposedRule writes a new timestamped file under .llamacli/rules/ and never touches existing ones", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+test("writeProposedRule writes a new timestamped file under .harnesside/rules/ and never touches existing ones", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     const path = await writeProposedRule(dir, {
       summary: "test",
@@ -95,15 +95,15 @@ test("writeProposedRule writes a new timestamped file under .llamacli/rules/ and
       failureCount: 2,
       signature: "edit_file:old_text not found",
     });
-    assert.match(path, /\.llamacli[/\\]rules[/\\]hermes-proposed-\d+\.md$/);
+    assert.match(path, /\.harnesside[/\\]rules[/\\]hermes-proposed-\d+\.md$/);
     assert.equal(await readFile(path, "utf8"), "# Rule content\n\n");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("appendImprovementLog writes to .llamacli/state/improvement-log.md, not the rules directory", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+test("appendImprovementLog writes to .harnesside/state/improvement-log.md, not the rules directory", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     const path = await appendImprovementLog(dir, {
       summary: "edit_file failed 3 times",
@@ -111,7 +111,7 @@ test("appendImprovementLog writes to .llamacli/state/improvement-log.md, not the
       failureCount: 3,
       signature: "edit_file:old_text not found",
     });
-    assert.match(path, /\.llamacli[/\\]state[/\\]improvement-log\.md$/);
+    assert.match(path, /\.harnesside[/\\]state[/\\]improvement-log\.md$/);
     const content = await readFile(path, "utf8");
     assert.match(content, /edit_file failed 3 times/);
     assert.match(content, /Read before edit/);
@@ -121,7 +121,7 @@ test("appendImprovementLog writes to .llamacli/state/improvement-log.md, not the
 });
 
 test("appendImprovementLog appends (doesn't overwrite) on repeated calls, preserving prior entries", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     const path = await appendImprovementLog(dir, {
       summary: "first finding",

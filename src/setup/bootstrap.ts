@@ -1,11 +1,11 @@
 /**
  * The first-run bootstrap: make sure a llama-server binary, a model that fits
  * this machine, and a set of non-conflicting ports all exist, then write them
- * into `.llamacli/config.yaml` so every later launch is a no-op.
+ * into `.harnesside/config.yaml` so every later launch is a no-op.
  *
- * Requested directly: "llamacli 의 초기 구동 시 llama.cpp 가 존재를 하지 않는다면
+ * Requested directly: "harnesside 의 초기 구동 시 llama.cpp 가 존재를 하지 않는다면
  * 관련 설치 패키지와 llama.cpp 를 설치하고 … 정합한 모델을 다운로드 받는 초기
- * 과정을 수행해야해 … llama.cpp의 포트와 llamacli 에서 사용하는 포트가 맞아야
+ * 과정을 수행해야해 … llama.cpp의 포트와 harnesside 에서 사용하는 포트가 맞아야
  * 하고 … 초기 llama
  * 구동시 cpu 가 여러개 인경우에는 Nvidia gpu를 우선 순으로 정의 … 사용자 개입없이
  * 진행이 될수 있도록".
@@ -168,7 +168,7 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
   {
   // This was found by running the real bootstrap on a machine that already had
   // a llama-server up: planPorts saw 8080 busy and moved us to 8081, which
-  // means llamacli spawns a SECOND llama-server. On this box that is fatal —
+  // means harnesside spawns a SECOND llama-server. On this box that is fatal —
   // the running server already holds 7.2 GB of an 8 GB card, so a second one
   // OOMs on load. And it is pointless: the thing on 8080 is already answering
   // /v1/models with the model we just picked.
@@ -196,7 +196,7 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
     };
     if (opts.projectRoot) {
       await writeConfig(opts.projectRoot, adopted);
-      steps.push({ name: "설정 저장", ok: true, detail: ".llamacli/config.yaml (기존 서버 연결)" });
+      steps.push({ name: "설정 저장", ok: true, detail: ".harnesside/config.yaml (기존 서버 연결)" });
     }
     return {
       ok: true,
@@ -216,10 +216,10 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
   //
   // MODEL ACQUISITION HAS BEEN REMOVED.
   //
-  // There is no Hub search and no download. llamacli no longer contacts a model
+  // There is no Hub search and no download. harnesside no longer contacts a model
   // repository, never resolves a filename from a remote catalogue, and never
   // transfers a GGUF. The only model it will ever run is the one already
-  // configured in `.llamacli/config.yaml`, or one an already-running
+  // configured in `.harnesside/config.yaml`, or one an already-running
   // llama-server reports.
   //
   // Why a removal and not a flag: a downloader still wired up behind a
@@ -230,7 +230,7 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
   // Consequence, stated honestly: a machine with no model cannot now obtain one
   // by itself. That is the intended trade — the operator places the .gguf and
   // points `llama.modelPath` at it, or starts a server, which is adopted.
-  const modelsDir = opts.modelsDir ?? env.LLAMACLI_MODELS_DIR ?? DEFAULT_MODELS_DIR;
+  const modelsDir = opts.modelsDir ?? env.HARNESSIDE_MODELS_DIR ?? DEFAULT_MODELS_DIR;
   // The model this install is ALREADY using, if that file still exists.
   //
   // This is now the only source of a model. The config's own record is the
@@ -257,8 +257,8 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
       name: "모델 확인",
       ok: false,
       detail:
-        "설정된 모델을 찾지 못했습니다. llamacli는 모델을 내려받지 않습니다 — " +
-        "`.llamacli/config.yaml` 의 `llama.modelPath` 에 .gguf 경로를 지정하거나, " +
+        "설정된 모델을 찾지 못했습니다. harnesside는 모델을 내려받지 않습니다 — " +
+        "`.harnesside/config.yaml` 의 `llama.modelPath` 에 .gguf 경로를 지정하거나, " +
         "이미 실행 중인 llama-server 에 연결하세요.",
     });
     errors.push("모델: 설정된 모델을 찾지 못했습니다 (자동 다운로드 기능이 제거되었습니다).");
@@ -292,7 +292,7 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
     // install; a bootstrap that returns a report lets the caller start anyway").
     //
     // Found by a project-axis sweep (100 project states): a read-only project
-    // directory made `mkdir .llamacli` fail with EACCES and the whole bootstrap
+    // directory made `mkdir .harnesside` fail with EACCES and the whole bootstrap
     // rejected. That is a real and reachable state — a project on a read-only
     // mount, a checkout owned by another user, a container running as a
     // non-owner — and the user saw a crash instead of a report.
@@ -303,7 +303,7 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
     // session with the settings it derived.
     await step("설정 저장", async () => {
       await writeConfig(opts.projectRoot!, config);
-      return ".llamacli/config.yaml";
+      return ".harnesside/config.yaml";
     });
   }
   // NOTE: the config is written AFTER the download above. That ordering was
@@ -371,7 +371,7 @@ export function buildConfig(opts: {
 
 async function readConfig(projectRoot: string): Promise<Record<string, any> | undefined> {
   try {
-    return parse(await readFile(join(projectRoot, ".llamacli", "config.yaml"), "utf8")) ?? undefined;
+    return parse(await readFile(join(projectRoot, ".harnesside", "config.yaml"), "utf8")) ?? undefined;
   } catch {
     return undefined; // no config yet, or unreadable — both mean "start fresh"
   }
@@ -407,7 +407,7 @@ export function keepUserOwnedKeys(config: Record<string, any> | undefined): Reco
 /** Written to a temp file and renamed, so a crash mid-write cannot leave a
  *  half-written config that the next launch fails to parse. */
 export async function writeConfig(projectRoot: string, config: Record<string, unknown>): Promise<void> {
-  const dir = join(projectRoot, ".llamacli");
+  const dir = join(projectRoot, ".harnesside");
   await mkdir(dir, { recursive: true });
   const final = join(dir, "config.yaml");
   const tmp = `${final}.tmp`;

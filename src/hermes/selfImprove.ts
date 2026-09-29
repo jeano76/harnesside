@@ -1,7 +1,7 @@
 /**
  * PROMPT.md §3 second bullet — self-improvement: accumulate failure patterns,
  * propose a rule update, and NEVER apply it without explicit user approval
- * (writing straight into .llamacli/rules/ unattended would be exactly the
+ * (writing straight into .harnesside/rules/ unattended would be exactly the
  * kind of unattended, confident overwrite the user's CLINE delegation rules
  * warn against for headless agents — see ~/.claude/CLAUDE.md "모호한 지시는
  * 절대 위임 금지"). The proposal is always a *new* file, never an edit to an
@@ -96,7 +96,7 @@ export async function proposeImprovement(
 /** Writes an approved proposal as a NEW rule file — never overwrites an
  *  existing one, so approving a bad proposal can't destroy prior rules. */
 export async function writeProposedRule(projectRoot: string, proposal: ImprovementProposal): Promise<string> {
-  const dir = join(projectRoot, ".llamacli", "rules");
+  const dir = join(projectRoot, ".harnesside", "rules");
   await mkdir(dir, { recursive: true });
   const filename = `hermes-proposed-${Date.now()}.md`;
   const path = join(dir, filename);
@@ -117,7 +117,7 @@ export async function writeProposedRule(projectRoot: string, proposal: Improveme
  * still-recurring pattern doesn't spam the file on every new occurrence.
  */
 export async function appendImprovementLog(projectRoot: string, proposal: ImprovementProposal): Promise<string> {
-  const dir = join(projectRoot, ".llamacli", "state");
+  const dir = join(projectRoot, ".harnesside", "state");
   await mkdir(dir, { recursive: true });
   const path = join(dir, "improvement-log.md");
   const entry =

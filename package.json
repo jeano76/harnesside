@@ -1,38 +1,50 @@
 {
-  "name": "llamacli",
+  "name": "harnesside",
   "version": "0.1.0",
-  "description": "Local llama.cpp AI coding agent CLI (OpenAI-compatible, self-healing, memory-compaction with auto-resume)",
-  "repository": "https://github.com/jeano76/llamacli",
+  "description": "Local llama.cpp coding agent: a daemon that drives a CDP-launched browser IDE (OpenAI-compatible, self-healing, memory-compaction with auto-resume)",
+  "repository": "https://github.com/jeano76/harnesside",
   "type": "module",
   "bin": {
-    "llamacli": "./dist/index.js"
+    "harnesside": "./dist/server/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && mkdir -p dist/skills/builtin && cp src/skills/builtin/*.md dist/skills/builtin/ && chmod +x dist/index.js && node scripts/update-bin.mjs",
-    "dev": "tsx src/index.tsx",
-    "start": "node dist/index.js",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:web": "vite build",
+    "build": "npm run build:server && npm run build:web && node scripts/pack-web-assets.mjs",
+    "dev": "concurrently \"tsx watch src/server/index.ts\" \"vite\"",
+    "start": "node dist/server/index.js",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:e2e": "tsx scripts/e2e_check.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "rename:check": "node scripts/rename-identifiers.mjs --dry"
   },
   "dependencies": {
-    "ink": "^4.4.1",
+    "chokidar": "^3.6.0",
     "marked": "^15.0.12",
-    "marked-terminal": "^7.3.0",
     "node-fetch": "^3.3.2",
     "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "string-width": "^5.1.2",
     "strip-ansi": "^7.2.0",
-    "wrap-ansi": "^9.0.2",
+    "ws": "^8.21.3",
     "yaml": "^2.5.0"
   },
   "devDependencies": {
-    "@types/marked-terminal": "^6.1.1",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
     "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^9.0.1",
+    "ink": "^4.4.1",
+    "marked-terminal": "^7.3.0",
+    "@types/marked-terminal": "^6.1.1",
     "tsx": "^4.16.2",
     "typescript": "^5.5.4",
-    "ws": "^8.21.3"
+    "vite": "^5.4.0"
+  },
+  "optionalDependencies": {
+    "monaco-editor": "^0.52.0"
   },
   "engines": {
     "node": ">=18"

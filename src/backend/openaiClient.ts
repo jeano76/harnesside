@@ -40,7 +40,7 @@ export function setFetchTimeoutsForTests(lightweightMs: number, chatMs: number):
  *  AbortController — both produce an identical AbortError otherwise,
  *  and the caller (loop.ts) needs to tell them apart to report a clean
  *  "[cancelled]" status instead of a scary-looking timeout/network error. */
-const CANCELLED_REASON = "llamacli:cancelled-by-user";
+const CANCELLED_REASON = "harnesside:cancelled-by-user";
 
 export class OpenAICompatibleClient implements ModelBackend {
   // Tracks whichever chat() request is currently in flight, so cancel() has
@@ -318,7 +318,7 @@ export class OpenAICompatibleClient implements ModelBackend {
           // Measured directly against the real backend: a request whose
           // whole 420-token budget went to reasoning produced 420 of
           // these deltas and zero `content`/`tool_calls` deltas — and
-          // because nothing here looked at this field, llamacli rendered
+          // because nothing here looked at this field, harnesside rendered
           // absolutely nothing for the entire time, which is what the
           // repeated "it looks stuck / 멈춘 것 같다" reports actually
           // were. It also has to count toward deltaCount: these tokens

@@ -32,8 +32,8 @@ test("supportsAnsiTui: on win32, a recognized TERM_PROGRAM (e.g. VS Code) is sup
   assert.equal(supportsAnsiTui({ TERM_PROGRAM: "vscode" }, { ...TTY, platform: "win32" }), true);
 });
 
-test("supportsAnsiTui: LLAMACLI_NO_ANSI=1 forces it off even on an otherwise-supported terminal", () => {
-  assert.equal(supportsAnsiTui({ LLAMACLI_NO_ANSI: "1" }, TTY), false);
+test("supportsAnsiTui: HARNESSIDE_NO_ANSI=1 forces it off even on an otherwise-supported terminal", () => {
+  assert.equal(supportsAnsiTui({ HARNESSIDE_NO_ANSI: "1" }, TTY), false);
 });
 
 test("supportsAnsiTui: NO_COLOR suppresses color but NOT cursor/alt-screen control", () => {
@@ -54,6 +54,6 @@ test("supportsAnsiTui: NO_COLOR=0 is still honored (any value counts, per the co
   assert.equal(detectTerminal({ TERM: "xterm-256color", NO_COLOR: "0" }, TTY).colorDepth, 0);
 });
 
-test("supportsAnsiTui: LLAMACLI_FORCE_ANSI=1 forces it on even without a TTY or a known-good win32 terminal", () => {
-  assert.equal(supportsAnsiTui({ LLAMACLI_FORCE_ANSI: "1" }, { stdoutIsTTY: false, stdinIsTTY: false, platform: "win32" }), true);
+test("supportsAnsiTui: HARNESSIDE_FORCE_ANSI=1 forces it on even without a TTY or a known-good win32 terminal", () => {
+  assert.equal(supportsAnsiTui({ HARNESSIDE_FORCE_ANSI: "1" }, { stdoutIsTTY: false, stdinIsTTY: false, platform: "win32" }), true);
 });

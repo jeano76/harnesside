@@ -19,7 +19,7 @@ function sample(): Checkpoint {
 }
 
 test("readCheckpoint returns null when nothing was ever written", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     assert.equal(await readCheckpoint(dir), null);
   } finally {
@@ -28,7 +28,7 @@ test("readCheckpoint returns null when nothing was ever written", async () => {
 });
 
 test("writeCheckpoint then readCheckpoint round-trips the exact data", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     const checkpoint = sample();
     await writeCheckpoint(dir, checkpoint);
@@ -39,10 +39,10 @@ test("writeCheckpoint then readCheckpoint round-trips the exact data", async () 
   }
 });
 
-test("writeCheckpoint creates .llamacli/state/ if it doesn't exist yet", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+test("writeCheckpoint creates .harnesside/state/ if it doesn't exist yet", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
-    // no .llamacli directory exists at all in this fresh temp dir
+    // no .harnesside directory exists at all in this fresh temp dir
     await writeCheckpoint(dir, sample());
     const read = await readCheckpoint(dir);
     assert.ok(read);
@@ -52,7 +52,7 @@ test("writeCheckpoint creates .llamacli/state/ if it doesn't exist yet", async (
 });
 
 test("clearCheckpoint deletes the file so readCheckpoint returns null afterward", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     await writeCheckpoint(dir, sample());
     assert.ok(await readCheckpoint(dir));
@@ -64,7 +64,7 @@ test("clearCheckpoint deletes the file so readCheckpoint returns null afterward"
 });
 
 test("clearCheckpoint on a project with no checkpoint yet is a no-op, not an error", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
   try {
     await assert.doesNotReject(() => clearCheckpoint(dir));
   } finally {

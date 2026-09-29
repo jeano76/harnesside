@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 
-/** Other llamacli processes running in the same project directory.
+/** Other harnesside processes running in the same project directory.
  *
- *  Reported live: the user "restarted" llamacli, but the old process (whose
+ *  Reported live: the user "restarted" harnesside, but the old process (whose
  *  quit was still waiting on its running turn) kept going, and the session
  *  on screen was still the old build. Two sessions in one project also
  *  share the project's checkpoint and prompt-history files. Found by

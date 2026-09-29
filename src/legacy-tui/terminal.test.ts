@@ -47,14 +47,14 @@ test("win32 + ConEmuANSI=ON is ANSI-capable, but ConEmuANSI=OFF is NOT", () => {
   assert.equal(detectTerminal({ ConEmuANSI: "OFF" }, { ...TTY, platform: "win32" }).ansi, false);
 });
 
-test("LLAMACLI_NO_ANSI=1 and NO_COLOR win over every other signal", () => {
-  assert.equal(detectTerminal({ TERM: "xterm-256color", LLAMACLI_NO_ANSI: "1" }, TTY).ansi, false);
+test("HARNESSIDE_NO_ANSI=1 and NO_COLOR win over every other signal", () => {
+  assert.equal(detectTerminal({ TERM: "xterm-256color", HARNESSIDE_NO_ANSI: "1" }, TTY).ansi, false);
   assert.equal(detectTerminal({ TERM: "xterm-256color", NO_COLOR: "" }, TTY).colorDepth, 0);
 });
 
-test("LLAMACLI_FORCE_ANSI=1 forces ANSI on even without a TTY", () => {
+test("HARNESSIDE_FORCE_ANSI=1 forces ANSI on even without a TTY", () => {
   const caps = detectTerminal(
-    { LLAMACLI_FORCE_ANSI: "1" },
+    { HARNESSIDE_FORCE_ANSI: "1" },
     { stdoutIsTTY: false, stdinIsTTY: false, platform: "win32" }
   );
   assert.equal(caps.ansi, true);
@@ -88,8 +88,8 @@ test("no-color depth when ANSI is off entirely", () => {
   assert.equal(detectTerminal({ TERM: "dumb" }, TTY).colorDepth, 0);
 });
 
-test("LLAMACLI_COLOR_DEPTH overrides, accepting both naming conventions", () => {
-  const d = (v: string) => detectTerminal({ TERM: "xterm", LLAMACLI_COLOR_DEPTH: v }, TTY).colorDepth;
+test("HARNESSIDE_COLOR_DEPTH overrides, accepting both naming conventions", () => {
+  const d = (v: string) => detectTerminal({ TERM: "xterm", HARNESSIDE_COLOR_DEPTH: v }, TTY).colorDepth;
   assert.equal(d("0"), 0);
   assert.equal(d("4"), 4);
   assert.equal(d("16"), 4);
@@ -122,8 +122,8 @@ test("with no locale set, Unicode is assumed off Windows but on elsewhere", () =
   assert.equal(detectTerminal({ TERM: "xterm-256color" }, { ...TTY, platform: "win32" }).unicode, false);
 });
 
-test("LLAMACLI_ASCII=1 forces ASCII glyphs, and disables unicode even on win32+WT", () => {
-  const caps = detectTerminal({ WT_SESSION: "a", LLAMACLI_ASCII: "1" }, { ...TTY, platform: "win32" });
+test("HARNESSIDE_ASCII=1 forces ASCII glyphs, and disables unicode even on win32+WT", () => {
+  const caps = detectTerminal({ WT_SESSION: "a", HARNESSIDE_ASCII: "1" }, { ...TTY, platform: "win32" });
   assert.equal(caps.unicode, false);
 });
 
@@ -137,22 +137,22 @@ test("mouse is ON by default on a capable terminal, and OFF is reachable explici
   // trade-off that motivated turning it off never actually paid off either:
   // this app draws on the ALT SCREEN, which has no scrollback, so a native
   // drag had nothing to scroll to. The app now does its own selection with edge
-  // auto-scroll (see selection.ts). `/mouse` and LLAMACLI_MOUSE=0 still turn it
+  // auto-scroll (see selection.ts). `/mouse` and HARNESSIDE_MOUSE=0 still turn it
   // off for anyone who wants every mouse gesture handed to the terminal.
   assert.equal(detectTerminal({ TERM: "xterm-256color" }, TTY).mouse, true);
-  assert.equal(detectTerminal({ TERM: "xterm-256color", LLAMACLI_MOUSE: "0" }, TTY).mouse, false);
+  assert.equal(detectTerminal({ TERM: "xterm-256color", HARNESSIDE_MOUSE: "0" }, TTY).mouse, false);
 });
 
-test("LLAMACLI_MOUSE=1 turns it on where SGR is available", () => {
-  assert.equal(detectTerminal({ TERM: "xterm-256color", LLAMACLI_MOUSE: "1" }, TTY).mouse, true);
-  assert.equal(detectTerminal({ TERM: "xterm-256color", LLAMACLI_MOUSE: "0" }, TTY).mouse, false);
+test("HARNESSIDE_MOUSE=1 turns it on where SGR is available", () => {
+  assert.equal(detectTerminal({ TERM: "xterm-256color", HARNESSIDE_MOUSE: "1" }, TTY).mouse, true);
+  assert.equal(detectTerminal({ TERM: "xterm-256color", HARNESSIDE_MOUSE: "0" }, TTY).mouse, false);
 });
 
 test("mouse can never be enabled where the SGR encoding is unavailable", () => {
   // Legacy X10 mouse reports cannot be parsed by this app at all, so enabling
   // mouse there means the wheel is silently dead forever.
   for (const term of ["rxvt-unicode-256color", "linux", "vt100", "dumb"]) {
-    const caps = detectTerminal({ TERM: term, LLAMACLI_MOUSE: "1" }, TTY);
+    const caps = detectTerminal({ TERM: term, HARNESSIDE_MOUSE: "1" }, TTY);
     assert.equal(caps.mouseSgr, false, `${term} should not report SGR mouse support`);
     assert.equal(caps.mouse, false, `${term} must not enable mouse`);
   }
@@ -195,7 +195,7 @@ test("synchronized output and hyperlinks are only claimed from known terminals",
   const modern = detectTerminal({ TERM: "xterm-256color", TERM_PROGRAM: "WezTerm" }, TTY);
   assert.equal(modern.synchronizedOutput, true);
   assert.equal(modern.hyperlink, true);
-  assert.equal(detectTerminal({ TERM: "xterm-256color", LLAMACLI_NO_SMOOTH: "1" }, TTY).synchronizedOutput, false);
+  assert.equal(detectTerminal({ TERM: "xterm-256color", HARNESSIDE_NO_SMOOTH: "1" }, TTY).synchronizedOutput, false);
 });
 
 // ── sequence builders ───────────────────────────────────────────────────────
@@ -220,10 +220,10 @@ test("mouseOn/mouseOff are only emitted together, and disabling really disables"
   const on = buildSequences(detectTerminal({ TERM: "xterm-256color" }, TTY));
   assert.ok(on.mouseOn.includes("\x1b[?1000h"));
   assert.ok(on.mouseOn.includes("\x1b[?1006h"));
-  // LLAMACLI_MOUSE=0 is the escape hatch for a user who wants every mouse
+  // HARNESSIDE_MOUSE=0 is the escape hatch for a user who wants every mouse
   // gesture handed back to the terminal (native selection). It has to actually
   // turn the mode off, not merely decline to turn it on.
-  const off = buildSequences(detectTerminal({ TERM: "xterm-256color", LLAMACLI_MOUSE: "0" }, TTY));
+  const off = buildSequences(detectTerminal({ TERM: "xterm-256color", HARNESSIDE_MOUSE: "0" }, TTY));
   assert.equal(off.mouseOn, "");
   // mouseOff must still be emitted when the terminal *can* do SGR, so a
   // terminal whose mode we turned on and then disabled still gets cleaned up.
@@ -231,7 +231,7 @@ test("mouseOn/mouseOff are only emitted together, and disabling really disables"
 });
 
 test("the black background is a well-formed, terminated SGR on a truecolor terminal", () => {
-  // Requested directly: "llamacli 의 배경을 검은색으로 해줘".
+  // Requested directly: "harnesside 의 배경을 검은색으로 해줘".
   //
   // The termination is the whole assertion. This module's `csi()` helper does
   // NOT append the final byte — every other call site passes it in (`csi("?1049h")`)
@@ -252,7 +252,7 @@ test("the black background is a well-formed, terminated SGR on a truecolor termi
 
 test("a black background is only claimed on a terminal that can honour it", () => {
   // 16-colour: black is in every palette, so the SGR 40 fallback applies.
-  const sixteen = buildSequences(detectTerminal({ TERM: "xterm", LLAMACLI_COLOR_DEPTH: "4" }, TTY));
+  const sixteen = buildSequences(detectTerminal({ TERM: "xterm", HARNESSIDE_COLOR_DEPTH: "4" }, TTY));
   assert.ok(sixteen.backgroundOn.includes("\x1b[40m"));
   assert.ok(sixteen.backgroundOff.includes("\x1b[49m"), "and it can always be undone");
   // No colour at all: claiming a background would emit escapes into a terminal

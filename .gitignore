@@ -1,14 +1,20 @@
 node_modules/
 dist/
-.llamacli/state/
+.harnesside/state/
+.harnesside/models/
+.harnesside/versions/
 # Per-machine runtime config. The bootstrap (src/setup/) rewrites this on every
 # launch with values derived from the local GPU/VRAM/RAM — gpuLayers, threads,
 # contextSize, laya.port — so it is a property of the BOX, not of the project,
 # and committing it makes every user's machine share one machine's tuning.
-# `.llamacli/rules/` stays tracked: those are meant to be shared.
-.llamacli/config.yaml
+# `.harnesside/rules/` stays tracked: those are meant to be shared.
+.harnesside/config.yaml
 *.log
 .claude/
 __pycache__/
 *.pyc
 .venv/
+
+# 데몬 로그/체크포인트 (비영속)
+.harnesside/state/
+*.log

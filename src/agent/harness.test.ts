@@ -43,7 +43,7 @@ test("verifierFor uses built-in checks, lets config override or add, and can be 
 });
 
 test("runPostEditCheck reports OK for valid files and the real error for broken ones", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "llamacli-harness-"));
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-harness-"));
   try {
     const ok = join(dir, "ok.js");
     const bad = join(dir, "bad.js");

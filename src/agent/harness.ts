@@ -94,7 +94,7 @@ export function progressNudgeText(minutes: number, compactions: number): string 
 
 /** Per-extension check commands, keyed "*.ext". `{file}` is replaced with the
  *  quoted path. "json" is checked in-process. Projects can add or override
- *  entries with `verify.afterEdit` in .llamacli/config.yaml, or set it to
+ *  entries with `verify.afterEdit` in .harnesside/config.yaml, or set it to
  *  false to turn checks off. */
 export const DEFAULT_VERIFIERS: Record<string, string> = {
   "*.js": "node --check {file}",
