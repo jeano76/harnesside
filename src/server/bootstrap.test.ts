@@ -164,17 +164,28 @@ test("단계 5(예약 0)는 단계 7 의 튜닝 계산에 반영된다 — 700 M
   const s = await sandbox();
   try {
     await writeFile(join(s.models, "Ornith-1.5-35B-A3B-Q4_K_M.gguf"), "x".repeat(20 * 1024 * 1024));
+    // **llama 바이너리를 주입해야 한다.** 단계 [7] 은 `result.llama` 이 있을 때만
+    // tuning 을 계산하는데, 그 값은 `findLlamaServer` 가 **실제 머신**에서 찾는다.
+    // 이 머신엔 llama.cpp 가 빌드되어 있어 통과했고, 러너엔 없어서 tuning 이
+    // `undefined` 가 되었다 — **머신을 테스트한 것** 이었다(CI 에서 처음 드러남).
+    // `HARNESSIDE_LLAMA_SERVER` 는 그 탐색이 실제로 우선순위를 주는 변수다.
+    const fakeLlama = join(s.root, "fake-llama-server");
+    await writeFile(fakeLlama, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const r = await bootstrap({
       projectRoot: s.root,
       modelsDir: s.models,
       hardware: fakeHw(),
       probe: neverProbe,
+      env: { ...process.env, HARNESSIDE_LLAMA_SERVER: fakeLlama },
       skipLlamaSpawn: true,
     });
+    // 튜닝이 없으면 검증할 것이 없다. `?.` 로 조용히 undefined 가 되는 대신
+    // **없으면 실패** 로 만들어, "왜 없었나" 를 볼 수 있게 한다.
+    assert.ok(r.tuning, `튜닝이 없습니다 (단계: ${r.steps.map((s) => `${s.n}:${s.ok ? "ok" : "fail"}`).join(" ")})`);
     // off 모드이므로 "브라우저 VRAM 예약을 제외했다" 는 rationale 이 없어야 한다.
     // 있으면 브라우저 예산 0 인데도 빼앗는 계산 버그다.
-    const leaked = r.tuning?.rationale.some((x) => x.includes("브라우저 VRAM 예약"));
-    assert.equal(leaked, false, r.tuning?.rationale.join(" | "));
+    const leaked = r.tuning.rationale.some((x) => x.includes("브라우저 VRAM 예약"));
+    assert.equal(leaked, false, r.tuning.rationale.join(" | "));
   } finally {
     await s.cleanup();
   }

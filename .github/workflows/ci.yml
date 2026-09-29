@@ -101,41 +101,46 @@ jobs:
           seq 1 12 > /tmp/want.txt
           diff -u /tmp/want.txt /tmp/nums.txt && echo "12단계 순서 정상"
 
-      - name: TTY 없이 데몬 기동 → 상태 확인 → 종료
-        # 데몬 시나리오(§10.3): TTY 없이 뜨고, status 가 되고, down 으로 끝난다.
+      - name: spawn 경로 — **우리가 띄운 llama 는 함께 죽는다** (§4.4)
+        # 8080 을 비워 두고 데몬이 **직접 띄우게** 한다. 그래야 §4.4 의 요구
+        # ("창을 닫으면 llama 도 멈춘다")를 실제로 검증한다.
+        #
+        # 참고: 데몬 부팅에는 **adopt 경로가 아직 없다** — `src/setup/bootstrap.ts`
+        # (설치 경로) 에만 있다. 포트 충돌 시에는 **포트를 옮겨 새로 띄운다**.
+        # 그건 따로 다룬다(§4.4 는 "우리가 띄운" llama 에 대한 요구다).
         env:
-          HARNESSIDE_LLAMA_SERVER: /usr/bin/node
+          HARNESSIDE_LLAMA_SERVER: ${{ github.workspace }}/scripts/fake-llama-server.mjs
         run: |
+          kill -9 "$(cat /tmp/fake-llama.pid 2>/dev/null)" 2>/dev/null || true
+          sleep 1
           rm -f .harnesside/state/instance.lock
-          setsid npx tsx src/server/index.ts --no-browser < /dev/null > /tmp/daemon.log 2>&1 &
-          DPID=$!
+          setsid npx tsx src/server/index.ts --no-browser < /dev/null > /tmp/spawn.log 2>&1 &
+          SPID=$!
           for i in $(seq 1 90); do
-            if grep -q '\[12/12\]' /tmp/daemon.log; then break; fi
-            sleep 1
+            grep -q '\[12/12\]' /tmp/spawn.log && break; sleep 1
           done
-          if ! grep -q '\[12/12\]' /tmp/daemon.log; then
-            echo "데몬이 12단계에 도달하지 못했습니다"; tail -30 /tmp/daemon.log; exit 1
-          fi
-          echo "데몬 12/12 도달 (TTY 없음)"
-          # 로그가 **예상 순서**로 나왔는지 (§10.6)
+          grep -q '\[12/12\]' /tmp/spawn.log || { echo "데몬이 12단계에 못 도달"; tail -20 /tmp/spawn.log; exit 1; }
+          SPORT=$(grep -oE '포트 계획 — llama [0-9]+' /tmp/spawn.log | grep -oE '[0-9]+$' | head -1)
+          echo "llama 포트: $SPORT"
           # `grep -oE '[0-9]+'` 를 쓰면 `[1/12]` 에서 **1 과 12 를 둘 다** 뽑는다
           # (개수 `/12]` 쪽 숫자까지). 그래서 **대괄호 안의 앞 숫자만** 꺼낸다.
-          grep -oE '^\[[0-9]+' /tmp/daemon.log | tr -d '[' | sort -n > /tmp/dnums.txt
-          diff -u /tmp/want.txt /tmp/dnums.txt && echo "부팅 로그 순서 정상"
-          kill -TERM $DPID 2>/dev/null || true
-          sleep 5
-          kill -9 $DPID 2>/dev/null || true
+          grep -oE '^\[[0-9]+' /tmp/spawn.log | tr -d '[' | sort -n > /tmp/dnums2.txt
+          diff -u /tmp/want.txt /tmp/dnums2.txt && echo "부팅 로그 순서 정상"
+          # 우리가 띄운 서버가 실제로 그 포트에서 응답하는지
+          curl -sf --max-time 3 "http://127.0.0.1:${SPORT:-8080}/v1/models" > /dev/null \
+            && echo "스폰한 llama 가 응답합니다" || { echo "스폰한 llama 가 응답하지 않습니다"; exit 1; }
+          kill -TERM $SPID 2>/dev/null || true
+          sleep 6
+          kill -9 $SPID 2>/dev/null || true
           sleep 2
-          # 종료가 llama 를 **같이** 죽였는지 (§4.4).
-          # `pgrep -f llama-server` 로 재면 **이 셸 자신** 을 잡는다(명령 줄에 그 문자열이
-          # 있으니까) — 실제로 몇 번 그랬다. 판정 정본은 **포트** 다: 살아 있으면 응답한다.
+          # 판정 정본은 **포트** 다. `pgrep -f llama-server` 는 **이 셸 자신** 을 잡는다
+          # (명령 줄에 그 문자열이 있으니까) — 실제로 몇 번 그랬다.
           for i in $(seq 1 15); do
-            if ! curl -sf --max-time 2 http://127.0.0.1:8080/v1/models > /dev/null 2>&1 \
-               && ! curl -sf --max-time 2 http://127.0.0.1:8081/v1/models > /dev/null 2>&1; then
-              echo "종료 시 llama 포트 응답 없음 — 함께 정리됨"; break
+            if ! curl -sf --max-time 2 "http://127.0.0.1:${SPORT:-8080}/v1/models" > /dev/null 2>&1; then
+              echo "종료 시 llama 포트 응답 없음 — 함께 정리됨 (§4.4)"; break
             fi
             if [ "$i" -eq 15 ]; then
-              echo "데몬 종료 후 llama 포트가 여전히 응답합니다 (§4.4 위반)"; exit 1
+              echo "데몬 종료 후에도 llama 포트가 응답합니다 (§4.4 위반)"; exit 1
             fi
             sleep 1
           done

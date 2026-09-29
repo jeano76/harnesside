@@ -26,6 +26,18 @@ const GIT_ENV = {
   GIT_COMMITTER_NAME: "t",
   GIT_COMMITTER_EMAIL: "t@x",
 };
+// `pull()` 은 **자식 프로세스** 에서 git 을 돌리고 그쪽의 `process.env` 를 상속한다.
+// 여기서 설정한 git 정체성(GIT_AUTHOR_*) 이 없으면 병합 커밋을 쓸 때
+// "Author identity unknown" 으로 실패하고, 그 실패는 **충돌이 아니라 일반 오류** 로
+// 분류된다 — 그래서 CI 러너(git 전역 설정 없음)에서만 "충돌" assertion 이 깨졌다.
+// 테스트가 쓰는 git 과 코드가 쓰는 git 이 **같은 환경** 을 보도록 맞춘다.
+Object.assign(process.env, {
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@x",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@x",
+});
+
 const g = (cwd: string, ...a: string[]) => run("git", ["-C", cwd, ...a], { env: GIT_ENV });
 
 async function tmp() {

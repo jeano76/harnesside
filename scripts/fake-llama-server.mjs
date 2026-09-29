@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * 부팅 스모크 테스트용 **가짜 llama-server** (§10.6).
  *
