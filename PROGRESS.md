@@ -16,22 +16,30 @@
 ```yaml
 phase: P15          # 도메인 로직과 앱 셸 완료. 남은 것은 "연결" 과 "검증 자동화"
 status: in_progress
-last_commit: "2c2c6da dock-driven app shell + live window verification"
-next_action: "P12 §4.4 창 종료 → llama 종료 (S1~S5 각각 독립 검증). 그 다음 P14 · P15 나머지 · P16 CI"
+last_commit: "eeabe5a docs: first fully green CI run"
+next_action: "로직을 사용자 보이는 경로에 배선: P9 /api/workspace · P10 Think UI · P10.5 세션 저장 · P11 HF · P13 GitHub Releases"
 blocking: 없음
 verified_this_session:
-  - "npm test → 1051 pass / 0 fail (P0 525 → ... → P3 699 → P6 800 → 셸 1051)"
+  - "npm test → 1091 pass / 0 fail"
   - "npm run typecheck → exit 0"
-  - "npm run build → exit 0 (dist/packaged-web 10개 파일)"
-  - "grep -rni llamacli → 0건 · 혼합 문자(깨진 바이트/CJK) → 0건"
-  - "12단계 전부 동작, 창 열림, 콘솔 에러 0"
-  - "GPU: glRenderer=Disabled · opengl=disabled_off · webgl=disabled_off"
-  - "verify-window.mjs 13/13 통과 (실제 창을 CDP 로 구동해 검사)"
-  - "계측 실측: CPU 7.2% · RAM 12.2% · VRAM 29.2%(2363/8192 MiB) · GPU 32%/33°C/26W"
-  - "llama RSS 16.4 GiB · 컨텍스트는 0% 가 아니라 null(미측정)"
+  - "npm run build → exit 0"
+  - "CI **두 잡 모두 초록** (run 36604121100) — 선행 게이트 + 부팅 스모크"
+  - "부팅 스모크 실측: dry 12단계 순서 · 데몬 12단계 순서 · spawn → healthcheck 200 · 자가 종료 없음 · SIGTERM 후 llama 포트 응답 없음(§4.4)"
+  - "정적 검사 통과: 금지어 0(허용 예외 9건은 사유와 함께 출력) · 비밀 패턴 0 · 혼합 문자 0 · 커밋 금지 경로 0"
+  - "llama.cpp 를 PATH 에서 빼도 테스트 16/16 통과 — hermetic 확인"
+  - "verify-window.mjs 13/13 통과 (이전 세션, 실제 창을 CDP 로 구동)"
+  - "계측 실측(이전 세션): CPU 7.2% · RAM 12.2% · VRAM 29.2% · llama RSS 16.4 GiB · 컨텍스트 null"
   - "보안: 무토큰 /api/metrics 401 · ../../etc/passwd 403"
-  - "도킹 실측: 탐색기 → 상단 도크 클릭, 본체 행이 아래로 밀리고 중앙이 921→1181px 로 넓어짐"
+  - "도킹 실측(이전 세션): 본체 행 y=35→395 · 중앙 921→1181px"
 ```
+
+> 🚨 **알려진 결함 (CI 가 드러냄 · 미해결)**
+>
+> - **데몬 부팅에 adopt 경로가 없다.** `LlamaLauncher` 는 spawn 만 한다. 포트 충돌 시에는
+>   **포트를 옮겨 두 번째 모델을 띄운다** — 실측된 OOM(`cudaMalloc failed`) 과 같은 경로다.
+>   `src/setup/bootstrap.ts`(설치 경로)에만 adopt 가 있다. **결정 D8 이 부팅 경로에서 지켜지지 않는다.**
+> - **단계 [8] 은 서버가 아니라 모델 파일을 본다.** llama 를 띄우지 못해도 "준비됨" 으로 보인다.
+> - **P9~P13 는 로직만 있고 배선 안 됨.** 사용자가 누를 수 있는 경로가 없다.
 
 > ⚠️ **환경: llama.cpp 워치독은 모두 off (2026-09-29)**
 >
