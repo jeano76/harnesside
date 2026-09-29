@@ -22,6 +22,11 @@
 
 export const LLAMA_PORT = 8080;
 
+/** The web IDE's own HTTP + WebSocket port (부록 A). A second port because the
+ *  browser window and the model server are independent processes: killing or
+ *  moving one must not silently move the other. */
+export const IDE_PORT = 7317;
+
 /** Ports harnesside will probe for an already-running OpenAI-compatible server
  *  when a project has no config yet. The candidates are ORDERED and the first
  *  responder wins, so our own port leads: if harnesside is already serving, that
@@ -55,9 +60,10 @@ export const tcpPortProbe: PortProbe = async (port) => {
 
 export interface PortPlan {
   llamaPort: number;
+  idePort: number;
   /** Set when a port had to be moved, so the reason is reported rather than
    *  silently changing where the server lives between runs. */
-  moved: { what: "llama"; from: number; to: number; because: string }[];
+  moved: { what: "llama" | "ide"; from: number; to: number; because: string }[];
   notes: string[];
 }
 
@@ -74,6 +80,7 @@ export interface PortPlan {
 export async function planPorts(opts: {
   probe: PortProbe;
   llamaPort?: number;
+  idePort?: number;
 }): Promise<PortPlan> {
   const { probe } = opts;
   const moved: PortPlan["moved"] = [];
@@ -101,11 +108,41 @@ export async function planPorts(opts: {
     }
   }
 
-  return { llamaPort, moved, notes };
+  // The IDE port is planned on the same terms, and crucially it is *distinct*
+  // from the llama port: a plan that moved llama onto 7317 would hand the model
+  // server the browser's port and produce a failure that looks like a bug in the
+  // launcher rather than a port collision. The llama walk starts at +1 for the
+  // same reason — it must never land on IDE_PORT.
+  let idePort = opts.idePort ?? IDE_PORT;
+  if (idePort === llamaPort) {
+    const next = await firstFree(probe, IDE_PORT + 1, IDE_PORT + 20, llamaPort);
+    moved.push({
+      what: "ide",
+      from: idePort,
+      to: next,
+      because: `llama 포트(${llamaPort})와 겹쳐서 이동했습니다`,
+    });
+    idePort = next;
+  } else {
+    const ideState = await probe(idePort);
+    if (ideState === "in-use") {
+      const next = await firstFree(probe, idePort + 1, idePort + 20, llamaPort);
+      moved.push({ what: "ide", from: idePort, to: next, because: "이미 사용 중" });
+      idePort = next;
+    } else if (ideState === "unknown") {
+      notes.push(`IDE 포트 ${idePort} 응답 없음(방화벽) — 그대로 사용을 시도합니다.`);
+    }
+  }
+
+  return { llamaPort, idePort, moved, notes };
 }
 
-async function firstFree(probe: PortProbe, from: number, to: number): Promise<number> {
+/** First free port in [from, to], skipping `reserved` (the other service's
+ *  port). Returns `to` when the range is exhausted — the caller reports that as
+ *  a collision rather than pretending the port is free. */
+async function firstFree(probe: PortProbe, from: number, to: number, reserved?: number): Promise<number> {
   for (let p = from; p <= to; p++) {
+    if (p === reserved) continue;
     if ((await probe(p)) === "free") return p;
   }
   return to;

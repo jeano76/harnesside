@@ -16,7 +16,7 @@
 ```yaml
 phase: P1            # 현재 Phase
 status: in_progress   # not_started | in_progress | blocked | done
-last_commit: "P0 완료 커밋 (아래 ⑨ 참조)"
+last_commit: "8272ad4 (P0 완료)"
 next_action: "P1-1 src/server/ 뼈대 + 부트스트랩 12단계 상태 머신 (§3.2)"
 blocking: 없음
 verified_this_session:
@@ -137,4 +137,4 @@ verified_this_session:
 | # | 커밋 | 내용 | 검증 |
 |---|---|---|---|
 | 1 | `0a31e35` | `chore: fork from llamacli` + PROMPT.md 명세 + **PROGRESS.md 재개 원장** | 파일 114개 커밋 |
-| 2 | (다음 커밋에서 기입) | `refactor!: rename llamacli → harnesside, isolate TUI as legacy-tui` | `npm test` 525/0 · typecheck 0 · grep 0 |
+| 2 | `8272ad4` | `refactor!: rename llamacli → harnesside, isolate TUI as legacy-tui` | `npm test` 525/0 · typecheck 0 · grep 0 |
