@@ -14,20 +14,29 @@
 ## ① 현재 상태 (마지막 갱신: 2026-09-29)
 
 ```yaml
-phase: P1.5          # 현재 Phase (P0·P1 완료)
-status: not_started
-last_commit: "76eb72f (P1 완료)"
-next_action: "P1.5 §3.6 보안 경계 (토큰·Origin/Host·승인 게이트) — REST/WS 를 처음부터 토큰 필수로"
+phase: P1.5          # 현재 Phase
+status: in_progress
+last_commit: "0690ccc (P1.5-1~3 완료: 토큰·Origin/Host·HTTP 서버)"
+next_action: "P1.5-4 §6.4 설정 규약 (병합 우선순위·출처 표시·원자적 쓰기·마이그레이션)"
 blocking: 없음
 verified_this_session:
-  - "npm test → 555 pass / 0 fail (P0 525 → 신규 30)"
+  - "npm test → 582 pass / 0 fail (P0 525 → P1 +30 → P1.5 +27)"
   - "npm run typecheck → exit 0 · tsc -p tsconfig.server.json → exit 0"
-  - "grep -rni llamacli src scripts package.json tsconfig.json README.md .gitignore → 0건"
-  - "tsx src/server/index.ts --dry → 12단계 이름/순서 출력, 부수효과 0"
-  - "tsx src/server/index.ts --no-browser → TTY 없이 12단계 통과(1~8 실제 동작)"
-  - "실측: 두 번째 llama-server 는 321 MiB free 에서 cudaMalloc OOM → adopt 경로 필수"
-  - "SIGTERM → 체크포인트 → llama 종료 확인, orphan 없음, 사용자 원본 서버(8080) 무손상"
+  - "grep -rni llamacli → 0건"
+  - "tsx src/server/index.ts --daemon → TTY 없이 12단계, 단계 10(HTTP) 실제 기동"
+  - "실측(curl): 토큰 없는 /api/gpu → 401 · 공개 /api/health → 200 · 토큰 있으면 200"
+  - "실측(소켓): Host: evil.com → 403 · token.json 권한 600"
+  - "llama.cpp 정지 완료 — systemd llama-server.service disable, VRAM 7517 MiB free"
 ```
+
+> ⚠️ **환경 변경 (개발 착수 시 반드시 알아야 할 사실)**: 이 머신에는 `llama-server.service`
+> (systemd user) 가 llama.cpp 를 **자동 재시작**한다. `kill` 로 멈춰도 몇 분 안에 다시 뜬다.
+> harnesside 를 개발하려면 먼저 아래를 실행해 VRAM 을 비워야 한다.
+> 되돌리기: `systemctl --user enable --now llama-server.service cpulimit-llama.service`
+>
+> ```bash
+> systemctl --user disable --now llama-server.service cpulimit-llama.service
+> ```
 
 ## ② Phase 대시보드
 
