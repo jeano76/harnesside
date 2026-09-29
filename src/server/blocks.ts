@@ -77,7 +77,7 @@ function textOf(content: unknown): string {
 
 /**
  * 블록 저장소. 순서·버전·상한을 한 곳에서 관리한다.
- * "블록이 200개 쌓였는데 다 리렌더한다" 는一类의 버그를 여기서 막는다.
+ * "블록이 200개 쌓였는데 다 리렌더한다" 는 한 종류의 버그를 여기서 막는다.
  */
 export class BlockStore {
   private blocks = new Map<string, Block>();
