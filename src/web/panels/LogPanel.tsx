@@ -19,6 +19,8 @@ export interface LogPanelProps {
   onClear?: () => void;
   onSetLevel?: (level: LogLevel) => void;
   level: LogLevel;
+  /** 현재 필터가 왜 넓어졌는지 설명 (§5.12: "검색 중: debug 포함"). */
+  filterLabel?: string;
 }
 
 const ROW_H = 18;
@@ -74,7 +76,7 @@ const Row = memo(function Row({ e }: { e: LogEntry }) {
   );
 });
 
-export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, level }: LogPanelProps) {
+export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, level, filterLabel: filterLabelProp }: LogPanelProps) {
   const [filter, setFilter] = useState<string>("");
   const [sources, setSources] = useState<Set<LogSource>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
@@ -96,6 +98,9 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
 
   /** 검색 중인데 레벨 선택이 debug 가 아니면, 바닥이 완화됐음을 알려준다. */
   const relaxed = filter.trim().length > 0 && level !== "debug";
+  // 상위(셸)가 필터를 소유하면 그 설명을 우선한다 — 두 곳이 따로 계산하면
+  // "왜 debug 가 보이냐" 를 설명하는 문구가 서로 달라진다.
+  const shownFilterLabel = filterLabelProp ?? (relaxed ? `검색 중: 디버그 포함` : `레벨 ${level} 이상`);
 
   // 50ms 버퍼 + rAF 커밋: 새 줄이 와도 초당 20회 넘게 리렌더하지 않는다(§5.6 규칙 재사용).
   useEffect(() => {
@@ -187,6 +192,8 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
             지우기
           </button>
         )}
+        {/* 왜 이렇게 보이는지 설명한다 — 사용자가 추측하지 않아야 한다(§11.3). */}
+        <span style={{ fontSize: 10, color: "#6e7681", marginLeft: "auto" }}>{shownFilterLabel}</span>
       </div>
 
       <div ref={scrollRef} onScroll={onScroll} style={{ overflow: "auto", minHeight: 0, padding: "2px 0" }}>

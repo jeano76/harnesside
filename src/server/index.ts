@@ -27,6 +27,8 @@ import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
 import { safeListDir, safeReadFile, safeWriteFile } from "../fs/safePath.js";
 import { gitStatus, gitShowHead } from "./gitDiff.js";
+import { MetricsSampler } from "./metrics.js";
+import { WorkspaceWatcher } from "./fsWatcher.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -78,6 +80,20 @@ async function main(): Promise<number> {
   const ring = logging.ring;
   const mode: DaemonMode = flag("--daemon") ? "daemon" : "window";
 
+  // §5.5: 계측은 **서버가 1Hz 로 한 번만** 한다. 라우트는 마지막 샘플만 읽는다 —
+  // 요청마다 `nvidia-smi` 를 실행하면 계측 자체가 부하가 된다.
+  const metrics = new MetricsSampler();
+  // §5.2: 워크스페이스 파일 변경 감지. 자기 쓰기는 `self:true` 로 표시되어
+  // 사용자가 자기 저장을 "외부 변경" 으로 오해하지 않는다.
+  const fsWatcher = new WorkspaceWatcher({
+    root: projectRoot,
+    onChange: (e) => {
+      // 자기 쓰기가 아니라면 사용자에게 알린다 — 버퍼에 없는 파일의 외부 편집이다.
+      if (e.self || !e.path) return;
+      hub?.publish({ type: "fs.changed", path: e.path, kind: e.kind } as never);
+    },
+  });
+
   if (DRY) {
     const r = await bootstrap({ projectRoot, modelsDir, dryRun: true });
     for (const s of r.steps) emit(`${String(s.n).padStart(2)}. ${s.name}`);
@@ -113,6 +129,8 @@ async function main(): Promise<number> {
     if (watchdog) {
       watchdog.stop();
     }
+    metrics.stop();
+    await fsWatcher.stop().catch(() => {});
     if (hub) {
       await hub.close().catch(() => {});
       emit("[shutdown] WebSocket 종료 완료");
@@ -196,6 +214,11 @@ async function main(): Promise<number> {
         // 링에 새 항목이 들어올 때마다 WS 로 보낸다(중간 계층 없이).
         ring.onEntry((e) => hub!.publish({ type: "log.append", entry: e } as never));
         ring.onStatus((st) => hub!.publish({ type: "log.status", status: st } as never));
+        // §5.5: 계측 시작. 1Hz 로 한 번만 재고 WS 로 브로드캐스트한다.
+        // 라우트는 **계측하지 않고** 마지막 샘플만 읽는다(요청당 계측 금지).
+        metrics.start();
+        metrics.onSample((m) => hub?.publish({ type: "sys.metrics", metrics: m } as never));
+        fsWatcher.start();
         http = new HttpServer({
           token: tokenRec,
           port,
@@ -250,6 +273,12 @@ async function main(): Promise<number> {
             }
             return r.value;
           })
+          // §5.5 계측. **계측하지 않는다** — 마지막 샘플만 돌려준다.
+          .route("GET", "/api/metrics", () => ({
+            latest: metrics.ring.latest,
+            series: metrics.ring.series((m) => m.cpu.overall),
+            size: metrics.ring.size,
+          }))
           // §5.2 Git 변경 소스(HEAD ↔ 워킹트리). 실패는 "변경 없음" 과 구분해 말한다.
           .route("GET", "/api/git/status", async () => {
             const r = await gitStatus(projectRoot);

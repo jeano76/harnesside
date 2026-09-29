@@ -12,28 +12,21 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { cpus, freemem, totalmem, loadavg } from "node:os";
+// **정본은 shared** 다. 웹 UI 도 이 타입/순수 함수를 쓰는데, 서버 모듈에서 가져가면
+// 번들에 node:child_process 가 딸려 들어간다(실제로 웹 빌드가 실패했다).
+import {
+  severity,
+  bucket,
+  type CoreLoad,
+  type GpuInfo,
+  type MemInfo,
+  type DiskInfo,
+  type ContextInfo,
+  type Metrics,
+} from "../shared/metrics.js";
 
-export interface CoreLoad {
-  /** 코어별 사용률 %. 빈도 0(단일 코어 머신)일 때는 전체 사용률이 대신 온다. */
-  cores: number[];
-  overall: number;
-}
-
-export interface Metrics {
-  at: number;
-  cpu: CoreLoad;
-  mem: { totalBytes: number; freeBytes: number; usedBytes: number; usedPct: number; swapTotalBytes: number; swapFreeBytes: number };
-  /** nvidia-smi 를 못 읽었으면 null — 0 과 구분된다. */
-  gpu: { name: string; utilPct: number; tempC: number | null; powerW: number | null; memUsedMiB: number; memTotalMiB: number; memPct: number } | null;
-  /** 디스크(루트 파일시스템). */
-  disk: { totalBytes: number; freeBytes: number; usedPct: number };
-  /** llama.cpp 프로세스(있으면). */
-  llama: { rssBytes: number; threads: number } | null;
-  /** 컨텍스트 사용량 — 컴팩션 임박 표시의 근거(§5.5). */
-  context: { usedTokens: number; totalTokens: number; pct: number } | null;
-  /** 최근 토큰 속도(토큰/초). null 이면 "아직 측정 안 됨" 이지 0 이 아니다. */
-  tokensPerSec: number | null;
-}
+export { severity, bucket, SEVERITY_COLOR } from "../shared/metrics.js";
+export type { CoreLoad, GpuInfo, MemInfo, DiskInfo, ContextInfo, Metrics } from "../shared/metrics.js";
 
 export const SAMPLE_MS = 1000;
 /** 스파크라인용 링 크기 — §5.5 "최근 60초(120샘플)" 의 1Hz 기준 60 샘플 + 여유. */
@@ -41,19 +34,48 @@ export const RING_SIZE = 120;
 
 const STAT_FS = "/proc/stat";
 
-async function readCpu(): Promise<CoreLoad> {
+/** 코어의 누적 시간 스냅샷. 두 스냅샷의 **차이**로만 사용률을 낸다. */
+export interface CpuSnapshot {
+  total: number;
+  idle: number;
+  cores: { total: number; idle: number }[];
+  count: number;
+}
+
+export function readCpuSnapshot(): CpuSnapshot {
   const list = cpus();
   if (list.length === 0) {
-    // 컨테이너처럼 cpu 목록이 비어 있으면 전체도 못 잰다 — 0 이 아니라 빈 배열.
+    // 컨테이너처럼 cpu 목록이 비어 있으면 스냅샷도 없다 — 0 이 아니라 "없음" 다.
+    return { total: 0, idle: 0, cores: [], count: 0 };
+  }
+  const cores = list.map((c) => ({
+    total: Object.values(c.times).reduce((a, b) => a + b, 0),
+    // iowait 도 유휴다 — 빼지 않으면 "디스크 대기" 가 "이 코어 100% 부하" 로 보인다.
+    idle: c.times.idle + ((c.times as { iowait?: number }).iowait ?? 0),
+  }));
+  return {
+    total: cores.reduce((a, c) => a + c.total, 0),
+    idle: cores.reduce((a, c) => a + c.idle, 0),
+    cores,
+    count: cores.length,
+  };
+}
+
+/**
+ * 직전 스냅샷 대비 사용률 %.
+ *
+ * **누적값을 그대로 비율내면 부팅 이후의 평균이 나온다** — 조용한 서버가 "CPU 0%" 로
+ * 보이고, 3초 전 버스트가 사라진다. 부하가 "안 되는" 것처럼 보인다. 반드시 두
+ * 스냅샷의 차이를 써야 "지금" 이 나온다(요구 11).
+ */
+export function cpuUsageBetween(prev: CpuSnapshot | null, next: CpuSnapshot): CoreLoad {
+  if (!prev || prev.count !== next.count || next.count === 0) {
+    // 첫 샘플은 기준이 없다. **0 이 아니라 빈 배열**을 돌려 "아직 모른다" 를 알린다.
     return { cores: [], overall: 0 };
   }
-  // os.cpus() 는 호출마다 전체 시간을 누적给出的다(직전 호출 대비 차이로 계산).
-  // % 는 커널의 idle 기준이므로 idle+iowait 를 빼야 한다.
-  const cores = list.map((c) => {
-    const total = Object.values(c.times).reduce((a, b) => a + b, 0);
-    return { total, idle: c.times.idle };
-  });
-  return { cores: cores.map((c) => Math.max(0, Math.min(100, 100 * (1 - c.idle / Math.max(1, c.total))))), overall: 0 };
+  const pct = (dTotal: number, dIdle: number) => (dTotal <= 0 ? 0 : Math.max(0, Math.min(100, (100 * (dTotal - dIdle)) / dTotal)));
+  const cores = next.cores.map((c, i) => pct(c.total - prev.cores[i].total, c.idle - prev.cores[i].idle));
+  return { cores, overall: pct(next.total - prev.total, next.idle - prev.idle) };
 }
 
 async function readSwap(): Promise<{ totalBytes: number; freeBytes: number }> {
@@ -184,24 +206,44 @@ export interface SamplerDeps {
 
 export class MetricsSampler {
   private timer: NodeJS.Timeout | null = null;
-  private lastCpu: CoreLoad | null = null;
+  private prevCpu: CpuSnapshot | null = null;
   private inFlight = false;
+  private hooks: ((m: Metrics) => void)[] = [];
 
   constructor(
     public readonly ring = new MetricsRing(),
     private deps: SamplerDeps = {},
   ) {}
 
-  /** 한 번만 계측한다. 라우트는 이것을 부르지 않고 `ring.latest` 를 읽는다. */
+  /** 새 샘플이 나올 때마다 한 번 — WS 브로드캐스트용(§2.3 · §5.5). */
+  onSample(fn: (m: Metrics) => void): void {
+    this.hooks.push(fn);
+  }
+
+  /**
+   * 한 번만 계측한다. 라우트는 이것을 부르지 않고 `ring.latest` 를 읽는다.
+   *
+   * **한 프로브가 죽어도 나머지 계측은 산다.** nvidia-smi 가 예외를 던져(드라이버
+   * 재설치 중 등) 전체 샘플이 사라지면 모니터 패널이 통째로 멈춘다 — 사용자는
+   * "무슨 일이 있어?" 을 알 수 없다. 죽은 프로브만 null 이 되고 나머지는 값이 온다.
+   */
   async sample(): Promise<Metrics> {
-    const cpu = await readCpu();
-    this.lastCpu = cpu;
+    const snap = readCpuSnapshot();
+    const cpu = cpuUsageBetween(this.prevCpu, snap);
+    this.prevCpu = snap;
+    const safely = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await fn();
+      } catch {
+        return fallback;
+      }
+    };
     const total = totalmem();
     const free = freemem();
     const swap = await readSwap();
-    const gpu = await (this.deps.readGpu ?? readGpu)();
-    const disk = await readDisk(this.deps.diskPath ?? "/");
-    const llama = await (this.deps.readLlamaRss ?? readLlamaRss)();
+    const gpu = await safely(() => (this.deps.readGpu ?? readGpu)(), null);
+    const disk = await safely(() => readDisk(this.deps.diskPath ?? "/"), { totalBytes: 0, freeBytes: 0, usedPct: 0 });
+    const llama = await safely(() => (this.deps.readLlamaRss ?? readLlamaRss)(), null);
     const ctx = this.deps.context?.() ?? null;
     const m: Metrics = {
       at: Date.now(),
@@ -221,6 +263,14 @@ export class MetricsSampler {
       tokensPerSec: this.deps.tokensPerSec?.() ?? null,
     };
     this.ring.push(m);
+    // 훅이 예외를 던져도 샘플은 이미 링에 있다 — WS 팬아웃 실패가 계측을 죽이면 안 된다.
+    for (const h of this.hooks) {
+      try {
+        h(m);
+      } catch {
+        /* 한 구독자의 실패가 계측을 멈추게 두지 않는다 */
+      }
+    }
     return m;
   }
 
@@ -252,21 +302,6 @@ export class MetricsSampler {
   get running(): boolean {
     return this.timer !== null;
   }
-}
-
-/** 임계치 색상 (§5.5): 70/90. 색만 바꾸고 **점멸시키지 않는다**(눈부심·접근성). */
-export function severity(pct: number): "ok" | "warn" | "crit" {
-  if (pct > 90) return "crit";
-  if (pct >= 70) return "warn";
-  return "ok";
-}
-
-/**
- * 리렌더 버킷 (§5.5 "값의 버킷이 바뀔 때만 리렌더").
- * 1초마다 37.3% → 37.31% 로 흔들리는 DOM 을 다시 만들면 프레임 예산이 다 나간다.
- */
-export function bucket(pct: number, step = 0.1): number {
-  return Math.round(pct / step) * step;
 }
 
 export function loadAverage1(): number {
