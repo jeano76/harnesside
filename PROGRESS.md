@@ -11,34 +11,27 @@
 
 ---
 
-## ① 현재 상태 (마지막 갱신: 2026-09-29)
+## ① 현재 상태 (마지막 갱신: 2026-09-30)
 
 ```yaml
 phase: P15          # 도메인 로직과 앱 셸 완료. 남은 것은 "연결" 과 "검증 자동화"
 status: in_progress
-last_commit: "eeabe5a docs: first fully green CI run"
-next_action: "로직을 사용자 보이는 경로에 배선: P9 /api/workspace · P10 Think UI · P10.5 세션 저장 · P11 HF · P13 GitHub Releases"
+last_commit: "6f373cf fix(boot): adopt the running llama-server"
+next_action: "P12 §4.4 실측 — 부호 5개 + 창 X 를 각각 따로. 그 다음 P9/P10/P10.5/P11/P13 배선"
 blocking: 없음
 verified_this_session:
-  - "npm test → 1091 pass / 0 fail"
-  - "npm run typecheck → exit 0"
-  - "npm run build → exit 0"
-  - "CI **두 잡 모두 초록** (run 36604121100) — 선행 게이트 + 부팅 스모크"
-  - "부팅 스모크 실측: dry 12단계 순서 · 데몬 12단계 순서 · spawn → healthcheck 200 · 자가 종료 없음 · SIGTERM 후 llama 포트 응답 없음(§4.4)"
+  - "npm test → 1099 pass / 0 fail (adopt 테스트 8개 추가)"
+  - "npm run typecheck → exit 0 · npm run build → exit 0"
   - "정적 검사 통과: 금지어 0(허용 예외 9건은 사유와 함께 출력) · 비밀 패턴 0 · 혼합 문자 0 · 커밋 금지 경로 0"
-  - "llama.cpp 를 PATH 에서 빼도 테스트 16/16 통과 — hermetic 확인"
-  - "verify-window.mjs 13/13 통과 (이전 세션, 실제 창을 CDP 로 구동)"
-  - "계측 실측(이전 세션): CPU 7.2% · RAM 12.2% · VRAM 29.2% · llama RSS 16.4 GiB · 컨텍스트 null"
-  - "보안: 무토큰 /api/metrics 401 · ../../etc/passwd 403"
-  - "도킹 실측(이전 세션): 본체 행 y=35→395 · 중앙 921→1181px"
+  - "**adopt 경로 실측**(가짜 llama): 단계 6 이 8080 을 그대로 씀(이동 0) · 단계 7 '스폰하지 않음' · `llama-server 스폰` 0건 · 12/12 · SIGTERM 후 **채택 서버 살아 있음**"
+  - "**spawn 경로 실측**(회귀 확인): 스폰 → /v1/models 200 → SIGTERM 후 자식 함께 죽음"
+  - "이전 세션: CI 두 잡 모두 초록(run 36604121100) · verify-window.mjs 13/13 · 계측 CPU 7.2% · VRAM 29.2%"
 ```
 
-> 🚨 **알려진 결함 (CI 가 드러냄 · 미해결)**
+> 🚨 **알려진 결함 (미해결)**
 >
-> - **데몬 부팅에 adopt 경로가 없다.** `LlamaLauncher` 는 spawn 만 한다. 포트 충돌 시에는
->   **포트를 옮겨 두 번째 모델을 띄운다** — 실측된 OOM(`cudaMalloc failed`) 과 같은 경로다.
->   `src/setup/bootstrap.ts`(설치 경로)에만 adopt 가 있다. **결정 D8 이 부팅 경로에서 지켜지지 않는다.**
-> - **단계 [8] 은 서버가 아니라 모델 파일을 본다.** llama 를 띄우지 못해도 "준비됨" 으로 보인다.
+> - **단계 [8] 은 스폰 경로에서 서버가 아니라 모델 파일을 본다.** llama 를 띄우지 못해도
+>   "준비됨" 으로 보인다. (adopt 경로는 단계 6 의 탐지 결과로 판정하므로 **고쳐졌다**.)
 > - **P9~P13 는 로직만 있고 배선 안 됨.** 사용자가 누를 수 있는 경로가 없다.
 
 > ⚠️ **환경: llama.cpp 워치독은 모두 off (2026-09-29)**
@@ -61,7 +54,7 @@ verified_this_session:
 | Phase | 내용 | 상태 | 완료 검증 | 커밋 |
 |---|---|---|---|---|
 | **P0** | §1 복사·치환 | ☑ | `npm test` 555 pass/0 fail, `grep -rni llamacli` 0건 | `8272ad4` |
-| **P1** | llama-server 부트스트랩 + §3.2 [1]~[8] | ☑ | TTY 없이 12단계, adopt 실측, SIGTERM orphan 없음 | `7bae9c1` `76eb72f` |
+| **P1** | llama-server 부트스트랩 + §3.2 [1]~[8] | ☑ | TTY 없이 12단계, **adopt 실측(죽은 코드였음 · 6f373cf)**, SIGTERM orphan 없음 | `7bae9c1` `76eb72f` `6f373cf` |
 | **P1.5** | §3.6 보안 경계 + §6.4 설정 규약 | ☑ | 무토큰 401 · Host 위조 403 · 출처/원자적 쓰기 | `0690ccc` `8c482d3` `3efd6f8` |
 | **P2** | Chrome `--app` + §4.6 VRAM 예산 + **§4.7 GPU off** | ☑ | 창 렌더 · 라운드 14px · **GPU 비활성 확인** | `1393ed4` |
 | **P2.5** | §3.7 데몬 모드 + §5.12 로그 패널 | ☑ | TTY 없이 12단계 · 상한 500,000자 후 최신 유지 · `up/status/logs/down` | `7158db5` |
@@ -118,9 +111,12 @@ verified_this_session:
 > 로직만 있고 실행되지 않는 것은 "있는 기능" 이 아니다. 그래서 우선순위는 **사용자에게 보이는 경로** 다.
 
 1. **P12 — §4.4 창 종료 → llama 종료 실측.** S1~S5 를 **각각 따로** 재현한다.
-   - 부호 5개 + 창 X 를 **따로** 시도하고, 매번 `pgrep -af llama-server` 로 종료 확인.
-   - ⚠️ 두 번째 llama-server 는 OOM 난다(§12 결정 D). **adopt 되는 상황과 강제 종료 상황을 구분**해서 잰다.
+   - 부호 5개 + 창 X 를 **따로** 시도하고, 매번 **포트/HTTP** 로 종료 확인(`pgrep` 는 검증 셸 자신을 잡는다 — 표 21).
+   - ⚠️ 두 번째 llama-server 는 OOM 난다(§12 결정 D). adopt 는 **6f373cf 로 구현·실측**됐다.
+     adopt 된 서버는 **죽이면 안 된다**(사용자의 것). 강제 종료 상황과 **반대로** 검사한다.
    - daemon 모드에서는 창을 닫아도 llama 가 살아 있어야 한다 — 이게 §4.4 의 핵심이다.
+   - adopt 경로가 이제 있으므로 **adopt 상태와 spawn 상태를 나눠서** 잰다. 하나를 잴 때
+     다른 하나가 섞이면 "누가 죽였나" 를 알 수 없다.
 2. **P9/P10/P10.5/P11/P13 연결.**
    - 워크스페이스: `/api/workspace` + 확인 다이얼로그 + 컨텍스트 경계 문장 주입.
    - think: `reasoning_content` 델타를 블록으로, 스타일 스위치, 경고 문구.
@@ -159,6 +155,8 @@ verified_this_session:
 | 21 | P12 시그널 검증에서 **3개가 거짓 실패** (S2·S5 "안 죽음", S4 "죽음") | 판정을 `pgrep -f /llama-server` 로 했다 — **검증 셸 자신** 을 잡아 세 결과가 뒤집혔다(포트 8080 은 비어 있었다) | "살아 있는가" 의 판정 기준을 **리소스**(포트/HTTP)로 정한다. 프로세스 **이름** 은 위장된다 |
 | 22 | 저장소에 옛 이름 빌드 산출물(`bin/llamacli-dist.tar.gz`) 추적 중 | 포크에서 넘어옴. 치환 불변식을 위반하고 빌드 산출물이라 이유가 없음 | publish 전에 **무엇이 올라가는지** 본다 |
 | 23 | `doctor` 가 `/home/jeano/llama.cpp/...` 하드코딩 | 같은 탐색 규칙이 `findLlamaServer` 에 이미 있었는데 중복 구현 | 진단 도구와 부팅 경로는 **같은 규칙** 을 쓴다 |
+| 29 | 8080 에 살아 있는 llama-server 가 있는데 **8081 로 옮겨 두 번째 모델을 띄움** (실측 OOM). 주석은 "adopt 한다" 였다 | `tryAdopt(ports.llamaPort)` 은 `planPorts` 가 "**비어 있다고 확인한** 포트" 를 두드렸다 | **판정은 포트 결정보다 먼저** 다. 그 포트를 후보로 낸 이유가 "거기에 서버가 있다" 인데, 사용 중이라 옮기면 두 번째 서버가 된다. "있던 함수가 죽어 있었다" 는 **주석만으로는 안 보인다** — 순서로 드러나는 표식을 남기거나 테스트로 고정한다 |
+| 30 | 셸(`python3 -c`) 로 한국어 주석을 넣었더니 글자가 깨지고 `*/` 가 사라져 **파싱 에러** | 셸 명령을 지나는 길에 비ASCII 가 손상됨. `write`/`edit` 툴 경유는 멀쩡함 | 셸 heredoc 으로 한국어 주석을 넣지 않는다. **typecheck 이 파서를 잡아 준다** — 눈에 멀쩡해 보여도 문법이 깨진다 |
 
 ---
 
@@ -222,8 +220,12 @@ verified_this_session:
 
 - `llama-server` 를 **새로 띄우려면** 기존 것을 죽여야 한다(포트 8080 사용 중).
   죽이면 watchdog 이 되살릴 수 있다 — 유닛은 off 였지만 **실제로 한 번 되살아난 적이 있다**.
+- **adopt 로 죽이면 안 된다.** 8080 에 이미 서버가 있으면 그걸 **쓴다**(6f373cf).
+  새로 띄우려는 상황이면 그 서버는 사용자의 것이니 먼저 확인하고 죽인다.
 - 창을 닫으면 llama 가 죽는다(§4.4). 살아 있는 상태로 다루려면 `--daemon`.
 - 검증은 `rm -f .harnesside/state/instance.lock` 후 기동, 약 70초 대기(모델 로딩).
+  **수명 신호(누가 무엇을 죽이는가)만 볼 때는 `scripts/fake-llama-server.mjs` 로 대체한다** — 2초면 되고,
+  20GB 모델을 두 번 로드할 이유가 없다. 모델 품질을 검증하는 게 아니다.
 
 ---
 
@@ -231,6 +233,7 @@ verified_this_session:
 
 | 커밋 | 내용 |
 |---|---|
+| `6f373cf` | **adopt 경로 구현 + 실측** — 죽어 있던 `tryAdopt` 를 단계 [6] 의 탐지로 대체. 채택한 포트는 옮기지 않고, 채택한 서버는 스폰도 종료도 하지 않는다. CI 에 adopt 스텝 복원 |
 | `0d70467` | 첫 push — `jeano76/harnesside`, 205개 파일, 민감 파일 0 |
 | `2c2c6da` | 도킹 기반 앱 셸 + `verify-window.mjs` 13/13 (실측) |
 | `55f7c03` | 주석 혼합 문자 수정 |
@@ -269,10 +272,12 @@ verified_this_session:
   그래서 CI 는 `헬스체크: 준비 완료` 까지 봐야 한다.
 - **CI 에 모델이 없으면 spawn 경로를 못 검증한다.** `chooseModel` 은 파일 **존재** 만 본다
   (내용·크기 무관) → 4 KiB짜리 가짜 `.gguf` 하나로 충분하다.
-- **데몬 부팅에 adopt 경로가 없다.** `LlamaLauncher` 는 spawn 만 한다. 포트 충돌 시에는
-  **포트를 옮겨 두 번째 모델을 띄운다** — 실측된 OOM(`cudaMalloc failed`, 1476 MiB 요청 /
-  321 MiB 여유) 과 정확히 같은 경로다. `src/setup/bootstrap.ts`(설치 경로)에만 adopt 가 있다.
-  **D8 가 부팅 경로에서 지켜지지 않고 있다.** 미해결.
+- **데몬 부팅에 adopt 경로가 없었다** (→ `6f373cf` 로 해결). `LlamaLauncher` 는 spawn 만 했고,
+  포트 충돌 시에는 **포트를 옮겨 두 번째 모델을 띄웠다** — 실측된 OOM(`cudaMalloc failed`,
+  1476 MiB 요청 / 321 MiB 여유) 과 정확히 같은 경로. 원인은 `tryAdopt(ports.llamaPort)` 이
+  `planPorts` 가 "비어 있다고 확인한" 포트를 두드렸다는 것. **D8 가 부팅 경로에서 지켜지지 않았다.**
+- **adopt 경로 실측(가짜 llama)**: 채택 시 `스폰` 0건 · SIGTERM 후 **채택 서버 생존** ·
+  spawn 시 `/v1/models 200` · SIGTERM 후 **자식 사망**. 두 경우를 반대로 확인했다.
 
 ### 알아둘 것
 
@@ -292,6 +297,7 @@ verified_this_session:
 | # | 증상 | 원인 | 수정 | 회귀 테스트 |
 |---|---|---|---|---|
 | 28 | CI 러너가 `Missing X server or $DISPLAY` 로 죽음. 그런데 **창을 띄우지 말라고 넘겼다** | 단계 11 이 `NO_BROWSER` 를 **아예 보지 않았다**. 플래그 변수는 있었는데 그 변수를 쓰는 곳이 단계 11 뿐이었고, 그 안에서도 확인이 없었다. 즉 규칙이 **있었지만 아무도 지키지 않았다** | `src/server/browserIntent.ts` 로 "띄울까 말까" 를 **한 곳에** 모음. `index.ts` 는 `resolveBrowserIntent()` 결과만 씀. `--dry` 도 포함 (부수효과 0 의 정의상 창을 띄우면 거짓) | `browserIntent.test.ts` — 기본값 / 각 플래그 / `--dry` / 조합 / **부분 일치 거부**(`--nobrowser` 는 다른 플래그) + **구조 검사**: 단계 11 이 `new BrowserLauncher` **보다 먼저** `NO_BROWSER` 를 확인하는지 |
+| 29 | 8080 에 정상 llama-server 가 있는데도 **8081 로 옮겨 두 번째 모델을 띄웠다** — 실측 OOM 경로. `tryAdopt` 과 주석은 "adopt 한다" 고 했는데 **한 번도 실행된 적 없다** | `tryAdopt(ports.llamaPort)` 이 `planPorts` 가 "**비어 있다고 확인한** 포트" 를 두드렸다. **판정이 포트 결정보다 뒤에 있었다.** 순서를 뒤집으면 adopt 는 구조적으로 불가능하다 | 단계 [6] 을 "**탐지 → 포트 계획**" 으로. `planPorts` 에 `adoptedLlama` 을 넘겨 채택한 포트는 **옮기지 않는다**(옮긴 기록까지 거짓이면 부팅 로그가 사람을 속인다). 채택 시 스폰·튜닝 계산을 건너뛰고, **종료 때도 그 서버를 죽이지 않는다**(우리가 띄운 것만) | `bootstrap.adopt.test.ts` 8개 — 포트 유지 / 탐지 순서 / 이동 기록 없음 / 채택 표시가 스폰 경로에 새지 않음 / **모델 파일이 있어도 채택 우선**(OOM 회귀) / IDE 포트 예약 유지 / "주입이 없으면 진짜로 찾는다" 구조 검사. `hermetic.test.ts` — `src/server/*` 가 `detectServer` 를 "없음" 으로 주입하는지 |
 
 **왜 이 버그가 오래 남았나**: 규칙이 **플래그 변수 한 줄**로만 존재했다. 테스트할 수도,
 한 곳에서 규칙을 확인할 수도 없었다. "있는데 안 쓰이는" 규칙은 **없는 것보다 나쁘다** —
@@ -320,33 +326,34 @@ verified_this_session:
 
 ---
 
-## 🔴 미완성 작업이 stash 에 있음 — 새 세션이 먼저 읽어야 함
+## ✅ adopt 경로 구현 완료 (2026-09-30 · `6f373cf`)
 
-`git stash@{0}` 에 **작업 중인(컴파일 안 되는) 상태**가 들어 있다. 되돌리면 바로 이어서 할 수 있다.
+stash 에 있던 미완성 작업을 **끝냈다.** stash 는 비었다(드롭함).
 
-```bash
-git stash pop            # src/server/bootstrap.ts · src/setup/ports.ts
-npm run typecheck        # 지금은 pop 하지 않아야 통과함
-```
-
-**stash 의 상태 (pop 하면 typecheck 가 깨진다 — 이유가 여기 적혀 있다)**
-
-| 파일 | 한 것 | 남은 것 |
-|---|---|---|
-| `src/setup/ports.ts` | `PortPlan.adopted?: { port; model }` 추가 완료 | — |
-| `src/server/bootstrap.ts` | 단계 [6] 을 "**먼저 adopt 탐지 → 그다음 포트 계획**" 으로 고침. `adopted` 가 있으면 메시지에 "기존 서버를 채택" 표시 | ❌ `BootstrapDeps.detectServer` 시 Seam 없음<br>❌ `defaultDetectRunningServer` 정의 없음<br>❌ `COMMON_PORTS` import 없음<br>❌ 테스트 없음 |
-
-**핵심 발견 (이것이 이 작업의 이유)**
+**이 작업이 왜 이 지점에서最重要했나**
 `tryAdopt(ports.llamaPort)` 은 `planPorts` 가 **"비어 있다고 확인한 포트**" 를 다시 두드렸다.
 따라서 adopt 는 **닿을 수 없는 죽은 코드**였다. 실제로 8080 에 정상 llama-server 가 있어도
 **포트를 8081 로 옮겨 두 번째 모델을 띄웠다** — 실측 OOM 경로.
 주석에는 "§6.2 adopt 한다" 고 적혀 있었지만 실행되지 않았다. **주석과 코드가 다르다.**
 
-**덧붙일 것 (adopt 구현 시)**
-- adopt 한 서버는 **종료 시 죽이면 안 된다** (사용자의 것). spawn 한 것만 죽인다.
-- CI 에 adopt 경로 검사를 다시 넣을 수 있다 — 지난번 "adopt 경로가 없다" 고 해서 뺐는데,
-  이제 구현하므로 되돌린다. 두 경우를 **반대로** 검사해야 한다:
-  spawn 한 llama 는 죽는다 / adopt 한 llama 는 **산다**.
+**무엇을 바꿨는가 (자세한 내용은 `git show 6f373cf`)**
+
+| 파일 | 내용 |
+|---|---|
+| `src/setup/ports.ts` | `planPorts` 가 `adoptedLlama` 을 받는다 — 채택한 포트는 **옮기지 않고** `moved` 에도 거짓을 안 남김. 판정과 포트 결정이 **한 곳에** 있다 |
+| `src/server/bootstrap.ts` | 단계 [6] "탐지 → 포트 계획" 순서 · `detectServer` 시 Seam · 단계 [7] 스폰 안 함(튜닝도 안 계산) · 단계 [8] 채택을 준비로 인정 |
+| `src/server/index.ts` | 죽은 `tryAdopt()` 삭제 · adopt 분기 신설 · **채택 서버는 종료 시 안 죽임**(로그에 이유) · 워치독 생존 판정을 **포트/HTTP** 로 · `/api/system/version` 이 서버가 말한 모델명을 보고 |
+| `src/server/bootstrap.adopt.test.ts` | 8개 (포함: "**로컬에 모델이 있어도** 채택 우선" = OOM 회귀) |
+| `src/test/hermetic.test.ts` | `src/server/*` 부트스트랩 테스트는 `detectServer` 를 **"없음"으로** 주입해야 통과 |
+| `.github/workflows/ci.yml` | adopt 스텝 복원 — **두 경우를 반대로** 검사(spawn 한 llama 는 죽는다 / adopt 한 llama 는 산다) |
+
+**실측 (가짜 llama 로 두 경로 모두)**
+- adopt: 단계 6 이 8080 유지(이동 0) · `llama-server 스폰` 0건 · 12/12 · SIGTERM 후 **채택 서버 살아 있음**
+- spawn: 스폰 → `/v1/models 200` → SIGTERM 후 자식 함께 죽음 (회귀 없음)
+
+**남은 관련 항목**: adopt 경로의 **실제 20GB 모델** 실측은 안 했다(가짜 서버로 수명 신호만 검증).
+이건 모델 문제가 아니라 "누가 무엇을 죽이는가" 의 문제라 가짜로 충분하다고 봤다.
+진짜 모델로 다시 확인하고 싶으면 §⑧ 의 경고를 먼저 읽을 것.
 
 **이번 세션에서 이 밖의 것**
 - Tailscale 1.102.4 설치되어 있고 `tailscaled` 는 `active` + `enabled` + `Restart=on-failure`
