@@ -42,6 +42,9 @@ async function sandbox(): Promise<{ root: string; models: string; cleanup: () =>
 
 const neverProbe = async () => "free" as const;
 
+/** 진짜 서버 탐색은 주입한다. 안 주면 이 테스트가 "이 머신 8080" 을 검사한다. */
+const noServer = async () => null;
+
 test("12단계가 §3.2 의 번호·이름과 순서로 나열된다", async () => {
   const s = await sandbox();
   try {
@@ -83,6 +86,7 @@ test("모델이 없으면 뒤 단계도 멈추지 않는다 — 창은 떠야 �
       modelsDir: s.models,
       hardware: fakeHw(),
       probe: neverProbe,
+      detectServer: noServer,
       skipLlamaSpawn: true,
     });
     // 12단계가 모두 기록되었다 = 중단되지 않았다
@@ -111,6 +115,7 @@ test("설정에 적힌 모델 경로가 최우선이다", async () => {
       modelsDir: s.models,
       hardware: fakeHw(),
       probe: neverProbe,
+      detectServer: noServer,
       skipLlamaSpawn: true,
     });
     assert.equal(r.model?.path, chosen);
@@ -132,6 +137,7 @@ test("설정에 없으면 Ornith 계열이 점수와 무관하게 1순위다(§7
       modelsDir: s.models,
       hardware: fakeHw(),
       probe: neverProbe,
+      detectServer: noServer,
       skipLlamaSpawn: true,
     });
     assert.equal(r.model?.via, "priority-series");
@@ -150,6 +156,7 @@ test("카드에 여유가 없으면 브라우저 GPU 가 off 이고 예약은 0"
       modelsDir: s.models,
       hardware: fakeHw(), // free 285 MiB
       probe: neverProbe,
+      detectServer: noServer,
       skipLlamaSpawn: true,
     });
     assert.equal(r.gpu?.mode, "off");
@@ -176,6 +183,7 @@ test("단계 5(예약 0)는 단계 7 의 튜닝 계산에 반영된다 — 700 M
       modelsDir: s.models,
       hardware: fakeHw(),
       probe: neverProbe,
+      detectServer: noServer,
       env: { ...process.env, HARNESSIDE_LLAMA_SERVER: fakeLlama },
       skipLlamaSpawn: true,
     });
@@ -202,6 +210,7 @@ test("IDE 포트와 llama 포트가 겹치지 않는다(부록 A)", async () => 
       modelsDir: s.models,
       hardware: fakeHw(),
       probe,
+      detectServer: noServer,
       skipLlamaSpawn: true,
     });
     assert.ok(r.ports);
@@ -220,6 +229,7 @@ test("아직 구현되지 않은 단계는 '지났습니다'고 말하지 않는
       modelsDir: s.models,
       hardware: fakeHw(),
       probe: neverProbe,
+      detectServer: noServer,
       skipLlamaSpawn: true,
     });
     const tail = r.steps.filter((x) => x.n >= 9);
@@ -241,6 +251,7 @@ test("모든 단계에 소요 시간이 기록된다(느린 단계를 찾는 유
       modelsDir: s.models,
       hardware: fakeHw(),
       probe: neverProbe,
+      detectServer: noServer,
       skipLlamaSpawn: true,
     });
     for (const st of r.steps) {

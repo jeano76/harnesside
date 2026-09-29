@@ -15,11 +15,34 @@
 
 import { detectHardware, type Hardware } from "../setup/hardware.js";
 import { findLlamaServer, buildLlamaCpp, type LlamaLocation, type Run } from "../setup/llamaCpp.js";
-import { planPorts, tcpPortProbe, LLAMA_PORT, IDE_PORT, type PortProbe } from "../setup/ports.js";
+import {
+  planPorts,
+  tcpPortProbe,
+  LLAMA_PORT,
+  IDE_PORT,
+  COMMON_PORTS,
+  type PortProbe,
+  type PortPlan,
+  type AdoptedLlama,
+} from "../setup/ports.js";
 import { tuneForHardware, type LlamaTuning } from "../setup/tuning.js";
 import { decideGpuMode, type GpuDecision, type GpuMode } from "../setup/gpuPolicy.js";
+import { detectRunningServer } from "../backend/detect.js";
 import { chooseModel, type ModelChoice } from "./modelChoice.js";
 import { stat as fsStat } from "node:fs/promises";
+
+/**
+ * "이미 떠 있는 OpenAI 호환 서버" 를 찾는 함수형태.
+ *
+ * **주입하는 이유**: 기본값은 진짜로 127.0.0.1 을 두드린다. 테스트가 그걸 그대로 쓰면
+ * 그 테스트는 "이 머신의 8080 에 뭐가 떠 있나" 를 검증한다 — 로컬엔 조용히 있고
+ * 러unner에 뭐가 떠 있으면 경로가 달라진다(실제로 그렇게 CI 에서 뒤집혔다).
+ */
+export type DetectServer = (host: string, ports: number[]) => Promise<{ baseUrl: string; model: string } | null>;
+
+/** 기본 탐지기. setup(설치) 경로가 쓰는 것과 **같은 함수**다 —
+ *  "설치할 때 찾던 서버" 와 "부팅할 때 찾던 서버" 가 달라지면 안 된다. */
+const defaultDetectRunningServer: DetectServer = (host, ports) => detectRunningServer(host, ports);
 
 async function fileSize(p: string): Promise<number> {
   return (await fsStat(p)).size;
@@ -38,12 +61,13 @@ export interface BootstrapStep {
   pending?: boolean;
 }
 
-export interface PortPlanResult {
-  llamaPort: number;
-  idePort: number;
-  moved: { what: "llama" | "ide"; from: number; to: number; because: string }[];
-  notes: string[];
-}
+/**
+ * 포트 계획 결과. **정본은 `src/setup/ports.ts` 의 `PortPlan` 이다.**
+ *
+ * 여기서 같은 모양을 한 번 더 정의하면(모델이 바뀐 버그 #10 처럼) 어느 쪽이 진짜인지
+ * 알 수 없게 된다. 그래서 형(type)으로 가리킨다.
+ */
+export type PortPlanResult = PortPlan;
 
 export interface BootstrapDeps {
   run?: Run;
@@ -64,6 +88,11 @@ export interface BootstrapDeps {
   forcedGpuMode?: GpuMode;
   /** 설정에 기록된 포트(부록 A: llama / IDE 두 개). */
   ports?: { llamaPort?: number; idePort?: number };
+  /**
+   * 이미 떠 있는 서버를 찾는다(§6.2 adopt). **기본값은 진짜 localhost 를 두드린다.**
+   * 테스트는 반드시 주입한다 — 안 주면 테스트가 그 테스트가 도는 **머신** 을 검증한다.
+   */
+  detectServer?: DetectServer;
   /**
    * llama-server 를 실제로 스폰하지 않는다. 단계 [7]·[8] 의 플래그 계산만 검증할 때 쓴다
    * (테스트와 `--dry` 경로). P1-3 에서 index.ts 가 스폰을 연결한다.
@@ -312,22 +341,58 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   }
 
   // [6] 포트 계획 ------------------------------------------------------------
+  //
+  // **먼저 "이미 떠 있는 서버가 있나" 를 보고, 그다음에 포트를 정한다.**
+  //
+  // 순서를 뒤집으면 adopt 가 **구조적으로 불가능**해진다. `planPorts` 는 포트가
+  // free 일 때만 그대로 두므로, 그 결과로 받은 포트를 다시 물으면 당연히 답이 없다.
+  // 실제로 그랬다: `tryAdopt(ports.llamaPort)` 은 planPorts 가 "비어 있다고 확인한"
+  // 포트를 두드렸다. 그래서 8080 에 정상 llama-server 가 있어도 **8081 로 옮겨 두 번째
+  // 모델을 띄웠다** — 실측된 OOM(`cudaMalloc failed`, 1476 MiB 요청 / 321 MiB 여유) 과
+  // 정확히 같은 경로. 주석에는 "adopt 한다" 고 적혀 있었지만 **닿지 않는 코드** 였다.
+  //
+  // 판단은 주입 seam(`detectServer`)으로 한다. 실제로 localhost 를 두드려야 하고,
+  // 테스트가 그걸 하면 **이 머신에 뭐가 떠 있는지** 를 검증하게 된다.
+  let adoptedServer: AdoptedLlama | undefined;
   {
     const { value, seconds } = await timed(async () => {
-      const p = await planPorts({
+      const preferred = opts.ports?.llamaPort ?? LLAMA_PORT;
+      const detect = opts.detectServer ?? defaultDetectRunningServer;
+
+      // 설정된 포트가 먼저다, 그 다음 흔한 포트. 중복은 한 번만 — 같은 포트를 두 번
+      // 두들리면 "몇c 개를 보킼니다" 를 로그에서 셀 수 없는 모양입니다.
+      const candidates = [preferred, ...COMMON_PORTS.filter((p) => p !== preferred)];
+      const found = await detect("127.0.0.1", candidates);
+
+      if (found) {
+        // **옮기지 않는다.** 그 포트를 후보로 낸 이유가 "거기에 이미 서버가 있다" 이므로.
+        // 옮기면 우리가 띄울 두 번째 서버의 자리를 정하는 셈이고, 그 경로는 실측된 OOM
+        // 이다(1476 MiB 요청 / 321 MiB 여유). `moved` 에도 거짓을 남기지 않는다.
+        return planPorts({
+          probe: opts.probe ?? tcpPortProbe,
+          llamaPort: preferred,
+          idePort: opts.ports?.idePort ?? IDE_PORT,
+          adoptedLlama: { port: Number(new URL(found.baseUrl).port), model: found.model },
+        });
+      }
+
+      return planPorts({
         probe: opts.probe ?? tcpPortProbe,
-        llamaPort: opts.ports?.llamaPort ?? LLAMA_PORT,
+        llamaPort: preferred,
         idePort: opts.ports?.idePort ?? IDE_PORT,
       });
-      return p;
     });
     result.ports = value;
+    adoptedServer = value.adopted;
     record({
       n: 6,
       name: STEP_NAMES[5],
       ok: true,
-      detail: `llama ${value.llamaPort} · IDE ${value.idePort}` +
-        (value.moved.length ? ` (${value.moved.length}건 이동: ${value.moved.map((m) => m.what).join(",")})` : ""),
+      detail: adoptedServer
+        ? `llama ${value.llamaPort} · IDE ${value.idePort} — 기존 서버를 채택(${adoptedServer.model}). ` +
+            `두 번째 서버를 띄우지 않습니다: 8GiB 카드에서 두 개는 즉시 OOM 합니다(실측).`
+        : `llama ${value.llamaPort} · IDE ${value.idePort}` +
+          (value.moved.length ? ` (${value.moved.length}건 이동: ${value.moved.map((m) => m.what).join(",")})` : ""),
       tookSeconds: seconds,
       fatal: false,
     });
@@ -337,8 +402,12 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   {
     const t0 = Date.now();
     let detail = "dry";
-    let ok = false;
-    if (result.llama && result.model?.path && result.ports) {
+    if (adoptedServer) {
+      // **튜닝을 계산하지 않는다.** 그 숫자는 지금 실행되지 않을 프로세스의 플래그라서
+      // 보여주면 "이 플래그로 돈다" 고 읽힌다.
+      detail = `스폰하지 않음 — 기존 서버를 그대로 사용(${adoptedServer.model}:${adoptedServer.port}). ` +
+        `종료할 때도 이 서버는 죽이지 않습니다(우리가 띄운 것이 아닙니다).`;
+    } else if (result.llama && result.model?.path && result.ports) {
       result.tuning = hw
         ? tuneForHardware(hw, { modelBytes })
         : undefined;
@@ -350,10 +419,11 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         );
       }
       detail = `튜닝: ngl=${result.tuning?.gpuLayers} c=${result.tuning?.contextSize} t=${result.tuning?.threads}`;
-      ok = !opts.skipLlamaSpawn; // 실제 스폰은 index.ts(P1-3)에서 연결
     } else {
       detail = "선행 조건 미충족(llama binary 또는 모델 없음) — 스킵";
     }
+    // `ok` 는 늘 true 다. 단계 7 은 실패로 표시하지 않는다 — 모델이 없거나 스폰을
+    // 건너뛰어도 **창은 떠야 한다**(요구 9 의 degrade). "준비됐는가" 는 단계 8 이 말한다.
     record({
       n: 7,
       name: STEP_NAMES[6],
@@ -367,14 +437,19 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   // [8] 헬스체크 -------------------------------------------------------------
   {
     const t0 = Date.now();
-    result.llamaReady = !!result.llama && !!result.model?.path;
+    // 채택한 서버는 **이미** `/v1/models` 에 답했다 — 단계 6 의 탐지가 그 증거다.
+    // 그래서 로컬에 모델 파일이 없어도 준비된 상태다. 여기서 "모델 없음" 으로 기록하면
+    // 살아 있는 서버를 죽은 것으로 남기게 된다(요구 9 의 degrade 와 정반대).
+    result.llamaReady = !!adoptedServer || (!!result.llama && !!result.model?.path);
     record({
       n: 8,
       name: STEP_NAMES[7],
       ok: result.llamaReady,
-      detail: result.llamaReady
-        ? `모델 ${result.model!.path} 준비됨`
-        : "모델 서버 미기동 — 창은 계속 뜨고 '모델 연결 실패' 배너를 표시합니다",
+      detail: adoptedServer
+        ? `기존 서버 ${adoptedServer.model} 응답 확인(채택) — 스폰 없음`
+        : result.llamaReady
+          ? `모델 ${result.model!.path} 준비됨`
+          : "모델 서버 미기동 — 창은 계속 뜨고 '모델 연결 실패' 배너를 표시합니다",
       tookSeconds: (Date.now() - t0) / 1000,
       fatal: false,
     });

@@ -48,10 +48,29 @@ test("bootstrap 테스트는 llama 바이너리를 **주입**한다", async () =
 
 test("bootstrap 테스트는 **가짜 서버 탐지**를 주입한다", async () => {
   // 이걸 빠뜨리면 테스트가 8080 을 실제로 두드린다. 로컬엔 아무것도 없어서
-  // 조용히 통과하고, 러너에 뭐가 떠 있으면 "기존 서버 연결" 경로로 들어간다.
-  for (const f of ["src/setup/bootstrap.config.test.ts", "src/setup/bootstrap.order.test.ts"]) {
+  // 조용히 통과하고, 러너에 뭐가 떠 있으면 "기존 서버 채택" 경로로 들어간다.
+  //
+  // `src/server/bootstrap.test.ts` 는 단계 [6] 이 이제 **탐지부터** 하므로 더 위험하다.
+  // 주입 형태는 둘이다 — 매 호출에 `async () => null` 을 직접 넣거나,
+  // 파일 안의 별칭(`noServer`)을 쓴다. 어느 쪽이어도 "없음" 이라고 말해야 한다.
+  for (const f of [
+    "src/setup/bootstrap.config.test.ts",
+    "src/setup/bootstrap.order.test.ts",
+    "src/server/bootstrap.test.ts",
+    "src/server/bootstrap.adopt.test.ts",
+  ]) {
     const body = await src(f);
-    assert.match(body, /detectServer:\s*async \(\)\s*=>/, `${f} 가 detectServer 를 주입하지 않는다 — 진짜 네트워크를 본다`);
+    assert.match(body, /detectServer:/, `${f} 가 detectServer 를 주입하지 않는다 — 진짜 네트워크를 본다`);
+  }
+
+  // `src/server/` 쪽은 **"없음"** 을 말해야 한다. 이 파일들이 다루는 대상이 스폰 경로라서,
+  // 진짜 8080 에 뭐가 떠 있으면 조용히 채택 경로로 넘어가 **다른 것을** 검증한다.
+  // `src/setup/` 쪽은 반대다 — 거기가 바로 "이미 있는 서버" 를 주입하는 대상이다.
+  for (const f of ["src/server/bootstrap.test.ts", "src/server/bootstrap.adopt.test.ts"]) {
+    const body = await src(f);
+    const inline = /detectServer:\s*async \(\)\s*=>\s*null/.test(body);
+    const alias = /const\s+noServer\s*=\s*async \(\)\s*=>\s*null/.test(body);
+    assert.ok(inline || alias, `${f} 의 detectServer 가 "없음" 을 말하지 않는다 — 진짜 8080 을 채택할 수 있다`);
   }
 });
 

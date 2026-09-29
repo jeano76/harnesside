@@ -127,9 +127,9 @@ jobs:
         # 8080 을 비워 두고 데몬이 **직접 띄우게** 한다. 그래야 §4.4 의 요구
         # ("창을 닫으면 llama 도 멈춘다")를 실제로 검증한다.
         #
-        # 참고: 데몬 부팅에는 **adopt 경로가 아직 없다** — `src/setup/bootstrap.ts`
-        # (설치 경로) 에만 있다. 포트 충돌 시에는 **포트를 옮겨 새로 띄운다**.
-        # 그건 따로 다룬다(§4.4 는 "우리가 띄운" llama 에 대한 요구다).
+        # 8080 을 비우는 게 이제는 **필수** 다. 데몬 부팅이 "이미 떠 있는 서버" 를
+        # 먼저 찾기 때문에(§6.2 adopt), 8080 에 뭐가 있으면 **스폰하지 않는다**.
+        # 채택 경로는 바로 아래 스텝에서 따로 검증한다.
         env:
           HARNESSIDE_LLAMA_SERVER: ${{ github.workspace }}/scripts/fake-llama-server.mjs
           HARNESSIDE_MODELS_DIR: ${{ github.workspace }}/.ci-fake-models
@@ -192,6 +192,57 @@ jobs:
             sleep 1
           done
 
+      - name: adopt 경로 — **채택한 llama 는 살아남는다** (§6.2 · D8)
+        # 두 경우를 **반대로** 검사한다. 위 스텝은 "우리가 띄운 것은 죽는다" 를 봤으니,
+        # 여기는 "우리가 띄우지 않은 것은 죽이지 않는다" 를 본다.
+        #
+        # 이게 실제로 붙어 있어야 하는 이유: 예전엔 `tryAdopt(ports.llamaPort)` 라는
+        # 주석과 코드가 있었는데, 그 포트는 planPorts 가 "비어 있다고 확인한" 포트여서
+        # **닿을 수 없는 죽은 코드** 였다. 그래서 채택은 한 번도 실행되지 않았고,
+        # 포트를 옮겨 두 번째 모델을 띄웠다(실측 OOM). 주석에 있었다는 사실만으로는
+        # 없는 것보다 나쁘다 — 읽는 사람은 그 함수가 규칙 전체라고 믿는다.
+        run: |
+          node scripts/fake-llama-server.mjs --port 8080 > /tmp/adopt-llama.log 2>&1 &
+          echo $! > /tmp/adopt-llama.pid
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/v1/models > /dev/null && break; sleep 1
+          done
+          curl -sf --max-time 3 http://127.0.0.1:8080/v1/models > /dev/null || {
+            echo "채택 대상 서버를 띄우지 못했다"; cat /tmp/adopt-llama.log; exit 1; }
+          rm -f .harnesside/state/instance.lock
+          setsid npx tsx src/server/index.ts --no-browser < /dev/null > /tmp/adopt.log 2>&1 &
+          for i in $(seq 1 90); do
+            [ -s .harnesside/state/instance.lock ] && break; sleep 1
+          done
+          [ -s .harnesside/state/instance.lock ] || { echo "데몬이 락을 만들지 않았다"; tail -20 /tmp/adopt.log; exit 1; }
+          APID=$(head -1 .harnesside/state/instance.lock)
+          tr '\0' ' ' < "/proc/$APID/cmdline" 2>/dev/null | grep -q 'src/server/index.ts' \
+            || { echo "락의 pid $APID 가 서버가 아니다"; exit 1; }
+          for i in $(seq 1 60); do
+            grep -q '헬스체크: 채택한 서버 사용' /tmp/adopt.log && break; sleep 1
+          done
+          grep -q '기존 llama-server 를 채택했습니다' /tmp/adopt.log || {
+            echo "이미 떠 있는 서버를 채택하지 않았다 — 포트를 옮겨 두 번째 서버를 띄운다(실측 OOM 경로)";
+            tail -20 /tmp/adopt.log; exit 1; }
+          # 포트를 **옮기지 않았는지** 도 본다. 옮긴 흔적이 있으면 그것부터 고쳐야 한다.
+          grep -q '포트 계획 — llama 8080 — 기존 서버를 채택' /tmp/adopt.log || {
+            echo "단계 6 이 8080 을 유지하지 않았다"; tail -20 /tmp/adopt.log; exit 1; }
+          if grep -q 'llama-server 스폰' /tmp/adopt.log; then
+            echo "채택했는데 스폰했다 — 8GiB 카드에서 두 번째 서버는 즉시 OOM 한다"; exit 1
+          fi
+          kill -TERM $APID
+          sleep 8
+          kill -9 $APID 2>/dev/null || true
+          sleep 2
+          # 판정은 **포트** 다. 프로세스 이름은 위장된다(§④ 표 21).
+          if curl -sf --max-time 3 http://127.0.0.1:8080/v1/models > /dev/null 2>&1; then
+            echo "데몬이 종료했는데 채택한 llama 가 살아 있다 — 우리가 띄우지 않은 것을 죽이지 않는다 ✓"
+          else
+            echo "데몬이 채택한 llama 를 죽였다 — 사용자의 서버다"; exit 1
+          fi
+
       - name: 가짜 llama 정리
         if: always()
-        run: kill -9 "$(cat /tmp/fake-llama.pid 2>/dev/null)" 2>/dev/null || true
+        run: |
+          kill -9 "$(cat /tmp/fake-llama.pid 2>/dev/null)" 2>/dev/null || true
+          kill -9 "$(cat /tmp/adopt-llama.pid 2>/dev/null)" 2>/dev/null || true

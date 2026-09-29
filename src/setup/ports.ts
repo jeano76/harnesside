@@ -65,6 +65,34 @@ export interface PortPlan {
    *  silently changing where the server lives between runs. */
   moved: { what: "llama" | "ide"; from: number; to: number; because: string }[];
   notes: string[];
+  /**
+   * 이미 떠 있던 서버를 **채택**했으면 그 사실.
+   *
+   * 채택은 "포트를 정한 결과" 가 아니라 "**스폰하지 않았다**" 는 사실이라 `moved` 와
+   * 다르다. 이 표시가 있어야 호출자가 (a) 두 번째 서버를 띄우지 않고
+   * (b) 종료할 때 **남의 서버를 죽이지 않는다** 고 판단할 수 있다.
+   *
+   * 없으면 우리가 직접 띄운 서버다 — 이 구분이 없으면 사용자 서버까지 죽인다.
+   */
+  adopted?: { port: number; model: string };
+}
+
+/**
+ * 이미 떠 있는 OpenAI 호환 서버를 **채택**했을 때 넘긴다.
+ *
+ * 이게 없으면 `planPorts` 는 "포트가 사용 중이다" 만 보고 **옮겨 버린다.** 그런데 그
+ * 사용 중인 포트를 우리가 고른 이유가 바로 "**거기 이미 서버가 있다**" 이므로, 옮기면
+ * 두 번째 서버를 띄우게 된다 — 실측된 OOM(`cudaMalloc failed`, 1476 MiB 요청 /
+ * 321 MiB 여유) 과 정확히 같은 경로. 실제로 그랬다: 8080 에 정상 llama-server 가
+ * 있는데도 8081 로 옮겨 두 번째 모델을 띄웠다.
+ *
+ * 그래서 판정(adopt)과 포트 결정은 **같은 함수 안에서** 한다. 순서를 분리하면
+ * "이미 확인한 포트를 다시 두드리는" 죽은 코드가 된다 — 실제로 그랬다.
+ */
+export interface AdoptedLlama {
+  port: number;
+  /** 채택한 서버가 `/v1/models` 로 알려 준 모델 이름. */
+  model: string;
 }
 
 /**
@@ -81,30 +109,41 @@ export async function planPorts(opts: {
   probe: PortProbe;
   llamaPort?: number;
   idePort?: number;
+  /** 이미 떠 있는 서버를 채택했다면 그 포트. 있으면 **옮기지 않는다.** */
+  adoptedLlama?: AdoptedLlama;
 }): Promise<PortPlan> {
   const { probe } = opts;
   const moved: PortPlan["moved"] = [];
   const notes: string[] = [];
 
   let llamaPort = opts.llamaPort ?? LLAMA_PORT;
-  const llamaState = await probe(llamaPort);
-  if (llamaState === "free" || llamaState === "unknown") {
-    if (llamaState === "unknown") {
-      // Treated as usable: a firewall that DROPs the probe says nothing about
-      // whether the port is bindable, and refusing to start on that evidence
-      // would make harnesside fail on a locked-down network for no reason.
-      notes.push(`llama 포트 ${llamaPort} 응답 없음(방화벽) — 그대로 사용을 시도합니다.`);
-    }
+  if (opts.adoptedLlama) {
+    // **사용 중이라는 이유로 옮기지 않는다.** 그 포트를 고른 이유가 "거기에 서버가
+    // 이미 있다" 이기 때문이다. 옮기면 우리가 띄울 두 번째 서버의 포트를 정하는 셈이고,
+    // 그 경로는 실측된 OOM 이다. 여기서 `probe` 를 두드리지 않는 것도 같은 이유 —
+    // 답은 이미 알고 있다.
+    llamaPort = opts.adoptedLlama.port;
+    notes.push(`llama 포트 ${llamaPort}: 이미 떠 있는 서버를 채택(${opts.adoptedLlama.model}) — 포트를 옮기지 않습니다.`);
   } else {
-    // Occupied. Prefer 8080 itself if the caller merely inherited a stale value
-    // and our canonical port is free; otherwise walk forward.
-    if (llamaPort !== LLAMA_PORT && (await probe(LLAMA_PORT)) === "free") {
-      moved.push({ what: "llama", from: llamaPort, to: LLAMA_PORT, because: "기록된 포트가 사용 중이고 기본 포트가 비어 있음" });
-      llamaPort = LLAMA_PORT;
+    const llamaState = await probe(llamaPort);
+    if (llamaState === "free" || llamaState === "unknown") {
+      if (llamaState === "unknown") {
+        // Treated as usable: a firewall that DROPs the probe says nothing about
+        // whether the port is bindable, and refusing to start on that evidence
+        // would make harnesside fail on a locked-down network for no reason.
+        notes.push(`llama 포트 ${llamaPort} 응답 없음(방화벽) — 그대로 사용을 시도합니다.`);
+      }
     } else {
-      const next = await firstFree(probe, llamaPort + 1, llamaPort + 20);
-      moved.push({ what: "llama", from: llamaPort, to: next, because: "이미 사용 중" });
-      llamaPort = next;
+      // Occupied. Prefer 8080 itself if the caller merely inherited a stale value
+      // and our canonical port is free; otherwise walk forward.
+      if (llamaPort !== LLAMA_PORT && (await probe(LLAMA_PORT)) === "free") {
+        moved.push({ what: "llama", from: llamaPort, to: LLAMA_PORT, because: "기록된 포트가 사용 중이고 기본 포트가 비어 있음" });
+        llamaPort = LLAMA_PORT;
+      } else {
+        const next = await firstFree(probe, llamaPort + 1, llamaPort + 20);
+        moved.push({ what: "llama", from: llamaPort, to: next, because: "이미 사용 중" });
+        llamaPort = next;
+      }
     }
   }
 
@@ -134,7 +173,7 @@ export async function planPorts(opts: {
     }
   }
 
-  return { llamaPort, idePort, moved, notes };
+  return { llamaPort, idePort, moved, notes, adopted: opts.adoptedLlama };
 }
 
 /** First free port in [from, to], skipping `reserved` (the other service's
