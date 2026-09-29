@@ -3,7 +3,7 @@
  *
  * 특히 `resolveBinary` 를 검증한다 — 실제로 이 버그가 있었다: 기본 `exists` 구현이
  * `access()` 의 성공(undefined)을 "없음" 으로 읽어, 설치돼 있는 Chrome 을 못 찾았다.
- * "설치 안 됨" 경로를 테스트하지 않으면 이 类의 버그는 창이 안 뜨는 것으로만 드러난다.
+ * "설치 안 됨" 경로를 테스트하지 않으면 이 유형의 버그는 창이 안 뜨는 것으로만 드러난다.
  */
 
 import { strict as assert } from "node:assert";

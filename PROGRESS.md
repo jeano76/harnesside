@@ -14,22 +14,32 @@
 ## ① 현재 상태 (마지막 갱신: 2026-09-29)
 
 ```yaml
-phase: P2            # 현재 Phase (P0 · P1 · P1.5 완료)
+phase: P2.5          # 현재 Phase (P0 · P1 · P1.5 · P2 완료)
 status: not_started
-last_commit: "3efd6f8 (P1.5 완료: 토큰·Origin/Host·HTTP 서버·설계 약관)"
-next_action: "P2 §4.1 Chrome --app 기동 + §4.7 GPU off — vite 뼈대(dist/web)부터"
+last_commit: "P2 커밋 (아래 ⑨ 참조)"
+next_action: "P2.5 §3.7 데몬 명령계(up/down/status/logs/open) + §5.12 로그 싱글턴(logRing.ts)"
 blocking: 없음
 verified_this_session:
-  - "npm test → 595 pass / 0 fail (P0 525 → P1 +30 → P1.5 +40)"
+  - "npm test → 638 pass / 0 fail (P0 525 → P1 +30 → P1.5 +40 → P2 +43)"
   - "npm run typecheck → exit 0 · tsc -p tsconfig.server.json → exit 0"
   - "grep -rni llamacli → 0건 · 깨진 문자 → 0건"
-  - "tsx src/server/index.ts --daemon → TTY 없이 12단계, 1~8·10 실제 동작"
-  - "curl: 토큰 없는 /api/gpu → 401 · Bearer → 200 · X-Harnesside-Token → 200"
-  - "raw socket: Host: evil.com → 403 · token.json 0600"
-  - "curl /api/gpu → GPU 정책 + rationale + 실측값 노출"
-  - "curl /api/bootstrap → 12단계 + pending 표시 + 소요시간"
-  - "llama.cpp 정지 완료 — systemd disable, VRAM 7548 MiB free, 8080 비어 있음"
+  - "12단계 1~11 실제 동작 (12=P3), 데몬 TTY 없이"
+  - "Chrome 창 실측: 본문 954자 · 제목 harnesside · border-radius 14px · 콘솔 에러 0"
+  - "토큰이 URL 에서 제거됨: location.href = http://127.0.0.1:7317/ (token 없음)"
+  - "GPU: glRenderer=Disabled · opengl=disabled_off · nvidia-smi 에 chrome 항목 없음"
+  - "보안: 토큰 없는 /api/gpu → 401 · Host 위조 → 403 · 경로 탈출 내용 새지 않음"
 ```
+
+> ⚠️ **환경 변경 (개발 착수 시 반드시 알아야 할 사실)**: 이 머신에는 `llama-server.service`
+> (systemd user) 가 llama.cpp 를 **자동 재시작**한다. `kill` 로 멈춰도 몇 분 안에 다시 뜬다.
+> harnesside 를 개발하려면 먼저 아래를 실행해 VRAM 을 비워야 한다.
+> 되돌리기: `systemctl --user enable --now llama-server.service cpulimit-llama.service`
+>
+> ```bash
+> systemctl --user disable --now llama-server.service cpulimit-llama.service
+> ```
+```
+
 
 > ⚠️ **환경 변경 (개발 착수 시 반드시 알아야 할 사실)**: 이 머신에는 `llama-server.service`
 > (systemd user) 가 llama.cpp 를 **자동 재시작**한다. `kill` 로 멈춰도 몇 분 안에 다시 뜬다.
@@ -49,7 +59,7 @@ verified_this_session:
 | **P0** | §1 복사·치환. 이식 모듈 빌드/테스트 통과 | ☑ | `npm test` **555 pass/0 fail**, `grep -rni llamacli` **0건**, typecheck exit 0 | `8272ad4` |
 | **P1** | llama-server 부트스트랩 + §3.2 [1]~[8] | ☑ | TTY 없이 12단계 통과, adopt 실측 확인, SIGTERM 종료·orphan 없음 | `7bae9c1` `76eb72f` |
 | **P1.5** | §3.6 보안 경계(토큰·Origin/Host·HTTP) + §6.4 설정 규약 | ☑ | 토큰 없는 API 401 · Host 위조 403 · 0600 · 출처/원자적 쓰기 테스트 | `0690ccc` `8c482d3` `3efd6f8` |
-| P2 | Chrome `--app` + §4.6 VRAM 예산 + **§4.7 GPU off** | ☐ | 창 뜸, 라운드 확인, 30분 무 OOM, `glRenderer==="Disabled"` | — |
+| **P2** | Chrome `--app` + §4.6 VRAM 예산 + **§4.7 GPU off 정책** | ☑ | 창 렌더 954자 · 라운드 14px · **GPU 비활성 확인됨** · 토큰 URL 제거 | `1393ed4` |
 | P2.5 | **§3.7 데몬 모드 + §5.12 로그 패널** | ☐ | TTY 없이 12단계 부팅, 상한 500,000자 후 최신 줄 유지 | — |
 | P3 | WS 허브 + 레이아웃 골격 + 입력창 | ☐ | 브라우저 입력 → 서버 수신 → WS 응답 | — |
 | P4 | §5.6 블록 스트림 + §5.11 신규 도구 | ☐ | 블록 격리 렌더, 승인 게이트 실제 차단 | — |
@@ -116,24 +126,33 @@ verified_this_session:
 
 ## ④ 지금 바로 할 일 (재개 시 첫 번째 = 1번)
 
-> **P1.5 가 끝났다. 다음은 P2(Chrome 창 + §4.7 GPU off).**
-> P2 는 `dist/web` 번들이 필요하므로 **번들 뼈대가 먼저**다. 창을 띄우면서
-> "빈 화면"이 나오면 요구 8(라운드 모서리)·요구 3(에디터)을 검증할 수 없다.
+> **P2 가 끝났다. 다음은 P2.5(데몬 명령계 + §5.12 로그 패널).**
+> P2.5 는 P3(WS 허브) **직전**에 두는 게 가장 싸다 — WS 허브가 처음 생길 때
+> `log.append` 를 한 줄로 붙이는 것과 나중에 모든 이벤트에 로깅을 retrofit 하는 것은
+> 작업량이 10배 차이 난다(§12 순서 경고 3).
 
-1. **P2-1 `vite.config.ts` + `index.html` + `src/web/main.tsx`** — 최소 골격.
-   번들 산출물이 `dist/web/` 로 가고, 루트는 `/` , 알 수 없는 경로는 `index.html`.
-   검증: `npm run build:web` 가 `dist/web/index.html` 을 만든다.
-2. **P2-2 `src/server/browserFlags.ts`** — §4.1·§4.7 의 플래그를 **한 곳에서** 만든다.
-   검증(유닛, §10.2): `off` 에 `--disable-gpu`+`--disable-software-rasterizer` 포함 /
-   `--use-angle=swiftshader` 미포함 / **중복 키 0개** / `--no-sandbox` 미포함 /
-   `off`와 `budgeted` 플래그 **상호배타** / `?t=<token>` 이 URL 에 붙음.
-3. **P2-3 `src/server/browserLauncher.ts`** — 위 플래그로 Chrome 스폰.
-   검증: 창이 뜸 + CDP `/json/version` 로 붙음 + `glRenderer === "Disabled"` (§4.7.5).
-4. **P2-4 단계 11 을 `lateSteps[11]` 에 연결** — `browserFlags`/`browserLauncher` 결과가
-   부팅 로그에 "GPU off (확인됨)" 으로 남아야 한다(§4.7.5: 설정됨 ≠ 동작함).
+1. **P2.5-1 `src/server/logRing.ts`** — NDJSON 로그 싱글턴 + 상한 링(§5.12.2).
+   기본값: **500,000자 / 50,000줄 / 8 KiB 한 줄 절단**.
+   검증(유닛): 상한 초과 시 **오래된 것만** 버리고 **최신 줄은 절대 안 사라짐** ·
+   `sinceSeq` 재현 · 멀티바이트 문자 수 · 파싱 실패 줄 격리.
+2. **P2.5-2 `src/server/logWatcher.ts`** — `llama-server`/`chrome` 자식 로그를 링으로 tee.
+   지금 `index.ts` 의 `onLine` 이 곧 이 역할하므로 그 자리에 꽂는다.
+3. **P2.5-3 `harnesside` 명령계** — `up` `up -d` `open` `status` `logs [-f]` `down` `doctor`(§3.7.4).
+   검증: CI 에서 `up -d && status && down` 이 TTY 없이 통과(§10.3).
+4. **P2.5-4 로그 패널 UI** — `src/web/panels/LogPanel.tsx`. 가상 스크롤 필수(§5.12.3).
+   필터(소스 3종/레벨/검색) + "잘렸습니다" 배너 **1회만** + 자동 스크롤 토글.
 5. 각 단계마다 `npm test` + typecheck → 커밋 → **이 파일 갱신** → 다음 항목.
-6. P2 다음은 **P2.5(데몬 + §5.12 로그 패널)** — 그때 로그 싱글턴(`src/server/logRing.ts`)을
-   만들어야 P3(WS 허브)에서 바로 이벤트에 붙일 수 있다.
+6. P2.5 다음은 **P3(WS 허브 + 레이아웃 골격 + 입력창)**. 그때 로그 링을 WS 로 내보낸다.
+
+### P2 에서 실제로 겪은 버그 5건 (모두 수정·재현 확인)
+
+| # | 증상 | 근본 원인 | 교훈 |
+|---|---|---|---|
+| 1 | "브라우저 바이너리를 찾지 못했습니다" (설치는 되어 있음) | 기본 `exists` 가 `access()` 의 성공(`undefined`)을 **없음** 으로 읽음 | 성공/실패를 분기로 표현한다 |
+| 2 | GPU 비활성 **미확인** 으로 오판 | GPU 정보가 **초기화 중에는 빈 값** — 한 번 읽고 결론 | "판정 불가" ≠ "켜져 있음". 재시도 |
+| 3 | 창은 떴는데 빈 화면 | 서버가 **정적 자산을 서빙하지 않음** → `/` 404 → 앱 미실행 → 토큰도 안 지워짐 | "창이 떴다" 와 "내용이 나온다" 는 다르다 |
+| 4 | (3 이어서) 토큰이 URL 에 남음 | 정적 자산에도 토큰 요구 → HTML 은 `?t=` 로 뜨지만 **그 JS 는 401** | 토큰은 **데이터**(`/api/*`)를 지킨다, 앱 셸은 아니다 |
+| 5 | 없는 JS 자원이 403 | "루트 밖" 과 "파일 없음" 을 구분하지 않음 | 상태를 구분해서 표현한다 |
 
 ## ⑤ 환경 사실 (재측정 불필요 · 2026-09-29 실측)
 
@@ -193,3 +212,5 @@ verified_this_session:
 | 5 | `0690ccc` | `feat(auth): 토큰 + Origin/Host 가드 + 토큰 필수 HTTP 서버` | `npm test` **582**/0 · curl 401/403 실측 |
 | 6 | `8c482d3` | `feat(config): §6.4 설정 계약 (병합·출처·원자적 쓰기·마이그레이션)` | `npm test` **595**/0 (+13) |
 | 7 | `3efd6f8` | `fix(server): lateSteps 에 결과 전달 (단계 10 이 1~9 를 볼 수 있게)` | `/api/gpu`·`/api/bootstrap` 실측 확인 |
+| 8 | `1cc00a4` | `docs: P1.5 완료 기록 · llama.cpp 정지 · P2 대기열` | — |
+| 9 | `1393ed4` | `feat(web,P2): vite 골격 · GPU off 플래그 단일 출처 · Chrome 기동+검증` | `npm test` **638**/0 · 창 렌더·GPU 비활성 실측 |
