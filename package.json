@@ -1,0 +1,40 @@
+{
+  "name": "llamacli",
+  "version": "0.1.0",
+  "description": "Local llama.cpp AI coding agent CLI (OpenAI-compatible, self-healing, memory-compaction with auto-resume)",
+  "repository": "https://github.com/jeano76/llamacli",
+  "type": "module",
+  "bin": {
+    "llamacli": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/skills/builtin && cp src/skills/builtin/*.md dist/skills/builtin/ && chmod +x dist/index.js && node scripts/update-bin.mjs",
+    "dev": "tsx src/index.tsx",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "ink": "^4.4.1",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
+    "node-fetch": "^3.3.2",
+    "react": "^18.3.1",
+    "string-width": "^5.1.2",
+    "strip-ansi": "^7.2.0",
+    "wrap-ansi": "^9.0.2",
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/marked-terminal": "^6.1.1",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4",
+    "ws": "^8.21.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
