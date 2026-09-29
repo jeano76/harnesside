@@ -26,6 +26,7 @@ import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type Dae
 import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
 import { safeListDir, safeReadFile, safeWriteFile } from "../fs/safePath.js";
+import { gitStatus, gitShowHead } from "./gitDiff.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -249,7 +250,19 @@ async function main(): Promise<number> {
             }
             return r.value;
           })
-          // §5.12 로그 패널 급유. 폴링 경로(WS 가 기본).
+          // §5.2 Git 변경 소스(HEAD ↔ 워킹트리). 실패는 "변경 없음" 과 구분해 말한다.
+          .route("GET", "/api/git/status", async () => {
+            const r = await gitStatus(projectRoot);
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-a-repo" ? 400 : 500 });
+            return r.value;
+          })
+          .route("GET", "/api/git/head", async (c) => {
+            const p = c.query.get("path") || "";
+            const r = await gitShowHead(projectRoot, p);
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-a-repo" ? 400 : 500 });
+            return { path: p, content: r.value };
+          })
+          // §5.2 로그 패널 급유. 폴링 경로(WS 가 기본).
           .route("GET", "/api/logs", (c) => {
             const limit = Number(c.query.get("limit") ?? 500);
             const parseList = <T extends string>(v: string | null): T[] | undefined => {
