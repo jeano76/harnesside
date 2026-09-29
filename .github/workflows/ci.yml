@@ -1,0 +1,145 @@
+name: ci
+
+# §10.6: "나중에 돌리자" 가 되면 실제로는 영원히 안 돈다.
+# 선행 게이트는 **PR 마다** 돌고, E2E 는 nightly 로 돌린다(아래 이유).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 같은 브랜치에 새 커밋이 오면 이전 실행을 버린다(결과가 조용히 뒤섞이면 안 된다).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------- 선행 게이트
+  # 빠르고, 결정적이어야 한다. 이게 매 커밋마다 돌아야 "나중에 돌리자" 가 되지 않는다.
+  gate:
+    name: 선행 게이트 (typecheck · unit · build · 정적 검사)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Chrome 버전 고정 (§10.6)
+        # 스크린샷 회귀가 러너의 Chrome 마다 흔들리면 안 된다. 버전을 **기록**한다.
+        run: (google-chrome --version || chromium --version || chromium-browser --version || echo "없음") 2>&1 | tee chrome-version.txt
+
+      - name: 의존성 설치
+        run: npm ci || npm install
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: 단위 테스트
+        run: npm test
+
+      - name: 빌드 (서버 + 웹 자산 패키징)
+        # `pack-web-assets` 가 index.html 과 비밀 패턴을 검증한다 — 빌드가 곧 검사다.
+        run: npm run build
+
+      - name: 정적 검사 (금지어 · 비밀 · 혼합 문자 · 커밋 금지 경로)
+        run: node scripts/ci-checks.mjs
+
+      - name: 산출물 보존
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-version
+          path: chrome-version.txt
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- 부팅 스모크
+  # 머신당 1회/일 (§10.6). fake llama-server 로 12단계를 돌린다.
+  # **TTY 없이**(§3.7) — 그래야 데몬 모드가 깨졌을 때 잡힌다.
+  boot-smoke:
+    name: 부팅 스모크 (12단계 · TTY 없음)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci || npm install
+      - run: npx tsc -p tsconfig.server.json --noEmit
+
+      - name: 가짜 llama-server 기동 (백그라운드)
+        # 20 GB 모델을 CI 에 받을 수 없으므로 **가짜** 를 쓴다. 부팅 경로를
+        # 검증하는 것이 목적이지 모델을 검증하는 것이 아니다(파일 상단에 명시).
+        run: |
+          node scripts/fake-llama-server.mjs --port 8080 > /tmp/fake-llama.log 2>&1 &
+          echo $! > /tmp/fake-llama.pid
+          # 준비 완료를 **기다린다** — 곧바로 헬스체크를 하면 "아직 안 떴다" 로 오판하고,
+          # 실제로는 준비 대기 실패가 된다(속도 때문인 오류를 경로 문제로 본다).
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/v1/models > /dev/null; then
+              echo "가짜 llama 준비 완료 (${i}초)"; exit 0
+            fi
+            sleep 1
+          done
+          echo "가짜 llama 가 준비되지 않았습니다"; cat /tmp/fake-llama.log; exit 1
+
+      - name: 12단계 순서 검증 (TTY 없이)
+        # stdio 를 버린다 — **데몬** 이 TTY 없이 12단계를 끝까지 도는지 본다(§3.7).
+        run: |
+          rm -f .harnesside/state/instance.lock
+          timeout 120 npx tsx src/server/index.ts --dry < /dev/null > /tmp/dry.log 2>&1
+          cat /tmp/dry.log
+          test "$(grep -cE '^ ?[0-9]+\. ' /tmp/dry.log)" -eq 12 || {
+            echo "12단계가 모두 출력되지 않았습니다"; exit 1; }
+          # §3.2 순서는 손대면 회귀가 나기 쉽다 — 번호가 **연속적으로** 나오는지 확인한다.
+          grep -oE '^ ?[0-9]+\.' /tmp/dry.log | tr -d ' .' | sort -n > /tmp/nums.txt
+          seq 1 12 > /tmp/want.txt
+          diff -u /tmp/want.txt /tmp/nums.txt && echo "12단계 순서 정상"
+
+      - name: TTY 없이 데몬 기동 → 상태 확인 → 종료
+        # 데몬 시나리오(§10.3): TTY 없이 뜨고, status 가 되고, down 으로 끝난다.
+        env:
+          HARNESSIDE_LLAMA_SERVER: /usr/bin/node
+        run: |
+          rm -f .harnesside/state/instance.lock
+          setsid npx tsx src/server/index.ts --no-browser < /dev/null > /tmp/daemon.log 2>&1 &
+          DPID=$!
+          for i in $(seq 1 90); do
+            if grep -q '\[12/12\]' /tmp/daemon.log; then break; fi
+            sleep 1
+          done
+          if ! grep -q '\[12/12\]' /tmp/daemon.log; then
+            echo "데몬이 12단계에 도달하지 못했습니다"; tail -30 /tmp/daemon.log; exit 1
+          fi
+          echo "데몬 12/12 도달 (TTY 없음)"
+          # 로그가 **예상 순서**로 나왔는지 (§10.6)
+          # `grep -oE '[0-9]+'` 를 쓰면 `[1/12]` 에서 **1 과 12 를 둘 다** 뽑는다
+          # (개수 `/12]` 쪽 숫자까지). 그래서 **대괄호 안의 앞 숫자만** 꺼낸다.
+          grep -oE '^\[[0-9]+' /tmp/daemon.log | tr -d '[' | sort -n > /tmp/dnums.txt
+          diff -u /tmp/want.txt /tmp/dnums.txt && echo "부팅 로그 순서 정상"
+          kill -TERM $DPID 2>/dev/null || true
+          sleep 5
+          kill -9 $DPID 2>/dev/null || true
+          sleep 2
+          # 종료가 llama 를 **같이** 죽였는지 (§4.4).
+          # `pgrep -f llama-server` 로 재면 **이 셸 자신** 을 잡는다(명령 줄에 그 문자열이
+          # 있으니까) — 실제로 몇 번 그랬다. 판정 정본은 **포트** 다: 살아 있으면 응답한다.
+          for i in $(seq 1 15); do
+            if ! curl -sf --max-time 2 http://127.0.0.1:8080/v1/models > /dev/null 2>&1 \
+               && ! curl -sf --max-time 2 http://127.0.0.1:8081/v1/models > /dev/null 2>&1; then
+              echo "종료 시 llama 포트 응답 없음 — 함께 정리됨"; break
+            fi
+            if [ "$i" -eq 15 ]; then
+              echo "데몬 종료 후 llama 포트가 여전히 응답합니다 (§4.4 위반)"; exit 1
+            fi
+            sleep 1
+          done
+
+      - name: 가짜 llama 정리
+        if: always()
+        run: kill -9 "$(cat /tmp/fake-llama.pid 2>/dev/null)" 2>/dev/null || true

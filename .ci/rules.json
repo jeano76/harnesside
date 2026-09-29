@@ -1,0 +1,36 @@
+{
+  "$comment": "CI 검사 규칙의 데이터. 코드가 아니라 데이터여서, 검사 스크립트 자신이 금지어를 문자열 리터럴로 갖지 않게 된다(자기 참조로 자기 검사를 실패시키는 것을 막는다).",
+  "forbiddenNames": ["llamacli"],
+  "scope": {
+    "strict": [
+      "src/**",
+      "scripts/**",
+      "package.json",
+      "tsconfig*.json",
+      ".gitignore",
+      "README.md"
+    ],
+    "$comment": "strict 는 0건이어야 한다. migration 은 **이름 변경 작업의 대상** 이므로 예외로 두되, 예외는 조용히 무시하지 않고 검사 출력에 반드시 드러낸다.",
+    "migrationDocs": [
+      "PROMPT.md",
+      "PROGRESS.md",
+      "IMPROVEMENTS.md",
+      "MIGRATION_CHECKLIST.md",
+      "docs/multienv-acceptance-prompt.md",
+      "docs/multienv-acceptance-report.md"
+    ]
+  },
+  "nameExceptions": [
+    {
+      "path": "scripts/rename-identifiers.mjs",
+      "reason": "이름 치환 도구다. 소스 문자열로 옛 이름을 **입력으로 받아야** 존재할 수 있다."
+    }
+  ],
+  "secretExceptions": [
+    {
+      "path": "src/config/contract.test.ts",
+      "line": 180,
+      "reason": "findSecrets() 의 **가짜** 입력이다. 가짜를 넣지 않으면 그 테스트가 아무것도 못 검증한다. 실제 키가 아닌 점을 코드에서 확인 가능."
+    }
+  ]
+}
