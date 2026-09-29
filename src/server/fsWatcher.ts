@@ -56,16 +56,19 @@ export class WorkspaceWatcher {
   private externalMark: (path: string) => number;
   /** 큐에 올라간 종류 — 같은 파일이 add/change 로 두 번 오면 한 번만 보낸다. */
   private pendingKind = new Map<string, ChangeEvent["kind"]>();
+  /** 현재 감시 루트. 전환되면 바뀐다(§8.3). */
+  private currentRoot: string;
 
   constructor(private opts: FileWatcherOptions) {
     this.debounceMs = opts.debounceMs ?? 120;
     this.selfWindow = opts.selfWriteWindowMs ?? 1500;
     this.externalMark = opts.markSelfWrite ?? (() => 0);
+    this.currentRoot = opts.root;
   }
 
   start(): void {
     if (this.w) return;
-    this.w = watch(this.opts.root, {
+    this.w = watch(this.currentRoot, {
       ignoreInitial: true,
       ignored: this.opts.ignore ?? DEFAULT_IGNORED,
       // 폴더만 따라간다. **한 단계 위**로 새면 /home 을 순회한다.
@@ -77,6 +80,25 @@ export class WorkspaceWatcher {
     this.w.on("change", emit("change"));
     this.w.on("unlink", emit("unlink"));
     this.w.on("error", (e) => this.opts.onError?.(String(e)));
+  }
+
+  /**
+   * 감시 루트를 옮긴다(§8.3 워크스페이스 전환).
+   *
+   * 옮기고 **끄지 않는다** — 끄면 새 루트에서 파일이 바뀌어도 "변경됨" 이 영영 오지 않는다.
+   * 그리고 옛 루트의 이벤트는 **버린다**: 감시가 새 루트로 넘어가는 도중 도착한 옛 루트의
+   * 변경을 사용자에게 알리면 "이 파일이 왜 바뀌었지?" 가 된다.
+   */
+  setRoot(root: string): void {
+    if (root === this.currentRoot) return;
+    this.currentRoot = root;
+    this.timers.clear();
+    this.pendingKind.clear();
+    if (!this.w) return;
+    const w = this.w;
+    this.w = null;
+    void w.close().catch(() => undefined);
+    this.start();
   }
 
   private onEvent(kind: ChangeEvent["kind"], rawPath: string): void {
@@ -111,7 +133,7 @@ export class WorkspaceWatcher {
 
   private relativize(p: string): string | null {
     if (!p) return null;
-    const root = this.opts.root;
+    const root = this.currentRoot;
     const abs = isAbsolute(p) ? p : `${root}${sep}${p}`;
     const rel = relative(root, abs);
     // 루트 밖은 감시 대상이 아니다 — `..` 로 시작하면 버린다.

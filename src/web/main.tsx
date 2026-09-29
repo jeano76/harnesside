@@ -14,6 +14,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ApiClient, ApiError, type BootStep, type GpuInfo } from "./api.js";
 import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
+import { WorkspaceBar } from "./panels/WorkspaceBar.js";
+import type { WorkspaceFingerprint } from "../server/workspace.js";
 import { MonitorPanel } from "./panels/MonitorPanel.js";
 import { DiffPanel } from "./editor/DiffPanel.js";
 import { planOpen, formatBytes } from "./editor/model.js";
@@ -220,12 +222,77 @@ export default function App() {
   }, []);
   const [layout, setLayout] = useState(DEFAULT_LAYOUT);
   const [monitorCollapsed, setMonitorCollapsed] = useState(false);
+  // §8.3 워크스페이스. **헤더에 항상** 루트를 보여야 한다 — 도구가 어디에 쓰는지
+  // 모르는 상태로 일하게 두지 않는다.
+  const [workspace, setWorkspace] = useState<WorkspaceFingerprint | null>(null);
+  const [tree, setTree] = useState<{ name: string; kind: "dir" | "file"; size: number }[] | null>(null);
+
+  /** 열린 탭 목록 — 전환 계획을 서버에 보낼 때 필요하다(탭이 새 루트 밖에 있으면 닫혀야 한다). */
+  const openTabs = useMemo(() => (openFile ? [openFile.path] : []), [openFile]);
 
   const pushToast = useCallback((t: Toast) => {
     setToasts((prev) => [t, ...prev.filter((x) => x.id !== t.id)].slice(0, 5));
   }, []);
 
-  // 부팅 상태 폴링
+  const loadTree = useCallback(async () => {
+    try {
+      const t = await client.get<{ entries: { name: string; kind: "dir" | "file"; size: number }[] }>("/api/fs/tree?path=.");
+      setTree(t.entries);
+    } catch (e) {
+      // **빈 배열이 아니라 실패를 보인다.** 탐색기가 조용히 비면 "폴더가 비었다" 로 읽힌다.
+      setTree(null);
+      pushToast({
+        id: "tree:error",
+        kind: "error",
+        title: "탐색기를 읽지 못했습니다",
+        body: e instanceof ApiError ? e.message : String(e),
+        at: Date.now(),
+        ttlMs: 10_000,
+        requiresAck: false,
+        source: "fs",
+      });
+    }
+  }, [pushToast]);
+
+  const openFileByPath = useCallback(async (path: string) => {
+    try {
+      const f = await client.get<{ path: string; content: string; version: number; size: number }>(
+        `/api/fs/file?path=${encodeURIComponent(path)}`
+      );
+      setOpenFile(f);
+    } catch (e) {
+      pushToast({
+        id: `open:${path}`,
+        kind: "error",
+        title: "파일을 열지 못했습니다",
+        body: `${path} — ${e instanceof ApiError ? e.message : String(e)}`,
+        at: Date.now(),
+        ttlMs: 10_000,
+        requiresAck: false,
+        source: "fs",
+      });
+    }
+  }, [pushToast]);
+
+  // 부팅 상태 폴링 + 워크스페이스 지문
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const w = await client.get<{ current: WorkspaceFingerprint }>("/api/workspace");
+        if (!alive) return;
+        setWorkspace(w.current);
+      } catch (e) {
+        if (!alive) return;
+        setError(e instanceof ApiError ? e.message : String(e));
+      }
+      await loadTree();
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [loadTree]);
+
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -270,6 +337,25 @@ export default function App() {
           const m = (ev.metrics ?? null) as Metrics | null;
           setMetrics(m);
           if (m) setMetricSeries((prev) => [...prev, m.cpu.overall].slice(-120));
+        } else if (ev.type === "workspace.changed") {
+          // 다른 곳(팔레트·다른 창)에서 루트가 바뀌었다. 화면을 **모으지 않으면** 사용자는
+          // 옛 폴더에 계속 쓰게 된다.
+          const change = ev.change as { to?: WorkspaceFingerprint; switchPlan?: { warnings?: string[] } } | undefined;
+          if (change?.to) setWorkspace(change.to);
+          setOpenFile(null); // 열린 파일은 새 루트 밖에 있을 수 있다 — 닫고 다시 고른다
+          void loadTree();
+          for (const w of change?.switchPlan?.warnings ?? []) {
+            pushToast({
+              id: `ws:${w.slice(0, 12)}`,
+              kind: "warn",
+              title: "워크스페이스가 바뀌었습니다",
+              body: w,
+              at: Date.now(),
+              ttlMs: 15_000,
+              requiresAck: false,
+              source: "workspace",
+            });
+          }
         } else if (ev.type === "fs.changed") {
           // 자기 쓰기가 아니므로 외부 편집이다 — 사용자에게 **왜** 알리는지 말해야 한다.
           const p = String(ev.path ?? "");
@@ -361,7 +447,54 @@ export default function App() {
    * 사용자는 "어디로 옮긴 거지?" 하고 헤더만 찾게 된다.
    */
   const BODY: Partial<Record<PanelId, React.ReactNode>> = {
-    explorer: <Empty title="열린 파일이 없습니다" hint="탐색기에서 파일을 여세요. 경로는 워크스페이스 루트 아래로만 제한됩니다." />,
+    explorer: (
+      <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {/* 루트를 바꾼 뒤에도 **무엇이 바뀌었는지**가 보인다 — 지문을 여기서 읽는다. */}
+        <div style={{ padding: "4px 8px", borderBottom: `1px solid ${BORDER}`, color: DIM, fontSize: 10 }}>
+          {workspace ? (
+            <>
+              {workspace.kind.map((k) => k).join("/")} · 규칙 {workspace.rules.length}개
+              {workspace.packageManager ? ` · ${workspace.packageManager}` : ""}
+              {workspace.buildHint ? ` · 빌드: ${workspace.buildHint}` : ""}
+            </>
+          ) : (
+            "지문 계산 중"
+          )}
+        </div>
+        {tree === null ? (
+          <Empty title="탐색기를 읽지 못했습니다" hint="워크스페이스 경로와 권한을 확인하세요." actions={[{ label: "다시 시도", onClick: () => void loadTree() }]} />
+        ) : tree.length === 0 ? (
+          <Empty title="빈 폴더입니다" hint={`${workspace?.root ?? ""} 에 파일이 없습니다.`} />
+        ) : (
+          <ul style={{ listStyle: "none", margin: 0, padding: 4 }}>
+            {tree.map((e) => (
+              <li key={e.name}>
+                <button
+                  type="button"
+                  onClick={() => (e.kind === "file" ? void openFileByPath(e.name) : void loadTree())}
+                  disabled={e.kind === "dir"}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    background: "none",
+                    border: 0,
+                    color: e.kind === "dir" ? FG : DIM,
+                    padding: "2px 6px",
+                    cursor: e.kind === "file" ? "pointer" : "default",
+                    font: "inherit",
+                    fontSize: 11,
+                  }}
+                >
+                  {e.kind === "dir" ? "▸ " : "· "}
+                  {e.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    ),
     agent: (
       <Empty
         title="아직 메시지가 없습니다"
@@ -422,6 +555,31 @@ export default function App() {
       {/* 상단 바 */}
       <header style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, padding: "0 10px", borderBottom: `1px solid ${BORDER}`, background: "#161b22" }}>
         <strong>harnesside</strong>
+        {/* 지금 어디에 쓰고 있는지 — **항상** 보인다(§8.3). */}
+        <WorkspaceBar
+          client={client}
+          current={workspace}
+          openTabs={openTabs}
+          onError={(m) => {
+            setError(m);
+            pushToast({ id: "ws:error", kind: "error", title: "워크스페이스 전환 실패", body: m, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "workspace" });
+          }}
+          onSwitched={({ to }) => {
+            setWorkspace(to);
+            setOpenFile(null);
+            void loadTree();
+            pushToast({
+              id: "ws:switched",
+              kind: "info",
+              title: "워크스페이스를 바꿨습니다",
+              body: `${to.name} — 도구 호출 기준도 여기로 바뀝니다.`,
+              at: Date.now(),
+              ttlMs: 10_000,
+              requiresAck: false,
+              source: "workspace",
+            });
+          }}
+        />
         <span style={{ color: DIM }}>{modelName ?? "모델 미연결"}</span>
         {steps && <span style={{ color: DIM }}>부팅 {bootDone}/{steps.length}</span>}
         {full && <span style={{ color: full.color, fontSize: 11 }} title="로그 상한">{full.text}</span>}

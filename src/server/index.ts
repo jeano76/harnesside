@@ -30,6 +30,7 @@ import { safeListDir, safeReadFile, safeWriteFile } from "../fs/safePath.js";
 import { gitStatus, gitShowHead } from "./gitDiff.js";
 import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
+import { WorkspaceService } from "./workspaceService.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -95,6 +96,23 @@ async function main(): Promise<number> {
   // §5.5: 계측은 **서버가 1Hz 로 한 번만** 한다. 라우트는 마지막 샘플만 읽는다 —
   // 요청마다 `nvidia-smi` 를 실행하면 계측 자체가 부하가 된다.
   const metrics = new MetricsSampler();
+  // §8.3 워크스페이스 — **살아 있는 루트** 를 들고 있다. 경로 API 는 상수를 쓰지 않고
+  // 여기서 읽는다. 전환은 확인을 거치고, 전이는 실패해도 이전 상태를 보존한다.
+  const workspace = new WorkspaceService({
+    root: projectRoot,
+    onChange: (e) => {
+      // 감시 루트도 같이 옮긴다. 옛 루트를 계속 감시하면 "변경됨" 알림이 엉뚱한
+      // 파일에 대해 울린다(§5.2).
+      fsWatcher.setRoot(e.to.root);
+      hub?.publish({ type: "workspace.changed", change: e } as never);
+      ring.info("lifecycle", `워크스페이스 전환: ${e.from.name} → ${e.to.name}`, "server", {
+        from: e.from.root,
+        to: e.to.root,
+        warnings: e.switchPlan.warnings,
+      });
+      emit(`[workspace] ${e.from.root} → ${e.to.root}`);
+    },
+  });
   // §5.2: 워크스페이스 파일 변경 감지. 자기 쓰기는 `self:true` 로 표시되어
   // 사용자가 자기 저장을 "외부 변경" 으로 오해하지 않는다.
   const fsWatcher = new WorkspaceWatcher({
@@ -111,6 +129,10 @@ async function main(): Promise<number> {
     for (const s of r.steps) emit(`${String(s.n).padStart(2)}. ${s.name}`);
     return 0;
   }
+
+  // §8.3: 지문을 **한 번** 구한다. 이후 모든 판정이 같은 값을 봐야 전환 중에
+  // 트리와 도구의 기준이 어긋나지 않는다.
+  await workspace.init();
 
   let lock: InstanceLock | null = null;
   let launcher: LlamaLauncher | null = null;
@@ -301,12 +323,15 @@ async function main(): Promise<number> {
           }))
           // §8.2 파일 API — 경로 안전이 이 라우트 **앞에서** 처리된다(§3.4).
           .route("GET", "/api/fs/tree", async (c) => {
-            const r = await safeListDir(c.query.get("path") || ".", { root: projectRoot });
+            // **루트를 캡처하지 않는다.** 전환 후에도 새 루트를 봐야 한다 —
+            // 상수로 박아두면 화면은 옛 프로젝트, 도구는 새 프로젝토리 되는
+            // "조용히 엉뚱한 곳" 상태가 된다(§8.3).
+            const r = await safeListDir(c.query.get("path") || ".", { root: workspace.root() });
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-found" ? 404 : 403 });
             return r.value;
           })
           .route("GET", "/api/fs/file", async (c) => {
-            const r = await safeReadFile(c.query.get("path") || "", { root: projectRoot });
+            const r = await safeReadFile(c.query.get("path") || "", { root: workspace.root() });
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-found" ? 404 : 403 });
             return r.value;
           })
@@ -316,9 +341,9 @@ async function main(): Promise<number> {
               throw Object.assign(new Error("path 와 content 가 필요합니다"), { status: 400 });
             }
             const r = await safeWriteFile(body.path, body.content, {
-              root: projectRoot,
+              root: workspace.root(),
               baseVersion: body.baseVersion,
-              readOnlyPaths: [join(projectRoot, ".harnesside")],
+              readOnlyPaths: [join(workspace.root(), ".harnesside")],
             });
             if (!r.ok) {
               // 충돌은 409 — 클라이언트가 "비교 / 내 변경 유지" 를 고르게 한다(§3.4)
@@ -337,13 +362,13 @@ async function main(): Promise<number> {
           }))
           // §5.2 Git 변경 소스(HEAD ↔ 워킹트리). 실패는 "변경 없음" 과 구분해 말한다.
           .route("GET", "/api/git/status", async () => {
-            const r = await gitStatus(projectRoot);
+            const r = await gitStatus(workspace.root());
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-a-repo" ? 400 : 500 });
             return r.value;
           })
           .route("GET", "/api/git/head", async (c) => {
             const p = c.query.get("path") || "";
-            const r = await gitShowHead(projectRoot, p);
+            const r = await gitShowHead(workspace.root(), p);
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-a-repo" ? 400 : 500 });
             return { path: p, content: r.value };
           })
@@ -367,6 +392,30 @@ async function main(): Promise<number> {
           .route("POST", "/api/logs/clear", () => {
             ring.clear();
             return { cleared: true, status: ring.status };
+          })
+          // ── §8.3 워크스페이스 ──────────────────────────────────────────────
+          // **루트만 있는 게 아니다.** 지문(종류·규칙·git)까지 같이 준다 — UI 가
+          // "무엇을 하는 화면인지" 를 헤더 한 줄로 말할 수 있어야 하기 때문이다.
+          .route("GET", "/api/workspace", () => ({ current: workspace.current, pendingNotes: workspace.pendingNotes() }))
+          // 미리보기는 **부수효과 0** 이어야 한다. 보러 가는 것만으로 루트가 바뀌면 안 된다.
+          .route("POST", "/api/workspace/plan", async (c) => {
+            const body = (await readBody(c.req)) as { path?: string; openTabs?: string[] };
+            const p = await workspace.preview(String(body.path ?? ""), body.openTabs ?? []);
+            if (!p.ok) throw Object.assign(new Error(p.detail), { status: 400, reason: p.reason });
+            return p.value;
+          })
+          .route("POST", "/api/workspace/switch", async (c) => {
+            const body = (await readBody(c.req)) as { path?: string; openTabs?: string[]; confirm?: boolean };
+            const r = await workspace.switchTo(String(body.path ?? ""), {
+              openTabs: body.openTabs ?? [],
+              confirm: body.confirm === true,
+            });
+            if (!r.ok) {
+              // 확인 요구는 **409** 다 — 400 이면 "잘못된 요청" 이라 오해하고 그냥 재시도한다.
+              const status = r.reason === "needs-confirm" ? 409 : 400;
+              throw Object.assign(new Error(r.detail), { status, reason: r.reason });
+            }
+            return { current: workspace.current, change: r.value };
           });
         const { port: actual } = await http.start();
         hub.publish({ type: "sys.logs", limits: ring.status } as never);

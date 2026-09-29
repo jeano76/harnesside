@@ -27,13 +27,34 @@ export class ApiClient {
   constructor(private opts: ClientOptions) {}
 
   async get<T>(path: string): Promise<T> {
+    return this.request<T>("GET", path);
+  }
+
+  /**
+   * JSON 본문으로 쓴다. GET 만 있는 클라이언트면 "전환" 같은 동작을 화면에서 못 한다 —
+   * 로직이 있어도 호출할 길이 없으면 없는 기능과 같다(§④ 의 ◐ 의 뜻).
+   */
+  async post<T>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>("POST", path, body);
+  }
+
+  async put<T>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>("PUT", path, body);
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const f = this.opts.fetchImpl ?? fetch;
-    const res = await f(path, { headers: authHeaders(this.opts.token) });
+    const init: RequestInit = { method, headers: authHeaders(this.opts.token) };
+    if (body !== undefined) {
+      (init.headers as Record<string, string>)["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    const res = await f(path, init);
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {
-        const body = (await res.json()) as { error?: string };
-        if (body?.error) detail = body.error;
+        const parsed = (await res.json()) as { error?: string };
+        if (parsed?.error) detail = parsed.error;
       } catch {
         // 본문이 JSON 이 아니면 상태 코드만으로 말한다
       }
