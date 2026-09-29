@@ -258,6 +258,68 @@ test("chromeState 가 dead 면 종료한다 — 판정 함수를 한 곳에 모�
   });
 });
 
+// ── S4: CDP 연결 소실(재연결 2회 실패) ───────────────────────────────────────
+
+test("S4: CDP 를 되찾지 못하면 window 모드에서 종료한다", () => {
+  const s = setup("window", { intervalMs: 5, cdpState: () => "lost" });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, ["cdp-lost"], "S4 가 자기 사유로 종료한다");
+      const entry = s.ring.query({ levels: ["error"] }).find((e) => /CDP|연결/.test(e.message));
+      assert.ok(entry, "왜인지 말한다");
+      assert.equal(entry?.data?.signal, "S4");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S4: 창이 살아 있어도 발동한다 — pid 는 멀쩡하므로 S1 이 못 잡는다", () => {
+  const s = setup("window", { intervalMs: 5, cdpState: () => "lost", chromeState: () => "alive" });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, ["cdp-lost"], "Chrome 이 살아 있다는 이유로 S4 를 건너뛰면 신호를 놓친다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S4: daemon 모드에서는 알리기만 한다", () => {
+  const s = setup("daemon", { intervalMs: 5, cdpState: () => "lost" });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "데몬 모드에서 CDP 소실로 죽으면 안 된다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S4: `none` 은 판정 대상이 아니다 — 감시를 안 켰다고 CDP 가 죽은 게 아니다", () => {
+  const s = setup("window", { intervalMs: 5, cdpState: () => "none" });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, []);
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S4: 재연결에 성공하면 다시 `connected` — 한 번의 끊김은 신호가 아니다", () => {
+  let state: "connected" | "lost" | "none" = "lost";
+  const s = setup("window", { intervalMs: 5, cdpState: () => state });
+  state = "connected";
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "복구됐는데 종료했다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
 test("유휴 종료는 기본적으로 없다 — 켜라고 명시해야만 동작한다", () => {
   const s = setup("daemon", { intervalMs: 5, idleShutdownSec: 0 });
   s.state.connected = false;

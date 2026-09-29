@@ -72,6 +72,12 @@ export interface WatchdogDeps {
    * 죽는 일이 생기면 그것이 실제 손해다.
    */
   deferS3?: () => string | null;
+  /**
+   * S4 — CDP 연결 상태. `"lost"` 는 **재연결 2회 실패** 다(한 번의 끊김은 아니다:
+   * 그 한회는 프로필 잠금 같은 일시적 거부일 수 있다). `"none"` 은 판정 대상이 아니다 —
+   * 감시를 켜지 않았다는 뜻이다.
+   */
+  cdpState?: () => "connected" | "lost" | "none";
   /** 종료 실행(§4.4 shutdown). */
   shutdown: (reason: string) => Promise<void> | void;
   /** 데몬 유휴 종료 정책(초). 0/미지정 = 없음(기본값이 조용히 사라지는 최악의 UX). */
@@ -102,6 +108,7 @@ export function startWatchdog(deps: WatchdogDeps): Watchdog {
   let s3Fired = false;
   let s3DeferredNotified = false;
   let orphanNotified = false;
+  let cdpLostNotified = false;
 
   const s3ThresholdSec = deps.clientIdleThresholdSec ?? 15;
   const llamaAliveNow = () => (deps.isLlamaAlive ? deps.isLlamaAlive() : true);
@@ -208,7 +215,31 @@ export function startWatchdog(deps: WatchdogDeps): Watchdog {
       s3DeferredNotified = false;
     }
 
-    // 2.6) S6 — 고아 데몬: 창도 모델도 없고 클라이언트도 없다.
+    // 2.6) S4 — CDP 연결 소실(재연결 2회 실패).
+    //
+    // 창(Chrome)은 살아 있는데 **소켓이** 죽은 상태다. 그래서 S1 이 발동하지 않는다 —
+    // pid 를 보면 멀쩡하기 때문이다. window 모드에서는 요구 9 의 창이 더 이상 제어되지
+    // 않으므로 종료하고, daemon 모드에서는 계속 둔다(§4.4 의 의도적 예외).
+    const cdp = deps.cdpState?.() ?? "none";
+    if (cdp === "lost") {
+      if (!cdpLostNotified) {
+        cdpLostNotified = true;
+        deps.ring.error(
+          "lifecycle",
+          "브라우저(CDP) 연결을 되찾지 못했습니다. 창은 살아 있지만 제어할 수 없습니다.",
+          "server",
+          { signal: "S4", why: "재연결 2회 실패(§4.4 표)", chromeAlive: chrome === "alive" }
+        );
+        if (deps.mode === "window") {
+          void deps.shutdown("cdp-lost");
+          return;
+        }
+      }
+    } else {
+      cdpLostNotified = false;
+    }
+
+    // 2.7) S6 — 고아 데몬: 창도 모델도 없고 클라이언트도 없다.
     //
     // **알리기만 한다.** `window` 모드에서는 S1/S3 이 이미 종료를 시키고,
     // `daemon` 모드에서는 §4.4 가 "계속 살아 있어야 한다" 고 정해 두었다. 그래서 여기서

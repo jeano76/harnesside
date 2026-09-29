@@ -11,6 +11,7 @@ import { access, mkdir, mkdtemp } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import WebSocket from "ws";
 import { launchFlags, profileDir, CDP_DEFAULT_PORT, type LaunchOptions } from "./browserFlags.js";
 import type { GpuMode } from "../setup/gpuPolicy.js";
 
@@ -30,6 +31,24 @@ export interface LaunchDeps {
   home?: string;
   logger?: (level: "info" | "warn" | "error", msg: string, data?: unknown) => void;
   onLine?: (line: string) => void;
+  /**
+   * §4.4 S4 용 CDP 소켓을 만든다. 주입하는 이유: **소켓이 죽는 상황은 이렇게만 재현된다.**
+   * 실 서버에 붙어 있는 동안은 아무 일도 없고, 붙지 않은 상태를 만들려면 가짜가 필요하다.
+   */
+  wsFactory?: (url: string) => CdpSocketLike;
+  /** 재연결 시도 사이 지연(기본 1000ms). */
+  cdpRetryDelayMs?: number;
+  /** 재연달 시도 횟수(기본 2 — §4.4 표). */
+  cdpRetryAttempts?: number;
+}
+
+/** CDP 소켓에 필요한 최소 표면. WebSocket 이 이 모양을 만족한다. */
+export interface CdpSocketLike {
+  on(event: "close", fn: () => void): void;
+  on(event: "error", fn: (err?: unknown) => void): void;
+  on(event: "open", fn: () => void): void;
+  send(data: string): void;
+  close(): void;
 }
 
 export interface GpuVerification {
@@ -37,6 +56,18 @@ export interface GpuVerification {
   glRenderer?: string;
   webgl?: string;
   detail: string;
+}
+
+/**
+ * 실제 CDP 소켓.
+ *
+ * `ws` 는 **정적 import** 다. "소켓이 필요 없는 경로에서는 로드하지 말자" 는 생각은
+ * 옳지만 이 모듈은 이미 서버 쪽 전용이고(웹 번들에 들어가지 않는다), 동적 로드를
+ * 섞으면 ESM 에서 `require` 가 없어지거나 비동기 초기화가 끼어든다 — **판단이 복잡해지는
+ * 대신 이득이 없다.**
+ */
+function defaultWsFactory(url: string): CdpSocketLike {
+  return new WebSocket(url) as unknown as CdpSocketLike;
 }
 
 export interface LaunchResult {
@@ -51,6 +82,10 @@ export interface LaunchResult {
 
 export class BrowserLauncher {
   private proc: ChildProcess | null = null;
+  /** §4.4 S4 — **길게 붙어 있는** CDP 소켓. */
+  private cdpWatch: CdpSocketLike | null = null;
+  private cdpState: "connected" | "lost" | "none" = "none";
+  private cdpLostNotified = false;
 
   constructor(
     private opts: Omit<LaunchOptions, "userDataDir"> & { userDataDir?: string },
@@ -60,6 +95,104 @@ export class BrowserLauncher {
   /** 살아 있으면 PID. 워치독(§4.4 S1) 이 이걸 본다. */
   get pid(): number | undefined {
     return this.proc?.pid;
+  }
+
+  /**
+   * CDP 연결 상태(§4.4 S4).
+   *
+   * `none` 은 **판정 대상이 아니다** — 아직 감시를 켜지 않았다는 뜻이다.
+   * `lost` 는 "재연결 2회 실패" 다. 한 번 닫혔다고 곧바로 lost 가 아니다:
+   * 그 한회는 프로필 잠금 같은 일시적 거부를 잡을 것이고, §4.4 는 **2회 실패** 를 기준으로 한다.
+   */
+  get cdp(): "connected" | "lost" | "none" {
+    return this.cdpState;
+  }
+
+  /**
+   * CDP 소켓을 **끊지 않고** 붙여 둔다(§4.4 S4).
+   *
+   * GPU 판정은 소켓을 열었다 닫는다 — 장시간 유지하면 리소스를 붙잡는다는 이유로.
+   * 그 선택이 S4 를 불가능하게 만들었다: **"소켓이 죽었다" 는 신호가 아예 없었다.**
+   * 감시용 소코트은 따로 동고, 닫하면 재연을 두 번 시도합니다.
+   */
+  async watchCdp(cdpPort: number, onLost: (detail: { attempts: number }) => void): Promise<boolean> {
+    const f = this.deps.fetchImpl ?? fetch;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2000);
+    const info = await f(`http://127.0.0.1:${cdpPort}/json/version`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    clearTimeout(t);
+    const url = (info as { webSocketDebuggerUrl?: string } | null)?.webSocketDebuggerUrl;
+    if (!url) return false;
+    return this.attachCdpWatch(url, onLost);
+  }
+
+  private attachCdpWatch(url: string, onLost: (detail: { attempts: number }) => void): Promise<boolean> {
+    const factory = this.deps.wsFactory ?? defaultWsFactory;
+    const attempts = this.deps.cdpRetryAttempts ?? 2;
+    const delay = this.deps.cdpRetryDelayMs ?? 1000;
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const open = (tryIndex: number) => {
+        let ws: CdpSocketLike;
+        try {
+          ws = factory(url);
+        } catch (e) {
+          this.scheduleRetry(open, resolve, tryIndex, attempts, delay, onLost, e);
+          return;
+        }
+        ws.on("open", () => {
+          this.cdpWatch = ws;
+          this.cdpState = "connected";
+          this.cdpLostNotified = false;
+          this.log("info", "CDP 감시 소켓 연결됨", { url });
+          if (!settled) {
+            settled = true;
+            resolve(true);
+          }
+        });
+        const lost = (why: unknown) => {
+          if (this.cdpWatch !== ws) return; // 이미 다른 소켓으로 넘어갔다
+          this.cdpWatch = null;
+          this.log("warn", "CDP 감시 소켓 끊김", { tryIndex, why: String(why ?? "") });
+          this.scheduleRetry(open, resolve, tryIndex, attempts, delay, onLost, why);
+        };
+        ws.on("close", () => lost("close"));
+        ws.on("error", (e) => lost(e));
+      };
+      open(0);
+    });
+  }
+
+  private scheduleRetry(
+    open: (tryIndex: number) => void,
+    resolve: (v: boolean) => void,
+    tryIndex: number,
+    attempts: number,
+    delay: number,
+    onLost: (detail: { attempts: number }) => void,
+    why: unknown,
+  ): void {
+    // §4.4: **재연결 2회 실패** 가 신호다. 한 번의 실패는 프로필 잠금일 수 있다.
+    if (tryIndex + 1 > attempts) {
+      this.cdpState = "lost";
+      this.log("error", "CDP 재연결 실패 — 연결이 소실된 것으로 봅니다", { attempts, why: String(why ?? "") });
+      onLost({ attempts });
+      return;
+    }
+    const timer = setTimeout(() => open(tryIndex + 1), delay);
+    timer.unref?.();
+  }
+
+  /** 감시 소켓을 닫는다(종료 경로). */
+  stopCdpWatch(): void {
+    try {
+      this.cdpWatch?.close();
+    } catch {
+      /* 이미 닫힘 */
+    }
+    this.cdpWatch = null;
   }
 
   private get log() {
@@ -234,8 +367,7 @@ export class BrowserLauncher {
     return last;
   }
 
-  /** CDP 로 GPU 정보 한 번 읽기. 소켓은 열었다 닫는다(장시간 유지하면 리소스를 붙잡는다). */
-  private async readGpuOnce(port: number): Promise<Record<string, unknown> | null> {
+  /** CDP 로 GPU 정보 한 번 읽기. 소켓은 열었다 닫는다(장시간 유지하면 리소스를 붙잡는다). */  private async readGpuOnce(port: number): Promise<Record<string, unknown> | null> {
     const f = this.deps.fetchImpl ?? fetch;
     const v = await f(`http://127.0.0.1:${port}/json/version`).catch(() => null);
     if (!v || !v.ok) return null;

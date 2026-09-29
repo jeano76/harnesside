@@ -158,6 +158,7 @@ async function main(): Promise<number> {
       emit(`[shutdown] 채택한 llama-server(${boot.ports.adopted.model}:${boot.ports.adopted.port})는 그대로 둡니다 — 우리가 띄운 것이 아닙니다.`);
     }
     if (browser) {
+      browser.stopCdpWatch();
       await browser.stop();
       emit("[shutdown] Chrome 종료 완료");
     }
@@ -437,6 +438,13 @@ async function main(): Promise<number> {
         if (!res.attached) {
           return { ok: false, detail: `Chrome 기동은 했지만 CDP(${res.cdpPort}) 에 붙지 못했습니다` };
         }
+        // §4.4 S4 — **길게 붙어 있는** CDP 소켓. GPU 판정용 소켓은 열었다 닫으므로
+        // "소켓이 죽었다" 는 신호가 생길 수 없다. 감시 소켓을 따로 붙여야 그 신호가 있다.
+        const watching = await browser.watchCdp(res.cdpPort, ({ attempts }) => {
+          emit(`[cdp] 재연결 ${attempts}회 실패 — CDP 연결 소실로 봅니다(§4.4 S4)`);
+        });
+        if (!watching) emit(`[cdp] 감시 소켓을 붙이지 못했습니다 (CDP ${res.cdpPort}) — S4 신호는 듣지 못합니다`);
+        else emit(`[cdp] 감시 소켓 연결됨 — CDP 소실을 감시합니다(§4.4 S4)`);
         const v = res.verification;
         const verdict =
           mode !== "off" ? (v?.detail ?? "GPU 모드 적용") : v?.ok ? "GPU 비활성 확인됨" : `⚠ GPU 비활성 미확인 — ${v?.detail ?? "판정 실패"}`;
@@ -466,6 +474,8 @@ async function main(): Promise<number> {
           },
           // S3 — 마지막 클라이언트 이탈 후 경과 시간. `null` 은 판정 대상이 아니다.
           msSinceLastClientGone: () => hub?.msSinceLastClientGone() ?? null,
+          // S4 — CDP 소켓이 재연결 2회 실패했는가.
+          cdpState: () => browser?.cdp ?? "none",
           // §4.4 가 요구하는 유예 두 가지 중 (b) 정책 설정 여부는 여기서 확인된다.
           // (a) 진행 중 백그라운드 프로세스는 아직 배선 전이라 유예 사유로 명시한다.
           deferS3: () =>
