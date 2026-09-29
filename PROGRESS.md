@@ -14,19 +14,21 @@
 ## ① 현재 상태 (마지막 갱신: 2026-09-29)
 
 ```yaml
-phase: P1.5          # 현재 Phase
-status: in_progress
-last_commit: "0690ccc (P1.5-1~3 완료: 토큰·Origin/Host·HTTP 서버)"
-next_action: "P1.5-4 §6.4 설정 규약 (병합 우선순위·출처 표시·원자적 쓰기·마이그레이션)"
+phase: P2            # 현재 Phase (P0 · P1 · P1.5 완료)
+status: not_started
+last_commit: "3efd6f8 (P1.5 완료: 토큰·Origin/Host·HTTP 서버·설계 약관)"
+next_action: "P2 §4.1 Chrome --app 기동 + §4.7 GPU off — vite 뼈대(dist/web)부터"
 blocking: 없음
 verified_this_session:
-  - "npm test → 582 pass / 0 fail (P0 525 → P1 +30 → P1.5 +27)"
+  - "npm test → 595 pass / 0 fail (P0 525 → P1 +30 → P1.5 +40)"
   - "npm run typecheck → exit 0 · tsc -p tsconfig.server.json → exit 0"
-  - "grep -rni llamacli → 0건"
-  - "tsx src/server/index.ts --daemon → TTY 없이 12단계, 단계 10(HTTP) 실제 기동"
-  - "실측(curl): 토큰 없는 /api/gpu → 401 · 공개 /api/health → 200 · 토큰 있으면 200"
-  - "실측(소켓): Host: evil.com → 403 · token.json 권한 600"
-  - "llama.cpp 정지 완료 — systemd llama-server.service disable, VRAM 7517 MiB free"
+  - "grep -rni llamacli → 0건 · 깨진 문자 → 0건"
+  - "tsx src/server/index.ts --daemon → TTY 없이 12단계, 1~8·10 실제 동작"
+  - "curl: 토큰 없는 /api/gpu → 401 · Bearer → 200 · X-Harnesside-Token → 200"
+  - "raw socket: Host: evil.com → 403 · token.json 0600"
+  - "curl /api/gpu → GPU 정책 + rationale + 실측값 노출"
+  - "curl /api/bootstrap → 12단계 + pending 표시 + 소요시간"
+  - "llama.cpp 정지 완료 — systemd disable, VRAM 7548 MiB free, 8080 비어 있음"
 ```
 
 > ⚠️ **환경 변경 (개발 착수 시 반드시 알아야 할 사실)**: 이 머신에는 `llama-server.service`
@@ -46,7 +48,7 @@ verified_this_session:
 |---|---|---|---|---|
 | **P0** | §1 복사·치환. 이식 모듈 빌드/테스트 통과 | ☑ | `npm test` **555 pass/0 fail**, `grep -rni llamacli` **0건**, typecheck exit 0 | `8272ad4` |
 | **P1** | llama-server 부트스트랩 + §3.2 [1]~[8] | ☑ | TTY 없이 12단계 통과, adopt 실측 확인, SIGTERM 종료·orphan 없음 | `7bae9c1` `76eb72f` |
-| P1.5 | §3.6 보안 경계 + §6.4 설정 규약 | ☐ | §10.3.1 보안 시나리오 전부 통과 | — |
+| **P1.5** | §3.6 보안 경계(토큰·Origin/Host·HTTP) + §6.4 설정 규약 | ☑ | 토큰 없는 API 401 · Host 위조 403 · 0600 · 출처/원자적 쓰기 테스트 | `0690ccc` `8c482d3` `3efd6f8` |
 | P2 | Chrome `--app` + §4.6 VRAM 예산 + **§4.7 GPU off** | ☐ | 창 뜸, 라운드 확인, 30분 무 OOM, `glRenderer==="Disabled"` | — |
 | P2.5 | **§3.7 데몬 모드 + §5.12 로그 패널** | ☐ | TTY 없이 12단계 부팅, 상한 500,000자 후 최신 줄 유지 | — |
 | P3 | WS 허브 + 레이아웃 골격 + 입력창 | ☐ | 브라우저 입력 → 서버 수신 → WS 응답 | — |
@@ -114,20 +116,24 @@ verified_this_session:
 
 ## ④ 지금 바로 할 일 (재개 시 첫 번째 = 1번)
 
-> **P1 이 끝났다. 다음은 P1.5(보안 경계).** §12 의 순서 경고를 그대로 따른다:
-> REST/WS 를 처음부터 "토큰 필수"로 설계하지 않으면 나중에 모든 호출 경로에
-> "인증 빠진 길"이 생기고 그것을 전부 찾아낼 수 없다.
+> **P1.5 가 끝났다. 다음은 P2(Chrome 창 + §4.7 GPU off).**
+> P2 는 `dist/web` 번들이 필요하므로 **번들 뼈대가 먼저**다. 창을 띄우면서
+> "빈 화면"이 나오면 요구 8(라운드 모서리)·요구 3(에디터)을 검증할 수 없다.
 
-1. **P1.5-1 `src/auth/token.ts`** — 부팅 시 `crypto.randomBytes(32)` → `state/token.json`(0600).
-   검증: 토큰 32바이트, 파일 권한 0600, 재실행 시 다른 값.
-2. **P1.5-2 `src/auth/originGuard.ts`** — `Host` 헤더 검증(DNS rebinding 방어) + WebSocket `Origin` 검증.
-   검증: §10.3.1 시나리오(토큰 없음 / 오류 / Origin 불일치 / Host 위조) 통과.
-3. **P1.5-3 `src/server/httpServer.ts`** — 모든 `/api/*` 를 토큰 필수로. CORS 헤더는 **아예 보내지 않는다**.
-   검증: 토큰 없이 어떤 API 도 200 을 주지 않는지.
-4. **P1.5-4 §6.4 설정 규약** — 병합 우선순위·출처 표시·원자적 쓰기·마이그레이션·`credentials.json`.
+1. **P2-1 `vite.config.ts` + `index.html` + `src/web/main.tsx`** — 최소 골격.
+   번들 산출물이 `dist/web/` 로 가고, 루트는 `/` , 알 수 없는 경로는 `index.html`.
+   검증: `npm run build:web` 가 `dist/web/index.html` 을 만든다.
+2. **P2-2 `src/server/browserFlags.ts`** — §4.1·§4.7 의 플래그를 **한 곳에서** 만든다.
+   검증(유닛, §10.2): `off` 에 `--disable-gpu`+`--disable-software-rasterizer` 포함 /
+   `--use-angle=swiftshader` 미포함 / **중복 키 0개** / `--no-sandbox` 미포함 /
+   `off`와 `budgeted` 플래그 **상호배타** / `?t=<token>` 이 URL 에 붙음.
+3. **P2-3 `src/server/browserLauncher.ts`** — 위 플래그로 Chrome 스폰.
+   검증: 창이 뜸 + CDP `/json/version` 로 붙음 + `glRenderer === "Disabled"` (§4.7.5).
+4. **P2-4 단계 11 을 `lateSteps[11]` 에 연결** — `browserFlags`/`browserLauncher` 결과가
+   부팅 로그에 "GPU off (확인됨)" 으로 남아야 한다(§4.7.5: 설정됨 ≠ 동작함).
 5. 각 단계마다 `npm test` + typecheck → 커밋 → **이 파일 갱신** → 다음 항목.
-6. P1.5 완료 후 **P2(Chrome `--app` + §4.7 GPU off)**. P2 는 `dist/web` 번들이 필요하므로
-   `vite.config.ts` + `index.html` 뼈대부터 만든다.
+6. P2 다음은 **P2.5(데몬 + §5.12 로그 패널)** — 그때 로그 싱글턴(`src/server/logRing.ts`)을
+   만들어야 P3(WS 허브)에서 바로 이벤트에 붙일 수 있다.
 
 ## ⑤ 환경 사실 (재측정 불필요 · 2026-09-29 실측)
 
@@ -184,3 +190,6 @@ verified_this_session:
 | 2 | `8272ad4` | `refactor!: rename llamacli → harnesside, isolate TUI as legacy-tui` | `npm test` 525/0 · typecheck 0 · grep 0 |
 | 3 | `7bae9c1` | `feat(server): 12단계 부트스트랩 + GPU 정책 결정 + 2포트 계획` | `npm test` **544**/0 (+19) · typecheck 0 |
 | 4 | `76eb72f` | `feat(server): 데몬 엔트리포인트 + llama 런처 + adopt 경로` | `npm test` **555**/0 · TTY 없이 12단계 · SIGTERM orphan 0 |
+| 5 | `0690ccc` | `feat(auth): 토큰 + Origin/Host 가드 + 토큰 필수 HTTP 서버` | `npm test` **582**/0 · curl 401/403 실측 |
+| 6 | `8c482d3` | `feat(config): §6.4 설정 계약 (병합·출처·원자적 쓰기·마이그레이션)` | `npm test` **595**/0 (+13) |
+| 7 | `3efd6f8` | `fix(server): lateSteps 에 결과 전달 (단계 10 이 1~9 를 볼 수 있게)` | `/api/gpu`·`/api/bootstrap` 실측 확인 |
