@@ -750,6 +750,30 @@ async function main(): Promise<number> {
           }))
           .route("GET", "/api/session/list", async () => ({ sessions: await session.list() }))
           .route("POST", "/api/session/save", async () => session.saveNow())
+          // ── llama.cpp 상태 (최초 구동 판정) ─────────────────────────────────
+          //
+          // **판정만** 돌린다. 이 라우트에서 cmake 를 띄우거나 20GB 를 받으면 안 된다 —
+          // 화면을 여는 동작이 설치를 시작하면 사용자는 무엇이 일어나는지 모른다.
+          // 설치는 `harnesside doctor --install` 이 한다.
+          .route("GET", "/api/llama/status", async () => {
+            const { inspectLlama } = await import("../setup/firstRun.js");
+            const seen = await inspectLlama({ home }).catch((e) => ({ situation: "unknown" as const, error: String(e) }));
+            return {
+              // 세 경우를 **그대로** 노출한다. 화면이 상태마다 다른 말을 해야 하므로
+              // 여기서 문장 하나에 접어 버리지 않는다.
+              situation: seen.situation,
+              running: seen.situation === "running" ? seen.running : null,
+              installed: seen.situation === "installed" ? seen.llama : null,
+              // "설치할 수 있다" 는 약속이 아니라 **방법** 이다. 화면이 이 문장을
+              // 그대로 보여주면 사용자가 무엇이 일어나는지 안다.
+              remedy:
+                seen.situation === "running"
+                  ? "이미 실행 중인 서버를 사용합니다."
+                  : seen.situation === "installed"
+                    ? `${seen.llama!.source} 설치본이 있습니다 — 포트를 지정해 구동할 수 있습니다.`
+                    : "설치되어 있지 않습니다. 'harnesside doctor --install' 로 이 머신에 맞춰 설치할 수 있습니다.",
+            };
+          })
           // ── §7 모델 (P11) ───────────────────────────────────────────────────
           .route("GET", "/api/models", async () => {
             const names = await readdir(modelsDir).catch(() => [] as string[]);
