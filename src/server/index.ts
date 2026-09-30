@@ -384,6 +384,11 @@ async function main(): Promise<number> {
     projectRoot,
     modelsDir,
     hardware: undefined,
+    // **모드를 강제할 수 있게** 배선한다. `forcedGpuMode` 은 bootstrap 옵션으로만
+    // 존재했고 아무도 주지 않아 "정책이 정한다" 고 말할 수만 있었다. 사용자가
+    // "브라우저 GPU 는 무조건 꺼" 라고 말할 수 있어야 하고, `off` 경로를 검증하려면
+    // (GPU 없는 러너 말고) 이 머신에서 강제로 꺼 보는 수단이 있어야 한다.
+    forcedGpuMode: gpuModeOf(process.env.HARNESSIDE_GPU_MODE),
     allowBuild: false,
     skipLlamaSpawn: true, // 아래에서 실제 스폰(단계 7/8 을 여기서 이어받는다)
     lock, // 락은 여기서만 획득한다 — 두 곳이 잡으면 자기 자신을 "이미 실행 중" 으로 본다
@@ -1036,6 +1041,20 @@ function holdLoop(): Promise<void> {
 }
 
 /** 로거 payload 에서 자식 프로세스의 실제 줄을 꺼낸다. */
+/**
+ * 환경변수로 GPU 모드를 강제한다.
+ *
+ * **모르는 값은 조용히 무시하지 않는다** — 무시하면 "설정한 모드가 적용됐다" 고
+ * believing 사용자가 정책과 다른 값으로 돌아가고, 검증도 통과해 버린다(§5.10).
+ * 그래서 콘솔에 경고 한 줄을 남긴다.
+ */
+function gpuModeOf(v: string | undefined): "off" | "budgeted" | "full" | undefined {
+  if (v === undefined || v === "") return undefined;
+  if (v === "off" || v === "budgeted" || v === "full") return v;
+  console.warn(`[gpu] HARNESSIDE_GPU_MODE=${v} 는 모드가 아닙니다 (off|budgeted|full) — 무시하고 정책으로 정합니다.`);
+  return undefined;
+}
+
 function lineOf(o: unknown): string | undefined {
   if (o && typeof o === "object" && "line" in o) {
     const v = (o as { line?: unknown }).line;

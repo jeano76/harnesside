@@ -50,6 +50,7 @@ export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이
   HARNESSIDE_LLAMA_SERVER      llama-server 바이너리 경로
   HARNESSIDE_CDP_PORT          Chrome CDP 포트 (기본 9222)
   HARNESSIDE_CHROME_NO_SANDBOX=1  샌드박스 해제 (보안 경계 약화 — 위험)
+  HARNESSIDE_GPU_MODE            브라우저 GPU 모드 강제 (off|budgeted|full)
 `;
 
 export interface ParsedArgs {

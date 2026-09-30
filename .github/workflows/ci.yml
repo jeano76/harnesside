@@ -286,3 +286,105 @@ jobs:
         run: |
           kill -9 "$(cat /tmp/fake-llama.pid 2>/dev/null)" 2>/dev/null || true
           kill -9 "$(cat /tmp/adopt-llama.pid 2>/dev/null)" 2>/dev/null || true
+
+  # ---------------------------------------------------------------- 창 검증
+  # "빌드가 되고 테스트가 통과한다" 는 **창이 뜨고 내용이 있는 상태** 를 보장하지
+  # 않는다(§0.2). 이 잡은 실제로 창을 띄워 **DOM 을 읽는다**.
+  #
+  # 러너에 X 서버가 없으므로 `--headless=new` 로 간다. "창 없는 모드"(§3.7)와는
+  # 다르다 — 여기서는 **창을 띄운다**(--no-browser 가 아니다). CDP 로 붙는 것은 같고,
+  # `#root` 에 자식이 있는지, 로그 패널이 있는지, GPU 판정이 맞는지를 본다.
+  window:
+    name: 창 검증 (헤드리스 CDP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci || npm install
+
+      - name: 웹 자산 빌드
+        # 창이 **빈 화면** 이어도 빌드는 성공한다(그게 §0.2 가 금지한 것). 자산을
+        # 빼먹으면 여기서 창이 백 화면이 되고, 그게 "창이 떴다" 로 잘못 보고된다.
+        run: npm run build
+
+      - name: 가짜 모델 준비
+        run: |
+          mkdir -p .ci-fake-models
+          head -c 4096 /dev/zero > .ci-fake-models/Ornith-1.5-35B-A3B-Q3_K_M.gguf
+          ls -1 .ci-fake-models/*.gguf > /dev/null
+
+      - name: 창을 띄운다 (헤드리스)
+        env:
+          HARNESSIDE_LLAMA_SERVER: ${{ github.workspace }}/scripts/fake-llama-server.mjs
+          HARNESSIDE_MODELS_DIR: ${{ github.workspace }}/.ci-fake-models
+          # **--no-sandbox 는 러너 컨테이너에서만** 필요하다. 로컬에서는 보안 경계가
+          # 약해지므로 넣지 않는다(§3.6). 같은 키를 두 번 주면 Chromium 이 앞의 것을
+          # 무시하므로, 이미 들어 있는 플래그를 여기서 다시 넣지 않는다 — 실제로
+          # `--disable-dev-shm-usage` 를 중복 넣으면 **부팅이 실패**했다(플래그 중복
+          # 검사기가 잡았다 — 좋은 일).
+          HARNESSIDE_CHROME_EXTRA_ARGS: "--headless=new --no-sandbox"
+        run: |
+          rm -f .harnesside/state/instance.lock
+          setsid ./node_modules/.bin/tsx src/server/index.ts < /dev/null > /tmp/window.log 2>&1 &
+          for i in $(seq 1 90); do
+            [ -s .harnesside/state/instance.lock ] && break; sleep 1
+          done
+          [ -s .harnesside/state/instance.lock ] || { echo "데몬이 락을 만들지 않았다"; tail -30 /tmp/window.log; exit 1; }
+          WPID=$(head -1 .harnesside/state/instance.lock)
+          tr '\0' ' ' < "/proc/$WPID/cmdline" 2>/dev/null | grep -q 'src/server/index.ts' \
+            || { echo "락의 pid 가 서버가 아니다"; exit 1; }
+          echo "$WPID" > /tmp/window.pid
+          for i in $(seq 1 90); do
+            grep -qE '헬스체크: 준비 완료|기존 llama-server 를 채택' /tmp/window.log && break; sleep 1
+          done
+          # CDP 는 **Chrome 이 열린 뒤에** 붙는다. IDE 가 먼저 뜨고 Chrome 이
+          # 늦으면 1초만 보고 "안 떴다" 로 결론 내리는 순간이 실제로 있었다.
+          for i in $(seq 1 90); do
+            curl -sf --max-time 2 http://127.0.0.1:9222/json/version > /dev/null && break; sleep 1
+          done
+          curl -sf --max-time 3 http://127.0.0.1:9222/json/version > /dev/null || {
+            echo "Chrome CDP 가 열리지 않았다"; tail -40 /tmp/window.log; exit 1; }
+          grep -q 'Chrome 기동' /tmp/window.log || { echo "Chrome 기동 단계 로그가 없다"; tail -30 /tmp/window.log; exit 1; }
+
+      - name: 창 내용 검증 (verify-window)
+        run: node scripts/verify-window.mjs
+
+      - name: 터미널·PTY 검증 (verify-terminal)
+        # 창이 **떴다** 와 셸이 **동작한다** 는 별개의 사실이다. PTY 출력은 WS 로만
+        # 오므로 이 검사는 소켓을 직접 연다.
+        run: node scripts/verify-terminal.mjs
+
+      - name: 스크린샷 (사람이 눈으로 확인)
+        # **픽셀 회귀 비교는 넣지 않았다.** 기준 이미지가 러너/OS/Chrome 버전에
+        # 흔들리는데, 흔들리는 회귀는 "경고가 자꾸 나는 테스트"가 되어 아무도 안 본다.
+        # 대신 산출물을 남겨 사람이 볼 수 있게 한다(§0.2 의 의도는 "백 화면 금지" 다).
+        run: node scripts/capture-window.mjs /tmp/window.png || echo "스크린샷 실패는 검증 실패가 아니다"
+
+      - name: 산출물 보존
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: window
+          path: |
+            /tmp/window.png
+            /tmp/window.log
+          if-no-files-found: ignore
+
+      - name: 창 정리
+        if: always()
+        run: |
+          [ -f /tmp/window.pid ] && kill -TERM "$(cat /tmp/window.pid)" 2>/dev/null || true
+          sleep 5
+          [ -f /tmp/window.pid ] && kill -9 "$(cat /tmp/window.pid)" 2>/dev/null || true
+          # 창을 닫았는데 llama 가 살아 있으면 **§4.4 위반** 다. 포트로 판정한다
+          # (`pgrep -f llama-server` 는 이 셸 자신을 잡는다).
+          for i in $(seq 1 15); do
+            curl -sf --max-time 2 http://127.0.0.1:8080/v1/models > /dev/null 2>&1 || break
+            [ "$i" -eq 15 ] && { echo "창을 닫았는데 llama 가 살아 있다 (§4.4 위반)"; exit 1; }
+            sleep 1
+          done
+          echo "창 종료 시 llama 함께 정리됨"

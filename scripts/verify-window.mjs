@@ -13,6 +13,7 @@
  *  5. URL 에 토큰이 **남아 있지 않은**지
  */
 
+import { readFile } from "node:fs/promises";
 import { WebSocket } from "ws";
 
 const CDP = process.env.HARNESSIDE_CDP ?? "http://127.0.0.1:9222";
@@ -132,11 +133,35 @@ browserCdp.close();
 const aux = gpu?.result?.gpu?.auxAttributes ?? {};
 const fs = gpu?.result?.gpu?.featureStatus ?? {};
 const glRenderer = aux.glRenderer ?? "(없음)";
-check(
-  "브라우저 GPU 비활성 (§4.7)",
-  glRenderer === "Disabled",
-  `glRenderer=${glRenderer} opengl=${fs.opengl ?? "?"} webgl=${fs.webgl ?? "?"}`,
-);
+
+// **판정은 서버가 고른 모드에 따라야 한다.** `glRenderer === "Disabled"` 를
+// 무조건 요구하면 GPU 가 있는 머신(= 정책이 `budgeted`/`full` 인 곳)에서 **항상
+// 실패한다**(실측: RTX 2070 SUPER 에서 SwiftShader 가 떴는데 그건 버그가 아니다).
+// 반대로 조건을 느슨하게 만들면 아무것도 검사하지 않게 된다.
+//
+// 그래서 두 갈래:
+//  - `off`  → **"Disabled" 여야 한다.** 여기가 그 모드의 존재 이유다.
+//  - 그 외  → 가속을 **유지하는** 모드다. 대신 **모드를 아는지** 를 확인하고,
+//             GL 이 돌아오지 않은 경우를 GPU 정지로 말하지 않는다.
+const gpuMode = await (async () => {
+  const token = process.env.HARNESSIDE_TOKEN ?? (await readFile(".harnesside/state/token.json", "utf8").then(JSON.parse).catch(() => ({}))).token;
+  const res = await fetch(`http://${URL_MATCH}/api/gpu`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) return null;
+  const j = await res.json();
+  return typeof j?.mode === "string" ? j.mode : null;
+})();
+
+if (gpuMode === null) {
+  check("브라우저 GPU 모드를 알 수 있음 (§4.7)", false, "/api/gpu 에서 모드를 읽지 못했다 — 모드를 모른 채 통과시키지 않는다");
+} else if (gpuMode === "off") {
+  check("브라우저 GPU 비활성 (§4.7) — off 모드", glRenderer === "Disabled", `mode=off glRenderer=${glRenderer} opengl=${fs.opengl ?? "?"} webgl=${fs.webgl ?? "?"}`);
+} else {
+  check(
+    `브라우저 GPU 모드 = ${gpuMode} (가속 유지 · 'Disabled' 를 요구하지 않음)`,
+    glRenderer !== "Disabled",
+    `mode=${gpuMode} glRenderer=${glRenderer} opengl=${fs.opengl ?? "?"} webgl=${fs.webgl ?? "?"}`,
+  );
+}
 
 const cleanUrl = await cdp.eval(`location.href`);
 check("URL 에 토큰이 남아있지 않음 (§3.4)", !/[?&]t=/.test(cleanUrl) && !/[?&]token=/.test(cleanUrl), cleanUrl.slice(0, 60));
