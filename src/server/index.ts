@@ -35,7 +35,9 @@ import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
 import { SessionBridge } from "../session/bridge.js";
 import { searchHub, recommend, fillSizes } from "../models/hub.js";
 import { ModelDownloader, modelPathFor } from "../models/download.js";
-import { planSwap, judgeSwap } from "../models/manage.js";
+import { planSwap } from "../models/manage.js";
+import { UpdateService } from "./updateService.js";
+import type { UpdateChannel, ApplyGuard } from "./update/pipeline.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -44,7 +46,7 @@ import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdir, access, readdir, stat } from "node:fs/promises";
+import { mkdir, access, readdir, stat, readFile } from "node:fs/promises";
 import stripAnsi from "strip-ansi";
 
 const argv = process.argv.slice(2);
@@ -172,6 +174,30 @@ async function main(): Promise<number> {
     },
   });
   session.start();
+  // §9.1 업데이트. GitHub 를 **실제로** 본다. 네트워크 주입은 테스트에만 쓴다.
+  const updates: UpdateService = new UpdateService({
+    currentVersion: String((await readFile(join(projectRoot, "package.json"), "utf8").then(JSON.parse).catch(() => ({} as { version?: string }))).version ?? "0.0.0"),
+    channel: (process.env.HARNESSIDE_UPDATE_CHANNEL as UpdateChannel) ?? "stable",
+    slotsDir: join(stateDir(projectRoot), "update-slots"),
+    selfPath: process.argv[1] ?? join(projectRoot, "dist", "server", "index.js"),
+    onPhase: (p) => {
+      hub?.publish({ type: "update.phase", phase: p } as never);
+      const lvl = p.state === "failed" ? "error" : "info";
+      ring[lvl]("update", p.message, "server", { state: p.state, progress: p.progress, error: p.error ?? null });
+    },
+    onError: (m) => emit(`[update] ${m}`),
+    guard: async (): Promise<ApplyGuard> => ({
+      runningTurns: agent.turn.running ? ["현재 진행 중"] : [],
+      // **진행 중 자식은 무엇이든 알려야 한다** — 승인 대기 중인 셸도 포함.
+      processes: launcher ? [launcher.baseUrl] : [],
+      dirtyTabs: 0,
+      // 슬롯이 하나도 없으면 **되돌릴 곳이 없다** → planApply 가 업데이트를 막는다(D14).
+      canRollback: updates.get().slots.length > 0,
+      daemon: mode === "daemon",
+      estimatedSeconds: 8,
+      assetBytes: 8 * 1024 * 1024,
+    }),
+  });
   // §7.4 다운로드. 진행 상황은 WS 로 흘린다 — 라우트가 기다리는 동안 화면이 얼면 안 된다.
   const downloader = new ModelDownloader({
     onProgress: (item) => {
@@ -185,8 +211,7 @@ async function main(): Promise<number> {
       }
     },
   });
-  const agent = new AgentService({
-    baseDir: () => workspace.baseDir(),
+  const agent = new AgentService({    baseDir: () => workspace.baseDir(),
     baseUrl: () => `http://127.0.0.1:${boot?.ports?.llamaPort ?? 8080}`,
     // 모델 이름도 **호출 시점**에 읽는다 — 부팅이 끝나야 정해진다(`boot` 이 아직 없다).
     model: () => boot?.model?.path ?? process.env.HARNESSIDE_MODEL ?? "",
@@ -669,6 +694,18 @@ async function main(): Promise<number> {
             ring.info("models", `모델 교체 완료: ${path}`, "server");
             emit(`[models] 모델 교체 완료: ${path}`);
             return { ...swap, path };
+          })
+          // ── §9.1 업데이트 ─────────────────────────────────────────────────
+          .route("GET", "/api/update", async () => ({ ...updates.get(), local: await updates.local() }))
+          .route("POST", "/api/update/check", async () => updates.check())
+          .route("POST", "/api/update/plan", async () => updates.planApply())
+          .route("POST", "/api/update/slot", async () => updates.makeSlot())
+          .route("POST", "/api/update/download", async (c) => {
+            const body = (await readBody(c.req)) as { index?: number; expectHash?: { algo: string; hex: string } };
+            const st = updates.get();
+            const asset = st.assets[Number(body.index ?? -1)];
+            if (!asset) throw Object.assign(new Error("자산이 없습니다 — 먼저 확인하십시오"), { status: 400 });
+            return updates.downloadAsset(asset, body.expectHash);
           });
         const { port: actual } = await http.start();
         hub.publish({ type: "sys.logs", limits: ring.status } as never);

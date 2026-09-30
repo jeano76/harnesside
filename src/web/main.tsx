@@ -637,6 +637,10 @@ export default function App() {
         onNotice={(kind, title, body) =>
           pushToast({ id: `models:${title}`, kind, title, body, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "models" })
         }
+        onPhase={(p) => {
+          // 진행 단계는 **한 줄로** 보인다(§11.3: 무언가 happening 하고 있어야 한다).
+          setBlocks((prev) => applyEvent(prev, { type: "agent.status", text: `[업데이트] ${p.message}`, at: Date.now() }));
+        }}
       />
     ),
   };

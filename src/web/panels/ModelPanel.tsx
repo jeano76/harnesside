@@ -12,6 +12,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { ApiClient, ApiError } from "../api.js";
+import { UpdateSection } from "./UpdateSection.js";
 
 const DIM = "#6e7681";
 const FG = "#c9d1d9";
@@ -32,7 +33,7 @@ function gib(n: number): string {
   return `${n.toFixed(1)}GiB`;
 }
 
-export function ModelPanel({ client, onNotice }: { client: ApiClient; onNotice: (kind: "info" | "warn" | "error", title: string, body: string) => void }) {
+export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; onNotice: (kind: "info" | "warn" | "error", title: string, body: string) => void; onPhase: (p: { state: string; progress: number; message: string }) => void }) {
   const [dir, setDir] = useState<string | null>(null);
   const [active, setActive] = useState<string | null>(null);
   const [local, setLocal] = useState<{ file: string; path: string; bytes: number }[]>([]);
@@ -274,6 +275,7 @@ export function ModelPanel({ client, onNotice }: { client: ApiClient; onNotice: 
       <div style={{ color: DIM, fontSize: 10 }}>
         순차 다운로드입니다(중단 후 이어받기 지원). 병렬 조각 다운로드는 넣지 않았습니다 — 대역폭을 더 먹고 정확도는 같습니다.
       </div>
+      <UpdateSection client={client} onNotice={onNotice} onPhase={onPhase} />
     </div>
   );
 }
