@@ -114,3 +114,66 @@ export async function terminateInstance(pid: number, graceMs = 5000): Promise<bo
   }
   return waitGone(2000);
 }
+
+/**
+ * 이 포트를 **이미 다른 프로세스가** 들고 있는가.
+ *
+ * 왜 락 파일로 충분하지 않은가: 락은 **자기 pid** 를 적는다. 그런데 이전 실행이
+ * 크래시하면서 락만 지우고(또는 내가 락의 pid 를 잘못 읽어서) 포트는 살아남는 경우,
+ * 락은 "없음" 이라고 말하고 포트는 "있음" 이라고 말한다(실측: 락이 243097 이었는데
+ * 7317 의 소유자는 185924 였다 — 그 서버를 못 죽여 **옛 코드로 측정**했다).
+ *
+ * **포트가 이미 차 있는 채로 부팅하면, 그 프로세스가 응답하는 동안 우리는 아무것도
+ * 하지 않는다.** 그래서 부팅 시점에 확인하고, 있으면 **왜인지와 누구인지** 를 말한다
+ * (조용히 넘기면 사용자는 옛 서버가 자기 창을 계속 조작하는 걸 본다).
+ *
+ * 판정 정본은 **포트** 다(§④ 표 21 — 프로세스 이름은 위장된다).
+ */
+export function portOwner(pid: number): { host: string; port: number } | null {
+  try {
+    const hex = pid.toString(16).toUpperCase().padStart(4, "0");
+    const inodes = readdirSync(`/proc/${pid}/fd`)
+      .map((fd) => {
+        try {
+          return readlinkSync(`/proc/${pid}/fd/${fd}`);
+        } catch {
+          return "";
+        }
+      })
+      .filter((t) => t.startsWith("socket:["))
+      .map((t) => Number(t.slice(8, -1)));
+    if (!inodes.length) return null;
+    // /proc/net/tcp 의 로컬 주소는 `HEXIP:HEXPORT` 형태다.
+    for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+      let text = "";
+      try {
+        text = readFileSync(file, "utf8");
+      } catch {
+        continue;
+      }
+      for (const line of text.split("\n").slice(1)) {
+        const cells = line.trim().split(/\s+/);
+        if (cells.length < 10) continue;
+        if (!inodes.includes(Number(cells[9]))) continue;
+        const [addr, portHex] = cells[1].split(":");
+        const host = addr.length === 8 ? hexToIp(addr) : hexToIp6(addr);
+        if (host) return { host, port: parseInt(portHex, 16) };
+      }
+    }
+    return null;
+  } catch {
+    // /proc 를 못 읽으면 **모른다** — 강제로 종료하지 않는다(§5.10).
+    return null;
+  }
+}
+
+function hexToIp(hex: string): string | null {
+  const b = hex.match(/../g)?.reverse().map((h) => parseInt(h, 16));
+  return b && b.length === 4 ? b.join(".") : null;
+}
+
+function hexToIp6(hex: string): string | null {
+  if (hex.length !== 32) return null;
+  const groups = hex.match(/.{4}/g) ?? [];
+  return groups.map((g) => parseInt(g, 16).toString(16)).join(":");
+}

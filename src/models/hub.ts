@@ -241,7 +241,15 @@ export function parseHubSearch(json: unknown): HubModel[] {
     const id = typeof raw?.id === "string" ? raw.id : "";
     if (!id) continue;
     const files = Array.isArray(raw.siblings) ? (raw.siblings as Array<{ rfilename?: string }>) : [];
-    const gguf = files.map((f) => String(f?.rfilename ?? "")).filter((f) => f.toLowerCase().endsWith(".gguf"));
+    // **.gguf 여부만으로는 충분하지 않다**(실측: 상위 2개가 `mmproj-*.gguf` 였다).
+    // mmproj 는 비전 투영기이고, `-vocab.gguf` 는 토크나이저 조각이며, `.part`/`.tmp` 는
+    // **중단된 다운로드의 잔해**다. 이들을 "모델"로 추천하면 사용자는 다운로드한 뒤
+    // "이건 뭐지" 를 하게 된다. `isUsableModel` 이 그 판정의 **정본**이므로 여기서 쓴다
+    // (알림 쪽의 IGNORE_PATTERNS 와 같은 목록을 두 번 만들지 않는다).
+    const gguf = files
+      .map((f) => String(f?.rfilename ?? ""))
+      .filter((f) => f.toLowerCase().endsWith(".gguf"))
+      .filter((f) => isUsableModel(f));
     if (!gguf.length) continue; // **파일을 모르면 추천하지 않는다**
     const downloads = Number(raw.downloads ?? 0);
     const license =
@@ -326,29 +334,112 @@ export async function searchHub(opts: {
  * HEAD 를 하나씩 보내 크기를 얻는다. **적게** 보낸다(기본 12개) — 그 이상은 마크를
  * 아끼려고 하는 사용자 입장에서 공격이 된다. 못 얻은 것은 **0 으로 남긴다**(추측 금지).
  */
+/**
+ * 후보들의 크기를 채운다.
+ *
+ * **방법이 두 가지인데, 순서가 중요하다.**
+ *
+ *  1. **저장소 트리 API 한 번** — `/api/models/{repo}/tree/main?recursive=true` 는
+ *     그 저장소의 **모든 파일을 정확한 크기와 함께** 준다(실측: 31개 gguf · 10 KB 응답).
+ *     여기서 크기를 먼저 채우면 **후보 수와 무관하게 저장소당 1 요청** 이다.
+ *  2. 그래도 모이는 것만 **HEAD 로 개별 조회** 한다. 한계는 두 개다: 이 경로는
+ *     **리다이렉트 상대 경로**(file:/ )를 못 따라가고, 개별 요청이라 쿼터를 쓴다.
+ *
+ * 왜 이 순서인가: 예전에 후보 12개로 **잘라 두고** "정확도 vs 쿼터" 라는 트레이드오프를
+ * 골랐다. 그런데 트리 API 한 번이면 그 트레이드오프가 **사라진다** — 12개 제한은
+ * 조회 비용을 아끼려고 둔 것인데, 비용이 이미 없어졌으므로 **잘라 내는 근거도 없다.**
+ * 후보가 50개여도 요청은 저장소 수만큼이다. 사용자에게 "왜 50번째는 점수가 0 이냐"고
+ * 설명해야 하는 상황 자체를 없앤다(§5.10).
+ *
+ * 그래도 **개별 조회는 상한을 둔다** — 트리 API 가 404 인 저장소(가산 필터)가 여럿이면
+ * 그때만 N 번의 HEAD 가 나가므로, 그 길로만 자른다.
+ */
+export interface FillSizesResult {
+  models: HubModel[];
+  /** 트리 API 로 채운 개수 — "알고 있음" 과 "모름" 의 경계를 수치로 말한다. */
+  fromTree: number;
+  /** 개별 HEAD 로 채운 개수. */
+  fromHead: number;
+  /** 끝까지 모르는 후보 — 점수 0(미산정) 로 남는다. */
+  unknown: string[];
+  /** 실제로 나간 요청 수. */
+  requests: number;
+}
+
 export async function fillSizes(
   models: HubModel[],
-  opts: { limit?: number; fetchImpl?: typeof fetch; baseUrl?: string } = {}
-): Promise<HubModel[]> {
+  opts: { headLimit?: number; fetchImpl?: typeof fetch; baseUrl?: string } = {}
+): Promise<FillSizesResult> {
   const f = opts.fetchImpl ?? fetch;
   const base = opts.baseUrl ?? "https://huggingface.co";
-  const need = models.filter((m) => m.bytes <= 0).slice(0, opts.limit ?? 12);
-  const out = [...models];
+  let requests = 0;
+
+  // 1) 저장소별 트리 1회. **같은 저장소는 한 번만** 요청한다.
+  const repos = [...new Set(models.map((m) => m.repo).filter(Boolean))];
+  const sizes = new Map<string, number>();
   await Promise.all(
-    need.map(async (m) => {
+    repos.map(async (repo) => {
       try {
-        // **URL 한 번만 조립한다.** `file` 에 저장소가 이미 들어 있을 수 있어서
-        // 그대로 붙이면 경로가 두 번 반복되고 404 가 된다(실측: 크기를 못 채웠다).
+        requests++;
+        const res = await f(`${base}/api/models/${repo}/tree/main?recursive=true`, {
+          headers: { accept: "application/json", "user-agent": "harnesside" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) return;
+        const list = (await res.json()) as unknown;
+        if (!Array.isArray(list)) return;
+        for (const raw of list as Array<Record<string, unknown>>) {
+          const path = typeof raw?.path === "string" ? raw.path : "";
+          // LFS 파일은 `lfs.size` 가 정본이고, 일반 파일은 `size`.
+          const lfs = raw?.lfs as { size?: unknown } | undefined;
+          const size = Number(lfs?.size ?? raw?.size ?? 0);
+          if (path && Number.isFinite(size) && size > 0) sizes.set(`${repo}/${path}`, size);
+        }
+      } catch {
+        // 못 얻으면 조용히 넘어간다 — 뒤의 개별 조회가 보완해 준다(여기서 실패해도 끝이 아니다).
+      }
+    })
+  );
+
+  // 2) 트리로도 모르는 것만 개별 조회. **URL 한 번만 조립한다.**
+  //    `file` 에 저장소가 이미 들어 있을 수 있어 그대로 붙이면 경로가 두 번 반복되고 404 다(실측).
+  const headLimit = opts.headLimit ?? 12;
+  const out = models.map((m) => ({ ...m }));
+  const stillUnknown: HubModel[] = [];
+  let fromTree = 0;
+  for (const m of out) {
+    if (m.bytes > 0) continue;
+    const rel = m.file.startsWith(`${m.repo}/`) ? m.file.slice(m.repo.length + 1) : m.file;
+    const hit = sizes.get(`${m.repo}/${rel}`) ?? sizes.get(rel);
+    if (hit) {
+      m.bytes = hit;
+      fromTree++;
+      continue;
+    }
+    stillUnknown.push(m);
+  }
+  const toHead = stillUnknown.slice(0, headLimit);
+  await Promise.all(
+    toHead.map(async (m) => {
+      try {
+        requests++;
         const rel = m.file.startsWith(`${m.repo}/`) ? m.file.slice(m.repo.length + 1) : m.file;
         const res = await f(`${base}/${m.repo}/resolve/main/${rel}`, { method: "HEAD", redirect: "follow" });
         const len = Number(res.headers.get("content-length") ?? 0);
         if (res.ok && Number.isFinite(len) && len > 0) m.bytes = len;
       } catch {
-        // 못 얻으면 0 — "알 수 없음" 을 지어내지 않는다
+        // 못 얻으면 그대로 둔다 — "알 수 없음" 을 0 으로 지어내지 않는다
       }
     })
   );
-  return out;
+
+  return {
+    models: out,
+    fromTree,
+    fromHead: out.filter((m, i) => m.bytes > 0 && models[i].bytes <= 0).length - fromTree,
+    unknown: out.filter((m) => m.bytes <= 0).map((m) => m.file),
+    requests,
+  };
 }
 
 /** 로컬 파일 하나가 우선 계열에 해당하는가 — "설치됨" 배지를 정한다. */

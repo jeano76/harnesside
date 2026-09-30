@@ -22,6 +22,7 @@ import { bootstrap, type BootstrapResult } from "./bootstrap.js";
 import { LlamaLauncher } from "./llamaLauncher.js";
 import { resolveBrowserIntent } from "./browserIntent.js";
 import { acquireInstanceLock, type InstanceLock } from "./bootstrap.js";
+import { portOwner } from "../instanceGuard.js";
 import { HttpServer, readBody } from "./httpServer.js";
 import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type DaemonMode } from "./daemon.js";
 import { teeChild } from "./logWatcher.js";
@@ -375,6 +376,30 @@ async function main(): Promise<number> {
     // 이미 실행 중 — 조용히 두 개를 띄우면 VRAM/포트가 서로를 죽인다.
     emit(`[fatal] ${e instanceof Error ? e.message : String(e)}`);
     return 1;
+  }
+
+  // ── 락이 아니라 **포트** 로 확인한다 ──────────────────────────────────────
+  // 실측: 락이 243097 을 가리키는데 7317 의 소유자는 185924 였다(락을 읽고 그 pid 를
+  // 죽였더니 옛 서버가 그대로 살았다). 그러면 **옛 코드가 계속 응답**하므로 아무도
+  // 눈치채지 못한다 — 검증 스크립트가 새 코드가 아닌 옛 서버를 측정하는 사고로 이어진다.
+  // 그래서 락은 "pid 뭐였다" 와, 포트는 "누가 잡고 있나" 를 **따로** 말한다.
+  {
+    const owner = portOwner(process.pid);
+    if (owner) {
+      emit(`[guard] 자기 pid ${process.pid} 가 포트 ${owner.host}:${owner.port} 를 소유 (정상)`);
+    } else {
+      // **내가 그 포트를 못 잡았다** 는 뜻일 수 있다(다른 인스턴스가 선점). 조용히
+      // 진행하면 이후 모든 API 응답이 **옛 프로세스** 의 것이 된다.
+      // 부팅 계획(단계 6)이 정하기 전에 여기서는 **환경 지정값** 만 본다. 정한 값이
+      // 아니면 "아직 응답하지 않음" 이 정답이라 굳이 추측하지 않는다.
+      const wantPort = Number(process.env.HARNESSIDE_PORT ?? 7317);
+      const answered = await isPortServing(wantPort).catch(() => false);
+      emit(
+        answered
+          ? `[guard] ⚠ 포트 ${wantPort} 가 응답하지만 그것이 자기 pid(${process.pid}) 의 소유가 아닙니다 — 이전 인스턴스가 살아 있을 수 있습니다`
+          : `[guard] 포트 ${wantPort} 는 아직 응답하지 않음 (부팅 중 — 정상)`,
+      );
+    }
   }
 
   const webDir = join(projectRoot, "dist", "web");
@@ -731,12 +756,22 @@ async function main(): Promise<number> {
                 local: localNames.filter((n) => n.endsWith(".gguf")),
               };
             }
+            // **크기를 채워야** 점수가 의미를 가진다(목록 API 에는 크기가 없다 —
+            // 안 채우면 전부 100점 이 나온다. 실측).
+            //
+            // 트리 API 로 저장소당 **1 요청** 이므로 후보를 자르지 않는다(실측: 31개
+            // 크기가 10 KB 응답으로 온다). 그래도 "얼마나 조회했고 뭘 몰랐는지" 를 돌려준다 —
+            // 점수 0 인 항목이 남아 있으면 사용자가 이유를 알 수 있어야 한다.
+            const sizes = await fillSizes(models);
+            const scored = recommend(sizes.models, boot?.hardware ?? null, { localFiles: localNames });
+            ring.info("models", `크기 조회 ${sizes.requests} 요청 · 트리 ${sizes.fromTree}건 · 개별 ${sizes.fromHead}건`, "server", {
+              unknown: sizes.unknown.length,
+            });
             return {
               ok: true,
-              // **크기를 채워야** 점수가 의미를 가진다(목록 API 에는 크기가 없다 —
-              // 안 채우면 전부 100점 이 나온다. 실측).
-              ...recommend(await fillSizes(models, { limit: 12 }), boot?.hardware ?? null, { localFiles: localNames }),
+              ...scored,
               dir: modelsDir,
+              sizes: { requests: sizes.requests, fromTree: sizes.fromTree, fromHead: sizes.fromHead, unknown: sizes.unknown },
             };
           })
           .route("POST", "/api/models/download", async (c) => {
@@ -1145,3 +1180,17 @@ if (await tryStandalone()) {
 
 /** 재개 프롬프트 — 사용자가 "계속해" 라고 말한 것을 한 문장으로 남긴다. */
 const RESUME_PROMPT = "이전 작업을 이어서 진행해 주십시오.";
+
+/** 포트가 **응답** 하는가 — "내 것인지" 와 "떠 있는가" 를 나눠서 본다. */
+async function isPortServing(p: number, timeoutMs = 1200): Promise<boolean> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`http://127.0.0.1:${p}/api/health`, { signal: ctl.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}

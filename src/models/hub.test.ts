@@ -14,7 +14,7 @@
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { recommend, scoreModel, estimateMemory, parseHubSearch, expandMissingFiles, localMatchesPinned, fillSizes, pickForMachine, quantRank, type HubModel } from "./hub.js";
+import { recommend, scoreModel, estimateMemory, parseHubSearch, expandMissingFiles, localMatchesPinned, fillSizes, pickForMachine, quantRank, type HubModel, searchHub } from "./hub.js";
 import type { Hardware } from "../setup/hardware.js";
 
 const GiB = 1024 ** 3;
@@ -186,17 +186,59 @@ test("크기 채우기는 **적게** 요청한다 — 마크를 아끼는 사용
   const f = (async (u: RequestInfo | URL, init?: RequestInit) => {
     asked.push(String(u));
     if (init?.method === "HEAD") return { ok: true, headers: new Headers({ "content-length": "12345" }) } as unknown as Response;
-    throw new Error(`unexpected ${String(u)}`);
+    // 저장소 트리는 **404** 다 — 그래야 개별 조회로 내려가는 경로를 재게 된다.
+    return { ok: false, status: 404, json: async () => [] } as unknown as Response;
   }) as unknown as typeof fetch;
   const models = Array.from({ length: 20 }, (_, i) => model({ id: `x/M${i}`, file: `x/M${i}/M${i}.gguf`, bytes: 0 }));
-  const out = await fillSizes(models, { fetchImpl: f, limit: 5 });
-  assert.equal(asked.length, 5, `HEAD 를 ${asked.length} 번 보냈다 — 5개로 제한해야 한다`);
+  const r = await fillSizes(models, { fetchImpl: f, headLimit: 5 });
+  const heads = asked.filter((u) => u.includes("/resolve/"));
+  assert.equal(heads.length, 5, `HEAD 를 ${heads.length} 번 보냈다 — 5개로 제한해야 한다`);
   assert.ok(
-    asked.every((u) => u.split("/").filter((s) => s === "M0" || s === "M1" || s === "M2" || s === "M3" || s === "M4").length === 1),
-    `저장소가 두 번 들어갔다: ${asked[0]}`
+    heads.every((u) => u.split("/").filter((s) => s.startsWith("M") && s.endsWith(".gguf")).length === 1),
+    `저장소가 두 번 들어갔다: ${heads[0]}`,
   );
-  assert.equal(out[0].bytes, 12345, "크기를 채우지 못했다");
-  assert.equal(out[19].bytes, 0, "요청하지 않은 항목은 '모름' 그대로");
+  assert.equal(r.models[0].bytes, 12345, "크기를 채우지 못했다");
+  assert.equal(r.models[19].bytes, 0, "요청하지 않은 항목은 '모름' 그대로");
+});
+
+test("저장소 트리 **한 번** 으로 그 저장소의 모든 크기를 채운다 — 후보 수와 무관하다", async () => {
+  // 실측 근거: `/api/models/{repo}/tree/main?recursive=true` 는 31개 gguf 의 크기를
+  // 10 KB 응답으로 한 번에 준다. 그래서 예전의 "후보 12개로 자른다" 는 근거가 사라졌다.
+  const asked: string[] = [];
+  const f = (async (u: RequestInfo | URL) => {
+    asked.push(String(u));
+    if (String(u).includes("/tree/")) {
+      return {
+        ok: true,
+        json: async () => [
+          { type: "file", path: "M-Q4_K_M.gguf", size: 100 },
+          { type: "file", path: "M-Q8_0.gguf", lfs: { size: 200 } },
+          { type: "file", path: "README.md", size: 10 },
+        ],
+      } as unknown as Response;
+    }
+    throw new Error(`트리 외 요청은 없어야 한다: ${String(u)}`);
+  }) as unknown as typeof fetch;
+  // 50개 후보, 저장소는 하나. **`repo` 와 `file` 이 일치해야** 트리 키가 맞는다 —
+  // 둘이 어긋나면 조용히 개별 조회로 내려가고(요청 12번), 사용자는 "왜 느리지?" 만 본다.
+  const models = Array.from({ length: 50 }, () =>
+    model({ id: "x/Repo", repo: "x/Repo", file: `x/Repo/M-Q4_K_M.gguf`, bytes: 0 }),
+  );
+  const r = await fillSizes(models, { fetchImpl: f });
+  assert.equal(asked.length, 1, `저장소 하나인데 요청이 ${asked.length} 번 — 1 이어야 한다`);
+  assert.ok(asked[0].includes("/api/models/x/Repo/tree/main"), `트리 엔드포인트가 아니다: ${asked[0]}`);
+  // **LFS 파일은 lfs.size 가 정본** 이다(일반 `size` 는 LFS 포인터의 크기일 수 있다).
+  assert.equal(r.models[0].bytes, 100, "일반 파일 크기를 못 읽었다");
+  assert.equal(r.fromTree, 50, `트리에서 채운 개수 ${r.fromTree}`);
+  assert.deepEqual(r.unknown, [], "전부 채워졌는데 '모름' 이 남았다");
+});
+
+test("크기를 모르는 후보는 **점수 0(미산정)** — 순위는 다운로드 수로 매긴다", async () => {
+  // 트리·HEAD 모두 실패하는 저장소.
+  const f = (async () => ({ ok: false, status: 500, json: async () => [] })) as unknown as typeof fetch;
+  const r = await fillSizes([model({ bytes: 0, id: "a/x" }), model({ bytes: 0, id: "b/y" })], { fetchImpl: f });
+  assert.equal(r.unknown.length, 2, `모르는 후보가 ${r.unknown.length} 개`);
+  assert.equal(r.models.every((m) => m.bytes === 0), true, "모름을 지어내지 않았다");
 });
 
 test("로컬 파일 판정 — **쓸 수 있는** 파일만 우선 계열로 인정한다", () => {
@@ -210,4 +252,45 @@ test("tool_calling 지원 여부를 알 수 없으면 **모름** 이라고 둔�
   const unknown = scoreModel(model({ toolCalling: null }), hw());
   const yes = scoreModel(model({ toolCalling: true }), hw());
   assert.ok(yes.score > unknown.score, "알 수 없는데 지원한다고 점수를 받았다");
+});
+
+test("`repo` 와 `file` 이 어긋나면 **조용히 개별 조회** 로 내려간다 — 그래도 죽지 않는다", async () => {
+  // 목록 API 가 준 값이 서로 어긋나는 상황(가산 필터·미러)을 그대로 통과시키는 경우다.
+  const asked: string[] = [];
+  const f = (async (u: RequestInfo | URL, init?: RequestInit) => {
+    asked.push(String(u));
+    if (String(u).includes("/tree/")) return { ok: true, json: async () => [{ path: "M-Q4_K_M.gguf", size: 777 }] } as unknown as Response;
+    if (init?.method === "HEAD") return { ok: true, headers: new Headers({ "content-length": "555" }) } as unknown as Response;
+    return { ok: false, status: 404, json: async () => [] } as unknown as Response;
+  }) as unknown as typeof fetch;
+  // repo 는 A 인데 file 은 B 를 가리킨다 — 어긋난 상태.
+  const r = await fillSizes([model({ id: "b/Repo", repo: "a/Repo", file: "b/Repo/M-Q4_K_M.gguf", bytes: 0 })], { fetchImpl: f });
+  assert.equal(r.models[0].bytes, 555, "어긋났을 때 개별 조회로도 크기를 못 채웠다");
+  assert.ok(asked.some((u) => u.includes("/resolve/")), "어긋나면 개별 조회로 내려가지 않았다");
+});
+
+test("검색 결과에서 **mmproj·vocab·중단된 다운로드** 를 뺀다 — '모델' 이 아니다", async () => {
+  // 실측: .gguf 여부만 보면 상위 2개가 `mmproj-*.gguf` 였다. mmproj 는 비전 투영기이고
+  // `-vocab.gguf` 는 토크나이저 조각, `.part` 는 **중단된 다운로드의 잔해** 다.
+  // 사용자는 이것을 다운로드한 뒤 "이건 뭐지" 를 하게 된다.
+  const json = [
+    {
+      id: "ornith-ai/Ornith-1.5-9B-GGUF",
+      downloads: 100,
+      siblings: [
+        { rfilename: "Ornith-1.5-9B-Q4_K_M.gguf" },
+        { rfilename: "mmproj-8B-f16.gguf" },
+        { rfilename: "Ornith-vocab.gguf" },
+        { rfilename: "Ornith-Q4_K_M.gguf.part" },
+        { rfilename: "README.md" },
+      ],
+    },
+  ];
+  const f = (async () => ({ ok: true, json: async () => json })) as unknown as typeof fetch;
+  const out = await searchHub({ query: "Ornith", fetchImpl: f });
+  assert.deepEqual(
+    out.map((m) => m.file.split("/").pop()),
+    ["Ornith-1.5-9B-Q4_K_M.gguf"],
+    `추천에 쓰레기가 섞였다: ${out.map((m) => m.file).join(", ")}`,
+  );
 });
