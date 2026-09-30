@@ -107,6 +107,8 @@ export class AgentService {
   private hiddenReasoningNotified = false;
   /** 이 실행의 대화 블록(저장·복원의 원본). */
   private blocks: AgentBlock[] = [];
+  /** 채택한 서버를 쓰고 있는가 — **교체 대상이 아니다**(사용자의 것이라 §6.2). */
+  private adoptedServer = false;
   private think: ThinkPolicy = { ...DEFAULT_THINK };
 
   constructor(private opts: AgentServiceOptions) {}
@@ -136,6 +138,57 @@ export class AgentService {
   /** 지금까지의 대화 블록(저장·복원용). */
   get conversation(): AgentBlock[] {
     return this.blocks;
+  }
+
+  /**
+   * llama-server 를 **새 모델로** 다시 띄운다(§7.1 교체 → 재기동).
+   *
+   * 순서를 지킨다: **이전 자식만** 확실히 죽이고 → 새 자식 → 헬스체크.
+   * 채택한 서버는 건드리지 않는다(사용자의 것 — §6.2). 그 경로에서 "교체" 라는 말 자체가
+   * 틀리기 때문에, 이 메서드는 spawn 한 자식이 있을 때만 동작한다.
+   *
+   * 되돌리기는 **호출자가** 한다. 여기서는 사실만 말한다(교체했는지, 새 모델이 응답하는지) —
+   * 롤백 판단을 여기서 하면 두 곳에서 판단하게 된다.
+   */
+  async swapModel(opts: { modelPath: string; stopChild: () => Promise<void>; spawn: () => Promise<boolean> }): Promise<{ ok: boolean; step: string; reason: string; responseOk: boolean }> {
+    if (this.adopted) {
+      // adopt 된 서버를 죽이고 재기동하면 **사용자의 서버를 죽인다.** 그래서 막는다.
+      return {
+        ok: false,
+        step: "check",
+        reason: "이미 떠 있는 서버를 채택한 상태입니다 — 그 서버는 사용자의 것이라 교체하지 않았습니다. 서버를 직접 내린 뒤 다시 실행하십시오.",
+        responseOk: false,
+      };
+    }
+    try {
+      await opts.stopChild();
+    } catch (e) {
+      return { ok: false, step: "stop-llama", reason: `이전 llama 종료 실패: ${msgOf(e)}`, responseOk: false };
+    }
+    let ready: boolean;
+    try {
+      ready = await opts.spawn();
+    } catch (e) {
+      return { ok: false, step: "restart", reason: `재기동 실패: ${msgOf(e)}`, responseOk: false };
+    }
+    // §5.13.1: **"설치 성공 = 성공" 은 함정이다.** 새 모델이 실제로 응답해야 성공이다.
+    return {
+      ok: ready,
+      step: "verify",
+      reason: ready
+        ? "새 모델이 응답합니다(/v1/models 200)"
+        : "교체는 끝났지만 새 모델이 응답하지 않습니다 — '성공' 으로 세지 않습니다",
+      responseOk: ready,
+    };
+  }
+
+  /** 채택한 서버를 쓰고 있는가. */
+  get adopted(): boolean {
+    return this.adoptedServer;
+  }
+
+  setAdopted(on: boolean): void {
+    this.adoptedServer = on;
   }
 
   /** 사용자 입력을 대화에 넣는다 — "내가 뭐라고 했나" 가 세션의 핵심이다. */
@@ -296,4 +349,8 @@ export class AgentService {
     this.emit({ type: "agent.status", text: "취소 요청됨", at: (this.opts.now ?? Date.now)() });
     return { ok: true, detail: "취소했습니다" };
   }
+}
+
+function msgOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }

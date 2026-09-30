@@ -31,10 +31,11 @@ import { gitStatus, gitShowHead } from "./gitDiff.js";
 import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
-import { AgentService } from "./agentService.js";
+import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
 import { SessionBridge } from "../session/bridge.js";
 import { searchHub, recommend, fillSizes } from "../models/hub.js";
 import { ModelDownloader, modelPathFor } from "../models/download.js";
+import { planSwap, judgeSwap } from "../models/manage.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -587,7 +588,88 @@ async function main(): Promise<number> {
             if (!item) throw Object.assign(new Error("진행 중인 다운로드가 없습니다"), { status: 404 });
             return { item };
           })
-          .route("GET", "/api/models/downloads", () => ({ items: downloader.all() }));
+          .route("GET", "/api/models/downloads", () => ({ items: downloader.all() }))
+          // ── 모델 교체 (§7.1 · §5.13.1) ──────────────────────────────────────
+          // **"설치 성공 = 성공" 은 함정이다.** 새 모델이 실제로 응답해야 성공이고,
+          // 아니면 이전 모델로 되돌린다(judgeSwap 의 규칙 그대로).
+          .route("POST", "/api/models/activate", async (c) => {
+            const body = (await readBody(c.req)) as { path?: string; confirm?: boolean };
+            const path = String(body.path ?? "");
+            if (!path) throw Object.assign(new Error("path 가 필요합니다"), { status: 400 });
+            const st = await stat(path).catch(() => null);
+            if (!st?.isFile()) throw Object.assign(new Error(`모델 파일이 없습니다: ${path}`), { status: 400 });
+            if (body.confirm !== true) {
+              // planSwap 의 경고를 그대로 사용한다 — 확인 다이얼로그의 내용.
+              const sw = planSwap({
+                from: boot?.model?.path ? { id: boot.model.path, path: boot.model.path, bytes: 0 } : null,
+                to: { id: path, path, bytes: st.size },
+                preserveOld: true,
+                canRestartLlama: !!launcher,
+              } as never);
+              return { ok: false, needsConfirm: true, warnings: sw.warnings, steps: sw.steps };
+            }
+
+            const previous = boot?.model?.path ?? null;
+            const sw = planSwap({
+              from: previous ? { id: previous, path: previous, bytes: 0 } : null,
+              to: { id: path, path, bytes: st.size },
+              preserveOld: true,
+              canRestartLlama: !!launcher,
+            } as never);
+            for (const w of sw.warnings) ring.warn("models", w, "server");
+
+            const swap = await agent.swapModel({
+              modelPath: path,
+              stopChild: async () => {
+                if (launcher) await launcher.stop();
+              },
+              spawn: async () => {
+                // 새 경로로 다시 만든다. **이전 자식만** 죽였으므로 안전하다.
+                launcher = new LlamaLauncher(
+                  {
+                    binPath: (boot?.llama?.binPath ?? "") as string,
+                    modelPath: path,
+                    host: "127.0.0.1",
+                    port: boot?.ports?.llamaPort ?? 8080,
+                    tuning: (boot?.tuning ?? DEFAULT_THRESHOLDS) as never,
+                  },
+                  { logger: { info: (o, m) => emit(`[llama] ${lineOf(o) ?? m}`), warn: (o, m) => emit(`[llama] ${lineOf(o) ?? m}`), error: (o, m) => emit(`[llama] ${lineOf(o) ?? m}`) } }
+                );
+                if (!boot?.llama) {
+                  emit("[models] llama 바이너리를 모릅니다 — 재기동하지 못했습니다");
+                  return false;
+                }
+                launcher.spawn();
+                return launcher.waitUntilReady(120_000);
+              },
+            });
+
+            if (!swap.ok) {
+              // **되돌린다** — 되돌릴 곳이 없으면 사용자는 모델이 없는 상태로 남는다.
+              if (previous && launcher) {
+                const back = new LlamaLauncher(
+                  {
+                    binPath: (boot?.llama?.binPath ?? "") as string,
+                    modelPath: previous,
+                    host: "127.0.0.1",
+                    port: boot?.ports?.llamaPort ?? 8080,
+                    tuning: (boot?.tuning ?? DEFAULT_THRESHOLDS) as never,
+                  },
+                  {}
+                );
+                back.spawn();
+                await back.waitUntilReady(60_000);
+                emit(`[models] 이전 모델로 되돌렸습니다: ${previous}`);
+              }
+              ring.error("models", `모델 교체 실패: ${swap.reason}`, "server");
+              return { ...swap, rolledBack: !!previous, previous };
+            }
+            if (boot) boot.model = { ...boot.model, path, reason: "사용자가 교체함" } as never;
+            agent.invalidate();
+            ring.info("models", `모델 교체 완료: ${path}`, "server");
+            emit(`[models] 모델 교체 완료: ${path}`);
+            return { ...swap, path };
+          });
         const { port: actual } = await http.start();
         hub.publish({ type: "sys.logs", limits: ring.status } as never);
         return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };

@@ -40,6 +40,8 @@ export function ModelPanel({ client, onNotice }: { client: ApiClient; onNotice: 
   const [result, setResult] = useState<{ ok: boolean; detail?: string; local?: string[]; pinned: Scored | null; top: Scored[]; fallbackReason: string | null; pinnedNote: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [downloads, setDownloads] = useState<{ id: string; file: string; state: string; progress: number; totalBytes: number; receivedBytes: number; error: string | null }[]>([]);
+  /** 교체 확인 다이얼로그 내용(서버가 `planSwap` 으로 만든 경고). */
+  const [plan, setPlan] = useState<{ path: string; warnings: string[]; steps: string[] } | null>(null);
 
   const loadLocal = useCallback(async () => {
     try {
@@ -84,6 +86,35 @@ export function ModelPanel({ client, onNotice }: { client: ApiClient; onNotice: 
         }
       } catch (e) {
         onNotice("error", "다운로드 요청 실패", e instanceof ApiError ? e.message : String(e));
+      }
+    },
+    [client, onNotice, loadLocal]
+  );
+
+  /**
+   * 교체 — **확인 없이 하지 않는다**(§7.1: 되돌릴 곳이 없는 변경).
+   * 서버는 응답 확인 전까지 성공으로 세지 않는다(§5.13.1 의 "설치 성공 = 성공" 함정).
+   */
+  const activate = useCallback(
+    async (path: string, file: string, confirm = false) => {
+      try {
+        const r = await client.post<{ ok: boolean; needsConfirm?: boolean; warnings?: string[]; steps?: string[]; path: string; reason?: string }>(
+          "/api/models/activate",
+          { path, confirm }
+        );
+        if (r.needsConfirm) {
+          setPlan({ path, warnings: r.warnings ?? [], steps: r.steps ?? [] });
+          return;
+        }
+        setPlan(null);
+        if (r.ok) {
+          onNotice("info", "모델 교체 완료", `${file} — 새 모델이 응답하는 것을 확인했습니다.`);
+          void loadLocal();
+        } else {
+          onNotice("error", "모델 교체 실패", r.reason ?? "알 수 없는 오류");
+        }
+      } catch (e) {
+        onNotice("error", "교체 요청 실패", e instanceof ApiError ? e.message : String(e));
       }
     },
     [client, onNotice, loadLocal]
@@ -141,11 +172,46 @@ export function ModelPanel({ client, onNotice }: { client: ApiClient; onNotice: 
       {local.length > 0 && (
         <div style={{ display: "grid", gap: 2 }}>
           {local.map((m) => (
-            <div key={m.path} style={{ fontSize: 11, color: m.path === active ? FG : DIM }}>
-              {m.path === active ? "● " : "· "}
-              {m.file} · {gib(m.bytes / 1024 ** 3)}
+            <div key={m.path} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11 }}>
+              <span style={{ color: m.path === active ? FG : DIM, flex: 1 }}>
+                {m.path === active ? "● " : "· "}
+                {m.file} · {gib(m.bytes / 1024 ** 3)}
+              </span>
+              {m.path !== active && (
+                <button
+                  type="button"
+                  onClick={() => void activate(m.path, m.file)}
+                  style={{ background: "none", border: 0, color: "#3fb950", cursor: "pointer", font: "inherit", fontSize: 10 }}
+                >
+                  이 모델로 교체
+                </button>
+              )}
             </div>
           ))}
+        </div>
+      )}
+
+      {plan && (
+        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: 8, display: "grid", gap: 6 }}>
+          <div style={{ fontSize: 11 }}>교체 전 확인 — {plan.path.split("/").pop()}</div>
+          {plan.warnings.map((w, i) => (
+            <div key={i} style={{ color: "#d29922", fontSize: 10 }}>
+              · {w}
+            </div>
+          ))}
+          <div style={{ color: DIM, fontSize: 10 }}>순서: {plan.steps.join(" → ")}</div>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            <button type="button" onClick={() => setPlan(null)} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit" }}>
+              취소
+            </button>
+            <button
+              type="button"
+              onClick={() => void activate(plan.path, plan.path.split("/").pop() ?? "", true)}
+              style={{ background: "#238636", color: "#fff", border: 0, borderRadius: 5, padding: "2px 10px", cursor: "pointer", font: "inherit", fontSize: 11 }}
+            >
+              교체하기
+            </button>
+          </div>
         </div>
       )}
 

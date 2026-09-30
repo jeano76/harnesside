@@ -172,6 +172,13 @@ test("크기를 모르면 점수를 **지어내지 않는다** — 다 100점 �
   const unknown = scoreModel(model({ bytes: 0 }), hw());
   assert.ok(unknown.notes.some((n) => /크기/.test(n)), "크기를 모른다고 말하지 않는다");
   assert.equal(unknown.estimate.why.includes("추정 불가"), true);
+  // 100점이 아니라 **0(미산정)** 다. 100점을 주면 "비교가 됐다" 고 읽힌다(실측).
+  assert.equal(unknown.score, 0, `미산정인데 점수가 ${unknown.score} 로 나왔다`);
+  // 알 수 있는 것은 **순위** 다 — 순서를 Downloads 로 매긴다.
+  const a = model({ id: "a/x", file: "a/x/m.gguf", bytes: 0, downloads: 10 });
+  const b = model({ id: "b/x", file: "b/x/m.gguf", bytes: 0, downloads: 900 });
+  const r = recommend([a, b], hw());
+  assert.equal(r.top[0].model.id, "b/x", "알려진 사실(다운로드 수)으로도 순위를 매기지 않았다");
 });
 
 test("크기 채우기는 **적게** 요청한다 — 마크를 아끼는 사용자다", async () => {

@@ -125,6 +125,10 @@ export function scoreModel(m: HubModel, hw: Pick<Hardware, "gpus"> | null, opts:
   const vramShort = Math.max(0, mem.vramGiB - (freeVram || mem.vramGiB)); // 0 = 정보 없음
 
   let score = 100;
+  // **크기를 모르면 점수를 만들지 않는다.** 100점을 주면 "비교가 되었다" 고 읽히지만
+  // 실제로는 아무것도 비교하지 않은 것이다(실측: 후보 5개가 전부 100점 — 목록이
+  // 아무 말도 하지 않는的样子이 된다). 미산정이면 0 이고, UI 가 그 사실을 보인다.
+  const scored = m.bytes > 0;
   if (freeVram > 0) {
     score -= Math.min(60, vramShort * 12);
     if (vramShort > 0) notes.push(`VRAM ${vramShort.toFixed(1)}GiB 부족 — 일부를 CPU 로 처리합니다`);
@@ -147,13 +151,16 @@ export function scoreModel(m: HubModel, hw: Pick<Hardware, "gpus"> | null, opts:
     score -= 50;
     notes.push(`라이선스 확인 필요 (${m.license})`);
   }
-  if (m.bytes <= 0) notes.push("크기를 모릅니다 — 점수 비교가 정확하지 않습니다");
+  if (m.bytes <= 0) {
+    // **알려진 사실**(다운로드 수)만으로 순위를 매긴다. 나머지 점수는 0(미산정)이다.
+    notes.push("크기를 모릅니다 — 점수 비교가 불가능합니다(다운로드 수 순으로 봅니다)");
+  }
 
   // §7.2: 계열은 점수와 **무관하게** 고정한다. 점수를 뒤집어 올리는 게 아니라
   // 점수 계산 **밖**에서 별도 슬롯을 준다 — 그래야 "왜 1순위지?" 에 답할 수 있다.
   return {
     model: m,
-    score: Math.round(Math.max(0, Math.min(100, score))),
+    score: scored ? Math.round(Math.max(0, Math.min(100, score))) : 0,
     family,
     quant,
     estimate: {
@@ -198,7 +205,12 @@ export function recommend(
     // §7.2: 우선 계열은 "상위 5개 슬롯에 서로 경쟁시키지 않는다" 고 명시돼 있다.
     // **고른 하나만 빼면 나머지 같은 계열이 슬롯을 차지한다** — 계열 전체를 뺀다.
     .filter((s) => !s.pinned)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) =>
+      // 크기를 모르는 항목(점수 0)끼리는 **점수로 정렬하지 않는다** — 모두 0 이라
+      // 동률이고, 동률 정렬은 실행마다 순서가 달라질 수 있다(§5.10 store.list 와 같은
+      // 교훈). 알려진 사실(다운로드 수)만으로 매긴다.
+      a.score === 0 && b.score === 0 ? b.model.downloads - a.model.downloads : b.score - a.score
+    )
     .slice(0, opts.topN ?? 5);
 
   let fallbackReason: string | null = null;
