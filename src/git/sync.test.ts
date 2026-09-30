@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { planClone, cloneArgs, planCommit, pull, push, summarize, summaryLabel, redactUrl, authOf, rejectForce, needsFileScheme } from "./sync.js";
+import { planClone, cloneArgs, planCommit, pull, push, summarize, summaryLabel, redactUrl, authOf, rejectForce, needsFileScheme, commit } from "./sync.js";
 
 const run = promisify(execFile);
 const GIT_ENV = {
@@ -348,4 +348,71 @@ test("**로컬 경로** clone 은 --depth 를 무시한다 — 얕게 받을 줄
   assert.equal(needsFileScheme("https://github.com/me/repo.git"), false);
   // 스킴도 경로도 아니면 애매 — 로컬로 보아 경고하는 편이 안전하다
   assert.equal(needsFileScheme("github.com/me/repo.git"), true);
+});
+
+// ---------------------------------------------------------------- 커밋 실행
+
+test("커밋이 **실제로 쌓인다** — 해시와 커밋한 파일을 돌려준다", async () => {
+  const dir = await initRepo(await tmp());
+  try {
+    await writeFile(join(dir, "b.txt"), "둘째\n");
+    const r = await commit(dir, { message: "b 추가", paths: ["b.txt"], all: false, allowEmpty: false });
+    assert.equal(r.ok, true, !r.ok ? r.detail : "");
+    if (!r.ok) return;
+    // **해시는 커밋 뒤의 HEAD** 다. 미리 읽으면 직전 커밋의 해시를 말한다(옛 사실).
+    assert.equal(r.value.hash.length, 40, `해시가 아니다: ${r.value.hash}`);
+    const show = await g(dir, "show", "--name-only", "--format=%s", "-1");
+    assert.match(show.stdout, /b\.txt/);
+    assert.match(show.stdout, /b 추가/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("저장소 **밖 경로** 는 거부한다 — 고른 파일만 커밋돼야 한다", async () => {
+  const dir = await initRepo(await tmp());
+  try {
+    await writeFile(join(dir, "c.txt"), "셋째\n");
+    const r = await commit(dir, { message: "밖 경로", paths: ["/etc/passwd"], all: false, allowEmpty: false });
+    assert.equal(r.ok, false, "저장소 밖 경로를 그대로 커밋했다");
+    // **어떤 경로였는지** 를 말해야 사용자가 고칠 수 있다.
+    assert.match(r.detail, /etc\/passwd/, `거부 사유에 경로가 없다: ${r.detail}`);
+    // 파일은 그대로 남아 있어야 한다 — 거부되었으니 커밋도 없다.
+    const log = await g(dir, "log", "--format=%s");
+    assert.doesNotMatch(log.stdout, /밖 경로/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("**빈 메시지** 는 커밋하지 않는다 — 아무것도 안 한 커밋은 이력의 노이즈다", async () => {
+  const dir = await initRepo(await tmp());
+  try {
+    await writeFile(join(dir, "d.txt"), "넷째\n");
+    const r = await commit(dir, { message: "   ", paths: ["d.txt"], all: false, allowEmpty: true });
+    assert.equal(r.ok, false, "빈 메시지로 커밋했다");
+    const log = await g(dir, "log", "--format=%s");
+    assert.match(log.stdout, /^init$/m, "커밋이 추가되었다");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("`all` 은 **추적 중인 변경만** — 새 파일은 조용히 빠진다", async () => {
+  const dir = await initRepo(await tmp());
+  try {
+    await writeFile(join(dir, "a.txt"), "고침\n");
+    await writeFile(join(dir, "untracked.txt"), "추적 안 됨\n");
+    const r = await commit(dir, { message: "수정만", paths: [], all: true, allowEmpty: false });
+    assert.equal(r.ok, true, !r.ok ? r.detail : "");
+    const names = await g(dir, "show", "--name-only", "--format=", "-1");
+    assert.match(names.stdout, /a\.txt/);
+    // **빠졌다는 사실을 숨기지 않는다.** all 은 "모두" 라는 이름과 달리
+    // 미추적 파일을 넣지 않는다 — 사용자가 알아야 한다.
+    assert.doesNotMatch(names.stdout, /untracked\.txt/);
+    const st = await g(dir, "status", "--porcelain");
+    assert.match(st.stdout, /\?\? untracked\.txt/, "미추적 파일이 커밋되어 사라졌다");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

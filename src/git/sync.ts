@@ -14,7 +14,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { dirname } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 const run = promisify(execFile);
 
@@ -26,7 +26,7 @@ const ENV = {
   LC_ALL: "C",
 } as const;
 
-export type GitError = "not-a-repo" | "git-missing" | "timeout" | "not-authenticated" | "conflict" | "nothing-to-commit" | "rejected" | "failed";
+export type GitError = "not-a-repo" | "git-missing" | "timeout" | "not-authenticated" | "conflict" | "nothing-to-commit" | "rejected" | "outside-path" | "failed";
 
 export type GitResult<T> = { ok: true; value: T } | { ok: false; reason: GitError; detail: string };
 
@@ -255,6 +255,70 @@ export async function currentBranch(cwd: string): Promise<string> {
   const r = await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
   const name = r.ok ? r.value.trim() : "";
   return name && name !== "HEAD" ? name : "main";
+}
+
+/**
+ * 커밋 실행.
+ *
+ * `planCommit` 은 **판단만** 한다("커밋할 수 있는가"). 여기가 실행한다.
+ *
+ * 두 가지 를 여기서 지킨다:
+ *  1. **경로 검증** — 클라이언트가 보낸 파일 목록은 그대로 `git commit` 에 들어간다.
+ *     인자 배열이라 쉼 인젝션은 막히지만, **저장소 밖 경로** 를 넘기면 커밋의 범위가
+ *     사용자가 고른 것과 달라진다. 그래서 루트 안인지 먼저 확인하고, 아니라면 **경로 이름과
+ *     함께** 거부한다.
+ *  2. **결과는 커밋 해시로** 돌려준다. "성공" 만 돌려주면 화면이 무엇이 바뀌었는지
+ *     모른다 — 변경 검토 흐름에서 커밋 해시는 나중에 다시 필요해진다.
+ */
+export async function commit(cwd: string, plan: CommitPlan): Promise<GitResult<{ hash: string; message: string; files: string[] }>> {
+  const decision = planCommit(plan);
+  if (!decision.ok) return { ok: false, reason: decision.reason === "empty-message" ? "nothing-to-commit" : "failed", detail: decision.detail };
+
+  // **루트 밖 경로를 거른다.** git 은 조용히 무시하는 경우가 아니라, 저장소 밖
+  // 경로면 "pathspec" 오류를 낸다 — 어느 쪽이든 사용자가 고른 파일만 커밋돼야 한다.
+  const root = resolve(cwd);
+  const outside = plan.all ? [] : plan.paths.filter((p) => {
+    const abs = isAbsolute(p) ? resolve(p) : resolve(root, p);
+    return abs !== root && !abs.startsWith(`${root}/`);
+  });
+  if (outside.length > 0) {
+    // **별도 사유** 다. "failed" 로 뭉개면 라우트가 500 을 내고, 사용자에게는
+    // 서버가 고장난 것처럼 보인다 — 실제로 틀린 경로는 400(사용자 입력) 이다.
+    return { ok: false, reason: "outside-path", detail: `저장소 밖의 경로는 커밋할 수 없습니다: ${outside.join(", ")}` };
+  }
+
+  // **선택한 경로를 먼저 스테이징한다.**
+  //
+  // `git commit -- <경로>` 는 **이미 추적된** 파일만 커밋한다. 새로 만든 파일을
+  // 지정하면 `pathspec ... did not match any file(s) known to git` 로 실패한다
+  // (실측) — 즉 **새 파일 커밋이 한 번도 동작하지 않았다.** AI 가 만든 새 파일이
+  // 가장 흔한 경우라, 화면에서 파일을 고르고 커밋하면 늘 이 오류였다.
+  // "선택" 이라는 뜻에 스테이징이 포함된다.
+  if (!plan.all && plan.paths.length > 0) {
+    const add = await git(["add", "--", ...plan.paths], cwd, 30_000);
+    if (!add.ok) return { ok: false, reason: add.reason, detail: `스테이징 실패: ${add.detail}` };
+  }
+
+  const r = await git(decision.args, cwd, 60_000);
+  if (!r.ok) {
+    // 스테이징은 이미 됐다. **그 사실을 말하지 않으면** 사용자는 "커밋이 안 됐다" 는
+    // 메시지만 보고 `git status` 에는 파일이 올라가 있는 의아한 상태에 놓인다.
+    return {
+      ok: false,
+      reason: r.reason,
+      detail: `${r.detail}${plan.all || plan.paths.length === 0 ? "" : " (선택한 파일은 스테이징된 상태로 남았습니다)"}`,
+    };
+  }
+  // 해시는 **커밋 뒤에** 읽는다 — 미리 읽으면 직전 커밋의 해시를 말한다(옛 사실).
+  const head = await git(["rev-parse", "HEAD"], cwd, 10_000);
+  return {
+    ok: true,
+    value: {
+      hash: head.ok ? head.value.trim() : "",
+      message: decision.message,
+      files: plan.all ? [] : [...plan.paths],
+    },
+  };
 }
 
 export async function pull(cwd: string, branch = "main"): Promise<PullResult> {

@@ -28,7 +28,7 @@ import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
 import { safeListDir, safeReadFile, safeWriteFile, safeResolve } from "../fs/safePath.js";
 import { gitStatus, gitShowHead } from "./gitDiff.js";
-import { planClone, clone, redactUrl, pull, push, summarize, currentBranch } from "../git/sync.js";
+import { planClone, clone, redactUrl, pull, push, summarize, currentBranch, commit } from "../git/sync.js";
 import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
@@ -550,6 +550,27 @@ async function main(): Promise<number> {
               ring.warn("git", "pull 충돌 — 자동 병합하지 않고 중단했습니다", "server", { files: r.filesChanged });
             }
             return r;
+          })
+          .route("POST", "/api/git/commit", async (c) => {
+            const body = (await readBody(c.req)) as { message?: string; paths?: string[]; all?: boolean; allowEmpty?: boolean };
+            const plan = {
+              message: String(body.message ?? ""),
+              paths: Array.isArray(body.paths) ? body.paths.map(String) : [],
+              all: body.all === true,
+              allowEmpty: body.allowEmpty === true,
+            };
+            // **빈 커밋을 조용히 허용하지 않는다.** "아무것도 안 한 커밋" 은 이력의
+            // 노이즈다(§9.3). 판정은 `planCommit` 이 하고 여기서는 결과만 말한다.
+            const r = await commit(workspace.root(), plan);
+            // **사용자 입력 탓은 400, 서버 탓은 500.** 저장소 밖 경로를 500 으로
+            // 보내면 콘솔에 서버 오류가 찍히고 "왜 안 되지" 를 추측하게 된다.
+            if (!r.ok) {
+              const userSide = r.reason === "nothing-to-commit" || r.reason === "outside-path";
+              throw Object.assign(new Error(r.detail), { status: userSide ? 400 : 500 });
+            }
+            ring.info("git", `커밋 ${r.value.hash.slice(0, 7)} — ${r.value.message}`, "server", { files: r.value.files });
+            emit(`[git] commit ${r.value.hash.slice(0, 7)} — ${r.value.message}`);
+            return { ok: true, ...r.value };
           })
           .route("POST", "/api/git/push", async (c) => {
             const body = (await readBody(c.req)) as { branch?: string; setUpstream?: boolean };
