@@ -127,7 +127,7 @@ export function scoreModel(m: HubModel, hw: Pick<Hardware, "gpus"> | null, opts:
   let score = 100;
   // **크기를 모르면 점수를 만들지 않는다.** 100점을 주면 "비교가 되었다" 고 읽히지만
   // 실제로는 아무것도 비교하지 않은 것이다(실측: 후보 5개가 전부 100점 — 목록이
-  // 아무 말도 하지 않는的样子이 된다). 미산정이면 0 이고, UI 가 그 사실을 보인다.
+  // 아무 말도 하지 않는 목록이 되어). 미산정이면 0 이고, UI 가 그 사실을 보자다.
   const scored = m.bytes > 0;
   if (freeVram > 0) {
     score -= Math.min(60, vramShort * 12);
