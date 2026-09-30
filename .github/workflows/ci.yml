@@ -48,6 +48,15 @@ jobs:
       - name: 정적 검사 (금지어 · 비밀 · 혼합 문자 · 커밋 금지 경로)
         run: node scripts/ci-checks.mjs
 
+      - name: 커버리지 하한선 (§10.6 · P17 = 서버 계층 80%)
+        # §10.6 은 "커버리지 하한선을 CI 에서 강제한다" 고 **명시**하는데, enforcement가
+        # 2026-09-30 까지 없었다(문장일 뿐). 하한선은 강제되지 않으면 문장이 된다.
+        #
+        # 집합(line) 평균으로 잰다 — 파일 평균이면 **테스트 파일 수**로 수치를 올릴 수
+        # 있고, 그러면 그 수치는 거짓이다(원문도 같은 이유로 "테스트를 위해서만 존재하는
+        # 코드를 금지"한다). 제외 규칙은 원문에 적힌 것만 쓴다.
+        run: node scripts/coverage-floor.mjs --min 80
+
       - name: 산출물 보존
         if: always()
         uses: actions/upload-artifact@v4

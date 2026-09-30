@@ -16,7 +16,9 @@
     "test": "tsx --test \"src/**/*.test.ts\"",
     "test:e2e": "tsx scripts/e2e_check.ts",
     "typecheck": "tsc --noEmit",
-    "rename:check": "node scripts/rename-identifiers.mjs --dry"
+    "rename:check": "node scripts/rename-identifiers.mjs --dry",
+    "coverage": "node scripts/coverage-floor.mjs",
+    "coverage:report": "node scripts/coverage-floor.mjs --report"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

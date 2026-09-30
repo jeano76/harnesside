@@ -106,11 +106,22 @@ export interface LlamaLauncherEvents {
   /** 자식 프로세스의 한 줄 로그(§5.12 의 `source: "llama"`). */
   onLine?: (line: string, stream: "stdout" | "stderr") => void;
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
+  /** 스폰 자체가 실패했을 때(바이너리 없음·권한 없음). 조용히 넘기면 사용자가 모른다. */
+  onSpawnError?: (err: Error) => void;
 }
 
 export class LlamaLauncher {
   private proc: ChildProcess | null = null;
   private stopping = false;
+  /**
+   * 스폰 자체가 실패한 원인(ENOENT 등).
+   *
+   * **null 과 구분해야 한다**: 스폰을 안 한 것("아직 시도 안 함")과 시도했지만
+   * 실행 파일이 없었던 것("binPath 가 틀렸다")은 사용자에게 **완전히 다른** 사실이다.
+   * 하나의 null 로 합치면 헬스체크가 "기다리는 중" 이라 말하다 조용히 시간이 끝나고,
+   * 사용자는 "모델이 느린 줄 알았다" 고 오해한다.
+   */
+  private spawnError: Error | null = null;
 
   constructor(
     private opts: LlamaLaunchOptions,
@@ -156,6 +167,19 @@ export class LlamaLauncher {
     pipe("stdout");
     pipe("stderr");
 
+    // **'error' 리스너가 없으면 프로세스가 죽는다**(실측: llama-server 바이너리가 없으면
+    // `spawn()` 이 예외 없이 끝난 뒤 1초쯤 지나서 uncaughtException 으로 서버 전체가
+    // 죽는다 — llama 만 못 뜨는 게 아니라 **창도 함께 사라진다**).
+    //
+    // Node 는 ENOENT(EACCES 등) 를 동기 throw 가 아니라 비동기 'error' 로 보낸다.
+    // 그러므로 여기서 반드시 받아야 하고, **원인을 그대로 남겨야** 사용자가
+    // "모델이 없다" 와 "llama-server 가 없다" 를 구분할 수 있다(§5.13.1).
+    this.proc.on("error", (err: NodeJS.ErrnoException) => {
+      this.spawnError = err;
+      this.deps.logger?.error({ code: err.code, message: err.message }, "llama-server 실행 실패");
+      this.deps.events?.onSpawnError?.(err);
+      this.proc = null;
+    });
     this.proc.on("exit", (code, signal) => {
       this.deps.events?.onExit?.(code, signal);
       this.deps.logger?.info({ code, signal, stopping: this.stopping }, "llama-server 종료됨");
@@ -165,12 +189,23 @@ export class LlamaLauncher {
     return this.build();
   }
 
+  /** 스폰이 실패했으면 그 원인. 없으면 null — "실패하지 않았다" 와 "시도 안 했다" 를 구분한다. */
+  get error(): Error | null {
+    return this.spawnError;
+  }
+
   /** `/v1/models` 폴링. 실패해도 예외를 던지지 않고 false 를 돌려준다 —
    *  요구 9 의 degrade 원칙(모델이 죽어도 창은 떠야 한다). */
   async waitUntilReady(timeoutMs = 120_000, intervalMs = 500): Promise<boolean> {
     const f = this.deps.fetchImpl ?? fetch;
     const start = Date.now();
     let lastErr = "";
+    // **스폰 실패는 기다릴 필요가 없다.** 120초를 다 기다린 뒤 "안 떴다" 고 말하면
+    // 사용자는 원인을 알 수 없다. 즉시 false + 원인을 남긴다.
+    if (this.spawnError) {
+      this.deps.logger?.error({ code: (this.spawnError as NodeJS.ErrnoException).code }, "llama-server 실행 파일 없음 — 헬스체크 생략");
+      return false;
+    }
     while (Date.now() - start < timeoutMs) {
       if (this.proc === null && !this.stopping) {
         // 프로세스가 이미 죽었다 — 더 기다려도 소용없다.
