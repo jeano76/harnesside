@@ -33,6 +33,8 @@ import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
 import { AgentService } from "./agentService.js";
 import { SessionBridge } from "../session/bridge.js";
+import { searchHub, recommend, fillSizes } from "../models/hub.js";
+import { ModelDownloader, modelPathFor } from "../models/download.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, type Watchdog } from "./watchdog.js";
@@ -41,7 +43,7 @@ import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdir, access } from "node:fs/promises";
+import { mkdir, access, readdir, stat } from "node:fs/promises";
 import stripAnsi from "strip-ansi";
 
 const argv = process.argv.slice(2);
@@ -169,6 +171,19 @@ async function main(): Promise<number> {
     },
   });
   session.start();
+  // §7.4 다운로드. 진행 상황은 WS 로 흘린다 — 라우트가 기다리는 동안 화면이 얼면 안 된다.
+  const downloader = new ModelDownloader({
+    onProgress: (item) => {
+      hub?.publish({ type: "model.download", item } as never);
+      if (item.state === "done" || item.state === "failed") {
+        ring[item.state === "done" ? "info" : "error"](
+          "models",
+          `다운로드 ${item.state === "done" ? "완료" : "실패"}: ${item.file}${item.error ? ` — ${item.error}` : ""}`,
+          "server"
+        );
+      }
+    },
+  });
   const agent = new AgentService({
     baseDir: () => workspace.baseDir(),
     baseUrl: () => `http://127.0.0.1:${boot?.ports?.llamaPort ?? 8080}`,
@@ -512,7 +527,67 @@ async function main(): Promise<number> {
             lastError: session.lastError,
           }))
           .route("GET", "/api/session/list", async () => ({ sessions: await session.list() }))
-          .route("POST", "/api/session/save", async () => session.saveNow());
+          .route("POST", "/api/session/save", async () => session.saveNow())
+          // ── §7 모델 (P11) ───────────────────────────────────────────────────
+          .route("GET", "/api/models", async () => {
+            const names = await readdir(modelsDir).catch(() => [] as string[]);
+            const entries = await Promise.all(
+              names
+                .filter((n) => n.toLowerCase().endsWith(".gguf"))
+                .map(async (n) => {
+                  const st = await stat(join(modelsDir, n)).catch(() => null);
+                  return { file: n, path: join(modelsDir, n), bytes: st?.size ?? 0 };
+                })
+            );
+            return { dir: modelsDir, active: boot?.model?.path ?? null, entries };
+          })
+          // 검색+추천. **네트워크를 못 쓰면 그 사실을 말한다** — 빈 목록을 "결과 없음" 으로
+          // 돌려주면 사용자는 모델이 없다고 믿는다.
+          .route("GET", "/api/models/search", async (c) => {
+            const q = c.query.get("q") ?? "";
+            const localNames = await readdir(modelsDir).catch(() => [] as string[]);
+            const models = await searchHub({ query: q || undefined, limit: 20 }).catch((e) => {
+              ring.warn("models", `HuggingFace 검색 실패: ${String(e)}`, "server");
+              return null;
+            });
+            if (models === null) {
+              return {
+                ok: false,
+                detail: "HuggingFace 에 연결하지 못했습니다. 네트워크·방화벽을 확인하십시오.",
+                dir: modelsDir,
+                local: localNames.filter((n) => n.endsWith(".gguf")),
+              };
+            }
+            return {
+              ok: true,
+              // **크기를 채워야** 점수가 의미를 가진다(목록 API 에는 크기가 없다 —
+              // 안 채우면 전부 100점 이 나온다. 실측).
+              ...recommend(await fillSizes(models, { limit: 12 }), boot?.hardware ?? null, { localFiles: localNames }),
+              dir: modelsDir,
+            };
+          })
+          .route("POST", "/api/models/download", async (c) => {
+            const body = (await readBody(c.req)) as { repo?: string; file?: string; url?: string };
+            if (!body.repo || !body.file) {
+              throw Object.assign(new Error("repo 와 file 이 필요합니다"), { status: 400 });
+            }
+            const id = `${body.repo}/${body.file}`.replace(/[^\w.-]+/g, "_");
+            const dest = modelPathFor(modelsDir, body.file);
+            // 진행 상황은 WS 로. 라우트는 **결과** 를 준다(기다리는 동안 화면이 얼어 있다).
+            const item = await downloader.download({
+              id,
+              url: body.url ?? `https://huggingface.co/${body.repo}/resolve/main/${body.file}`,
+              destPath: dest,
+            });
+            return { item, path: dest };
+          })
+          .route("POST", "/api/models/cancel", async (c) => {
+            const body = (await readBody(c.req)) as { id?: string };
+            const item = downloader.cancel(String(body.id ?? ""));
+            if (!item) throw Object.assign(new Error("진행 중인 다운로드가 없습니다"), { status: 404 });
+            return { item };
+          })
+          .route("GET", "/api/models/downloads", () => ({ items: downloader.all() }));
         const { port: actual } = await http.start();
         hub.publish({ type: "sys.logs", limits: ring.status } as never);
         return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };

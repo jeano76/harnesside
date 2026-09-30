@@ -16,6 +16,7 @@ import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
 import { WorkspaceBar } from "./panels/WorkspaceBar.js";
 import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js";
+import { ModelPanel } from "./panels/ModelPanel.js";
 import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
 import { MonitorPanel } from "./panels/MonitorPanel.js";
@@ -232,6 +233,8 @@ export default function App() {
   const [blocks, setBlocks] = useState<AgentBlock[]>([]);
   const [think, setThink] = useState<ThinkState>(() => initialThink());
   const [turnRunning, setTurnRunning] = useState(false);
+  /** §7.4 진행 중인 다운로드 목록(WS 로 온다). */
+  const [downloads, setDownloads] = useState<{ id: string; file: string; state: string; progress: number; totalBytes: number; receivedBytes: number; error: string | null }[]>([]);
   /** 복원했음을 사용자에게 **한 번** 말한다 — 조용히 복원되면 "왜 대화가 있지?" 가 된다. */
   const [restored, setRestored] = useState(0);
   const blocksRef = useRef<AgentBlock[]>([]);
@@ -389,6 +392,10 @@ export default function App() {
           const m = (ev.metrics ?? null) as Metrics | null;
           setMetrics(m);
           if (m) setMetricSeries((prev) => [...prev, m.cpu.overall].slice(-120));
+        } else if (ev.type === "model.download") {
+          // §7.4 진행률. **모르면 모른다고 말하는 값** 을 그대로 옮긴다(0% 는 "0 바이트" 다).
+          const item = ev.item as { id: string; file: string; state: string; progress: number; totalBytes: number; receivedBytes: number; error: string | null } | undefined;
+          if (item) setDownloads((prev) => [...prev.filter((d) => d.id !== item.id), item]);
         } else if (evType.startsWith("agent.")) {
           // **모든 에이전트 이벤트를 한 곳에서** 블록으로 바꾼다. 분기마다 따로
           // 처리하면 순서가 뒤집히고(상태 문구가 답변 뒤에 붙는다) 되돌리기 어렵다.
@@ -503,7 +510,7 @@ export default function App() {
         );
         setRestored(cur.blocks.length);
       } catch {
-        // 복원 실패는 조용히 넘어간다 — 창이 뜨는 것을 막을理由가 없다.
+        // 복원 실패는 조용히 넘어간다 — 창이 뜨는 것을 막을 이유는 없다.
       }
     })();
   }, [wsState]);
@@ -624,7 +631,14 @@ export default function App() {
         actions={[{ label: "새로고침", onClick: () => void refreshTree() }, ...EXAMPLES.slice(0, 1).map((t) => ({ label: "예시 프롬프트", onClick: () => setDraft(t) }))]}
       />
     ),
-    settings: <Empty title="설정" hint="모델 · 브라우저 · 에이전트 · 로그 · 업데이트 · 고급. 모든 항목에 값의 출처와 근거가 함께 표시됩니다." />,
+    settings: (
+      <ModelPanel
+        client={client}
+        onNotice={(kind, title, body) =>
+          pushToast({ id: `models:${title}`, kind, title, body, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "models" })
+        }
+      />
+    ),
   };
 
   const visible = useMemo(() => visibleTail(filterEntries(logs, filter), 2000), [logs, filter]);
