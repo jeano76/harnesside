@@ -110,9 +110,17 @@ export async function safeWriteFile(
   if (!r.ok) return r;
   const path = r.value;
 
-  if (opts.readOnlyPaths?.some((p) => path.startsWith(resolve(join(resolve(opts.root), p))))) {
-    return { ok: false, reason: "read-only", detail: "읽기 전용 경로입니다" };
-  }
+  // 읽기 전용 판정은 **경로 자체**로 한다. 호출자가 절대 경로를 주면 그대로 쓴다.
+  //
+  // 이전 코드는 `resolve(join(root, p))` 로 **무조건** 루트 밑에 붙였다. 절대 경로를
+  // 넣으면 `/root` + `/root/.harnesside` = `/root/root/.harnesside` 이 되어 **어떤 경로와도
+  // 일치하지 않았다** — 즉 보호가 조용히 실패했다(실측: 토큰 파일 쓰기가 409 를 냈다.
+  // "읽기 전용" 이라는 말은 한 번도 나오지 않았다).
+  const readOnlyHit = (opts.readOnlyPaths ?? []).some((p) => {
+    const abs = isAbsolute(p) ? resolve(p) : resolve(join(resolve(opts.root), p));
+    return path === abs || path.startsWith(abs.endsWith("/") ? abs : `${abs}/`);
+  });
+  if (readOnlyHit) return { ok: false, reason: "read-only", detail: "읽기 전용 경로입니다" };
 
   const st = await stat(path).catch(() => null);
   if (st && typeof opts.baseVersion === "number" && Math.floor(st.mtimeMs) !== opts.baseVersion) {

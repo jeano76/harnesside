@@ -21,7 +21,10 @@ import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "
 import type { WorkspaceFingerprint } from "../server/workspace.js";
 import { MonitorPanel } from "./panels/MonitorPanel.js";
 import { DiffPanel } from "./editor/DiffPanel.js";
-import { planOpen, formatBytes } from "./editor/model.js";
+import { EditorView } from "./editor/EditorView.js";
+import { dispatchWs } from "./wsBus.js";
+import { TerminalView } from "./panels/TerminalView.js";
+import "@xterm/xterm/css/xterm.css";
 import { WsClient } from "./wsClient.js";
 import { DEFAULT_LAYOUT, movePanel, toggleCollapse, keyboardMove, panelOf, zoneLabel, type PanelId, type Zone } from "./layout/engine.js";
 import { loadDraft, saveDraft, clearDraft, searchCommands, type Command, type Toast } from "./panels/notify.js";
@@ -57,53 +60,12 @@ const TITLES: Record<string, string> = {
   explorer: "탐색기",
   agent: "에이전트",
   editor: "에디터",
+  terminal: "터미널",
   diff: "변경 검토",
   monitor: "모니터",
   log: "서버 로그",
   settings: "설정",
 };
-
-/**
- * 파일 보기. **빈 패널을 두지 않는다**(§11.3) — 열려 있는 파일이 없으면
- * "무엇을 열 수 있나" 를 보여준다. 판정(`planOpen`)은 이미 검증된 모듈을 쓴다.
- */
-function FileView({ info }: { info: { path: string; content: string; version: number; size: number } }) {
-  const plan = useMemo(() => planOpen({ path: info.path, name: info.path.split("/").pop() ?? "", size: info.size }, info.content), [info]);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "4px 8px", borderBottom: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
-        <strong style={{ fontSize: 11 }}>{info.path.split("/").pop()}</strong>
-        <span style={{ color: DIM, fontSize: 10 }}>{plan.language}</span>
-        {plan.readOnly && <span style={{ color: "#d29922", fontSize: 10 }}>읽기 전용</span>}
-        <span style={{ flex: 1 }} />
-        <span style={{ color: DIM, fontSize: 10 }}>{formatBytes(info.size)}</span>
-      </div>
-      {/* 못 열면 **이유** 를 말한다. 빈 화면이 되면 안 된다. */}
-      {plan.reason && <div style={{ padding: "4px 8px", color: plan.readOnly ? "#d29922" : DIM, fontSize: 11 }}>{plan.reason}</div>}
-      {plan.kind === "image" ? (
-        <div style={{ padding: 8, color: DIM, fontSize: 11 }}>이미지 뷰는 아직 구현되지 않았습니다. 경로와 크기는 위와 같습니다.</div>
-      ) : plan.kind === "binary" ? (
-        <div style={{ padding: 8, color: DIM, fontSize: 11 }}>바이너리라 내용을 표시하지 않습니다.</div>
-      ) : (
-        <pre
-          style={{
-            margin: 0,
-            padding: "6px 8px",
-            font: "11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            color: FG,
-            overflow: "auto",
-            flex: "1 1 auto",
-            minHeight: 0,
-          }}
-        >
-          {plan.content}
-        </pre>
-      )}
-    </div>
-  );
-}
 
 function Empty({ title, hint, actions }: { title: string; hint: string; actions?: { label: string; onClick: () => void }[] }) {
   return (
@@ -376,6 +338,9 @@ export default function App() {
       port: idePort,
       token,
       onEvent: (ev) => {
+        // **모든 패널이 이 소켓을 공유한다**(wsBus). 패널이 따로 열면 재연결이 N 배로
+        // 되고 PTY 출력을 놓친다.
+        dispatchWs(ev);
         const evType = String(ev.type);
         if (ev.type === "log.append") {
           const e2 = ev.entry as LogEntry | undefined;
@@ -623,12 +588,26 @@ export default function App() {
       <Empty title="변경 사항이 없습니다" hint="에이전트가 파일을 쓰면 여기서 항목별로 승인하거나 되돌릴 수 있습니다." />
     ),
     editor: openFile ? (
-      <FileView info={openFile} />
+      <EditorView
+        client={client}
+        info={openFile}
+        onNotice={(kind, title, body) =>
+          pushToast({ id: `fs:${title}`, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "fs" })
+        }
+      />
     ) : (
       <Empty
         title="열린 파일이 없습니다"
         hint="탐색기에서 파일을 여세요. 저장하지 않은 탭은 창을 닫아도 세션에 남습니다."
         actions={[{ label: "새로고침", onClick: () => void refreshTree() }, ...EXAMPLES.slice(0, 1).map((t) => ({ label: "예시 프롬프트", onClick: () => setDraft(t) }))]}
+      />
+    ),
+    terminal: (
+      <TerminalView
+        client={client}
+        onNotice={(kind, title, body) =>
+          pushToast({ id: `term:${title}`, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "terminal" })
+        }
       />
     ),
     settings: (

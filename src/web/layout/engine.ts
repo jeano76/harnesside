@@ -10,9 +10,9 @@
  */
 
 export type Zone = "left" | "right" | "top" | "bottom" | "center";
-export type PanelId = "explorer" | "agent" | "editor" | "diff" | "monitor" | "log" | "settings";
+export type PanelId = "explorer" | "agent" | "editor" | "terminal" | "diff" | "monitor" | "log" | "settings";
 
-export const ALL_PANELS: PanelId[] = ["explorer", "agent", "editor", "diff", "monitor", "log", "settings"];
+export const ALL_PANELS: PanelId[] = ["explorer", "agent", "editor", "terminal", "diff", "monitor", "log", "settings"];
 
 export interface Rect {
   x: number;
@@ -114,6 +114,9 @@ export const DEFAULT_LAYOUT: LayoutState = {
     base("explorer", "left", 260),
     base("agent", "right", 380),
     base("editor", "center"),
+    // M1 터미널. 기본으로는 **접혀 있다**(z=1) — 열면 모든 창에서 셸이 떠 있고
+    // 사용자가 아무것도 하지 않은 채 프로세스가 쌓인다.
+    base("terminal", "center", undefined, 1),
     base("diff", "center", undefined, 1),
     base("monitor", "right", 200),
     base("log", "bottom"),

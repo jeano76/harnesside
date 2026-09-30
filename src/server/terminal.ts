@@ -1,0 +1,277 @@
+/**
+ * 터미널 (M1 · §11.1).
+ *
+ * 셸 하나가 아니라 **탭 여러 개** 다. 그래서 여기는 셸이 아니라 **세션 관리자** 다:
+ *  - `create` 가 탭을 열고, `write`/`resize` 로 건드리고, `close` 로 닫는다.
+ *  - **종료한 탭은 즉시 지우지 않는다.** 지우면 사용자는 "셸이 죽었다" 와 "탭이
+ *    없다" 를 구분할 수 없다. exit code 를 **보존**한다 — 0(정상 종료)과 exit code
+ *    없음(강제 종료/signals)은 **다른 사실**이다(§5.10 store.list 와 같은 교훈).
+ *  - 살아 있는 세션과 죽은 세션을 **같은 목록에 두되 상태로 구분**한다.
+ *
+ * cwd 는 워크스페이스 안으로 제한한다. `cd /` 를 허용하면 루트 권한으로 임의 실행된다 —
+ * 에이전트가 승인 없이 그 셸을 쓴다.
+ *
+ * 창을 닫을 때 **살아 있는 탭은 전부 죽는다** — 사용자가 안 닫은 셸이 조용히 남으면
+ * 다음 실행에서 리소스를 먹는다(§4.4 와 같은 논리).
+ */
+
+import { spawn as ptySpawn, type IPty } from "node-pty";
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+
+export type SessionState = "running" | "exited";
+
+export interface TerminalSession {
+  id: string;
+  title: string;
+  cwd: string;
+  state: SessionState;
+  startedAt: number;
+  /** 종료 시각. 살아 있으면 null — **0 이 아니다.** */
+  exitedAt: number | null;
+  /** 종료 코드. 강제 종료(signals)면 null — 0(성공)이 아니다. */
+  exitCode: number | null;
+  /** 종료 신호(예: SIGHUP). null 이면 정상 종료. */
+  exitSignal: number | null;
+  /**
+   * **셸을 아예 띄우지 못했다** 면 이유. null 이면 "정상적으로 끝났다" 가 아니라
+   * "애초에 실행되지 않았다" 다.
+   *
+   * 이 필드가 없으면 못 띄운 셸과 1초 뒤 죽은 셸이 화면에서 똑같다(실측: node-pty 는
+   * 없는 셸에 대해 throw 하지 않고 PTY 를 열고 `execvp(3) failed` 를 찍고 exit 1 한다).
+   * 사용자는 탭이 열렸다 사라지는 것만 보고 "터미널이 고장났다" 고 판단한다.
+   */
+  openError: string | null;
+  /** 화면 크기. resize 로 바뀐다. */
+  cols: number;
+  rows: number;
+}
+
+export interface TerminalEvents {
+  /** 화면에 바쳐야 할 바이트. */
+  onData: (id: string, data: string) => void;
+  /** 세션 상태가 바뀜 — 탭 제목 옆에 "종료됨(exit 1)" 이 보인다. */
+  onExit: (s: TerminalSession) => void;
+  onWarn: (message: string) => void;
+}
+
+/**
+ * `create` 의 결과. **성공/실패가 드러나야 한다.**
+ *
+ * 이전에는 실패했을 때 **이미 열린 다른 탭** 을 돌려줬다 — 화면은 그 탭이 방금 열린
+ * 것으로 그려 "열렸는데 목록에 하나도 안 늘었다" 가 된다. 실패는 실패로 말해야 하고,
+ * 그때 `session` 은 null 이다(목록에 없는 가짜 탭을 만들지 않는다).
+ */
+export type CreateResult =
+  | { ok: true; session: TerminalSession; detail: string }
+  | { ok: false; session: null; detail: string };
+
+export interface TerminalManagerOptions {
+  /** cwd 를 이 안에 가둔다. */
+  root: string;
+  /** 기본 셸. */
+  shell?: string;
+  now?: () => number;
+  /** 최대 탭 수 — 무한정 열리면 프로세스가 무한정 생긴다. */
+  maxTabs?: number;
+  events: TerminalEvents;
+}
+
+interface Entry {
+  session: TerminalSession;
+  pty: IPty | null;
+  /** 사용자가 입력 중인지 — AI 가 대신 입력하면 사용자와 섞인다(§5.2 M2). */
+  busyInput: boolean;
+}
+
+export class TerminalManager {
+  private tabs = new Map<string, Entry>();
+  private order: string[] = [];
+
+  constructor(private opts: TerminalManagerOptions) {}
+
+  list(): TerminalSession[] {
+    // **순서를 정해 반환한다.** Map 은 삽입 순서지만 " guaranteeing" 아니라
+    // "최근 쓴 탭이 먼저" 를 화면이 가정하면 언제든 틀린다.
+    return this.order.map((id) => this.tabs.get(id)?.session).filter((s): s is TerminalSession => !!s);
+  }
+
+  get(id: string): TerminalSession | null {
+    return this.tabs.get(id)?.session ?? null;
+  }
+
+  get busy(): boolean {
+    return [...this.tabs.values()].some((e) => e.busyInput);
+  }
+
+  /**
+   * 탭을 연다.
+   *
+   * 실패하면 **왜인지 말하고 아무것도 만들지 않는다.** 셸이 없는데 "탭 열림" 을
+   * 말하면 사용자는 아무것도 안 보이는 탭을 붙잡게 된다.
+   */
+  create(opts: { cwd?: string; cols?: number; rows?: number; title?: string } = {}): CreateResult {
+    const max = this.opts.maxTabs ?? 8;
+    const live = this.order.filter((id) => this.tabs.get(id)?.session.state === "running").length;
+    if (live >= max) {
+      this.opts.events.onWarn(`탭이 ${max}개 열려 있습니다 — 하나를 닫고 여십시오.`);
+      return { ok: false, session: null, detail: `탭이 ${max}개 열려 있습니다` };
+    }
+
+    const requested = resolve(opts.cwd ?? this.opts.root);
+    const root = resolve(this.opts.root);
+    // **cwd 는 루트 안이어야 한다.** 밖이면 새지 않는다 — 에이전트 승인 없이
+    // 임의 디렉터리에서 셸이 돌아간다면 승인 게이트가 무의미해진다.
+    const cwd = requested === root || requested.startsWith(`${root}/`) ? requested : root;
+    const shell = this.opts.shell ?? process.env.SHELL ?? "/bin/bash";
+    const cols = Math.max(20, Math.min(400, Math.floor(opts.cols ?? 80)));
+    const rows = Math.max(5, Math.min(200, Math.floor(opts.rows ?? 24)));
+
+    const id = randomUUID();
+    const session: TerminalSession = {
+      id,
+      title: opts.title ?? `셸 ${this.order.length + 1}`,
+      cwd,
+      state: "running",
+      startedAt: (this.opts.now ?? Date.now)(),
+      exitedAt: null,
+      exitCode: null,
+      exitSignal: null,
+      openError: null,
+      cols,
+      rows,
+    };
+
+    let pty: IPty;
+    try {
+      pty = ptySpawn(shell, [], {
+        name: "xterm-256color",
+        cols,
+        rows,
+        cwd,
+        // **사용자 셸 환경** 을 물려받되 로컬 변수는 뺀다 — PATH 에 개발용 junk 가 섞이면
+        // 사용자가 터미널에서 못 찾는 명령이 나온다(measured: 로컬 PATH 에 phantomjs).
+        env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+      });
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      this.opts.events.onWarn(`셸을 열지 못했습니다: ${detail}`);
+      return { ok: false, session: null, detail };
+    }
+
+    const entry: Entry = { session, pty, busyInput: false };
+    this.tabs.set(id, entry);
+    this.order.unshift(id);
+    pty.onData((d) => {
+      // **PTY 안에서 나는 실패도 잡는다.** `node-pty` 는 없는 셸에 대해 throw 하지
+      // 않고 PTY 를 연 뒤 `execvp(3) failed.` 를 화면에 찍고 exit 1 한다(실측).
+      // 그 문구를 사용자에게 그대로 보여주고 "애초에 실행되지 않았다" 고 표시한다 —
+      // 안 하면 탭이 열렸다 사라지고 아무도 이유를 모른다.
+      const m = /execvp\(\d+\) failed[^\r\n]*/.exec(d);
+      if (m && !entry.session.openError) {
+        entry.session = { ...entry.session, openError: m[0].trim(), title: "셸 열기 실패" };
+        this.opts.events.onWarn(`셸을 열지 못했습니다: ${m[0].trim()}`);
+      }
+      this.opts.events.onData(id, d);
+    });
+    pty.onExit(({ exitCode, signal }) => {
+      // **exit code 와 signal 을 구분한다.** 0 과 "없음" 을 같은 칸에 두면
+      // "정상 종료" 와 "강제 죽음" 이 같아 보인다.
+      //
+      // node-pty 은 **정상 종료에도 `signal: 0` 을 준다**(POSIX 의 "신호 없음" 관례).
+      // 그걸 그대로 "신호로 종료 (0)" 로 말하면 "이름을 모르는 이유로 죽었다" 가 되고,
+      // **진짜 신호**(1 이상)와 같은 칸에 놓인다. 그래서 0 은 없다로 바꾼다(실측).
+      entry.pty = null;
+      entry.session = {
+        ...entry.session,
+        state: "exited",
+        exitedAt: (this.opts.now ?? Date.now)(),
+        exitCode: typeof exitCode === "number" ? exitCode : null,
+        exitSignal: typeof signal === "number" && signal > 0 ? signal : null,
+      };
+      this.opts.events.onExit(entry.session);
+    });
+    return { ok: true, session, detail: "" };
+  }
+
+  /**
+   * 입력을 보낸다.
+   *
+   * 죽은 탭에 쓰면 **버리지 않고 말한다.** 조용히 버리면 사용자는 타이핑했는데
+   * 아무 반응이 없는 상태를 "셸이 멈췄다" 고 해석한다.
+   */
+  write(id: string, data: string): { ok: boolean; detail: string } {
+    const e = this.tabs.get(id);
+    if (!e) return { ok: false, detail: "그런 탭이 없습니다" };
+    if (!e.pty) return { ok: false, detail: "이미 끝난 셸입니다 — 새 탭을 여십시오" };
+    try {
+      e.pty.write(data);
+      return { ok: true, detail: "" };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** 창 크기를 바꾼다 — 반영되지 않으면 줄이 깨진다(가로 scroll 로 남는다). */
+  resize(id: string, cols: number, rows: number): { ok: boolean; detail: string } {
+    const e = this.tabs.get(id);
+    if (!e?.pty) return { ok: false, detail: "살아 있는 셸이 없습니다" };
+    const c = Math.max(20, Math.min(400, Math.floor(cols)));
+    const r = Math.max(5, Math.min(200, Math.floor(rows)));
+    try {
+      e.pty.resize(c, r);
+      e.session = { ...e.session, cols: c, rows: r };
+      return { ok: true, detail: "" };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * 탭을 닫는다. `kill = false` 면 **목록에서만 지운다**(셸은 산 채로 두고 숨긴다) —
+   * 살아 있는 프로세스를 "닫았다" 고 말하면 사용자는 그 프로세스가 없는 줄 안다.
+   */
+  close(id: string, kill = true): { ok: boolean; detail: string } {
+    const e = this.tabs.get(id);
+    if (!e) return { ok: false, detail: "그런 탭이 없습니다" };
+    this.order = this.order.filter((x) => x !== id);
+    this.tabs.delete(id);
+    if (kill && e.pty) {
+      try {
+        e.pty.kill();
+      } catch {
+        // 이미 죽었을 수 있다 — **목록에서 뺐으므로 사용자에게는 없는 탭**이다.
+      }
+    }
+    return { ok: true, detail: e.pty ? "" : "이미 끝난 셸이었습니다" };
+  }
+
+  /** 창을 닫을 때: **살아 있는 탭을 전부 죽인다**(조용히 남기지 않는다). */
+  shutdown(): number {
+    let killed = 0;
+    for (const e of this.tabs.values()) {
+      if (!e.pty) continue;
+      try {
+        e.pty.kill();
+        killed++;
+      } catch {
+        /* 이미 죽음 */
+      }
+    }
+    this.tabs.clear();
+    this.order = [];
+    return killed;
+  }
+
+}
+
+/** 종료 상태를 **사람 문장** 으로 — 탭 제목 옆에 붙는 것. */
+export function exitLabel(s: TerminalSession): string | null {
+  if (s.state !== "exited") return null;
+  // **애초에 실행되지 않은 것** 은 "종료됨" 이 아니다. 둘을 같은 문장으로 말하면
+  // 사용자는 터미널이 스스로 죽었다고 생각한다.
+  if (s.openError) return `셸 열기 실패 — ${s.openError}`;
+  if (s.exitSignal !== null) return `신호로 종료 (${s.exitSignal})`;
+  if (s.exitCode === null) return "종료됨 (코드 없음)";
+  return s.exitCode === 0 ? "종료됨 (0)" : `종료됨 (${s.exitCode})`;
+}

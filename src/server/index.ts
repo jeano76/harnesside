@@ -38,6 +38,7 @@ import { searchHub, recommend, fillSizes } from "../models/hub.js";
 import { ModelDownloader, modelPathFor } from "../models/download.js";
 import { planSwap } from "../models/manage.js";
 import { UpdateService } from "./updateService.js";
+import { TerminalManager, exitLabel } from "./terminal.js";
 import type { UpdateChannel, ApplyGuard } from "./update/pipeline.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
@@ -120,6 +121,23 @@ async function main(): Promise<number> {
         warnings: e.switchPlan.warnings,
       });
       emit(`[workspace] ${e.from.root} → ${e.to.root}`);
+    },
+  });
+  // M1 터미널. PTY 는 **워크스페이스 루트 에서만** 연다 — 밖에서 열면 승인 게이트를
+  // 우회한 임의 실행이 된다(모듈 주석).
+  const terminal = new TerminalManager({
+    root: workspace.root(),
+    events: {
+      onData: (id, data) => hub?.publish({ type: "terminal.data", id, data } as never),
+      onExit: (session) => {
+        hub?.publish({ type: "terminal.exit", session } as never);
+        ring.warn("terminal", `셸 종료: ${session.title} — ${exitLabel(session) ?? "종료"}`, "server", {
+          exitCode: session.exitCode,
+          exitSignal: session.exitSignal,
+          openError: session.openError,
+        });
+      },
+      onWarn: (message) => ring.warn("terminal", message, "server"),
     },
   });
   // §5.3: 에이전트 시스템 프롬프트. 워크스페이스의 **규칙 파일**을 여기에 싣는다 —
@@ -282,6 +300,12 @@ async function main(): Promise<number> {
     session.stopPeriodic();
     const saved = await session.saveNow();
     emit(`[shutdown] 세션 ${saved.ok ? "저장됨" : `저장 실패(${saved.detail})`}`);
+    // M1: 살아 있는 **셸 탭** 을 전부 죽인다. 조용히 남기면 다음 실행에서
+    // 프로세스만 쌓이고 사용자는 "터미널을 안 닫았는데 프로세스가 있다" 고 본다.
+    {
+      const killed = terminal.shutdown();
+      emit(`[shutdown] 셸 탭 ${killed}개 종료`);
+    }
     if (launcher) {
       await launcher.stop();
       emit("[shutdown] llama-server 종료 완료");
@@ -525,6 +549,38 @@ async function main(): Promise<number> {
           .route("POST", "/api/git/push", async (c) => {
             const body = (await readBody(c.req)) as { branch?: string; setUpstream?: boolean };
             return push(workspace.root(), body.branch ?? (await currentBranch(workspace.root())), body.setUpstream === true);
+          })
+          // ── M1 터미널 ─────────────────────────────────────────────────────
+          // PTY 출력은 **WS 로만** 보낸다. 라우트로 폴링하면 타이핑이 200ms 늦게
+          // 도착하고, 더 나쁘게는 "셸이 멈췄다" 고 보인다(실측: 폴링 주기 = 지연).
+          .route("GET", "/api/terminal", () => ({ tabs: terminal.list() }))
+          .route("POST", "/api/terminal", async (c) => {
+            const body = (await readBody(c.req)) as { cwd?: string; cols?: number; rows?: number; title?: string };
+            const r = terminal.create({ cwd: body.cwd, cols: body.cols, rows: body.rows, title: body.title });
+            // **열지 못했으면 성공으로 돌려주지 않는다.** 가짜 세션을 만들면 화면은
+            // 열린 것처럼 그리고 사용자는 아무 것도 안 보이는 탭을 붙잡는다.
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: 409 });
+            hub?.publish({ type: "terminal.open", session: r.session } as never);
+            return r.session;
+          })
+          .route("POST", "/api/terminal/:id/input", async (c) => {
+            const body = (await readBody(c.req)) as { data?: string };
+            const r = terminal.write(c.params.id ?? "", String(body.data ?? ""));
+            // 버린 입력을 사용자가 모른 채로 두지 않는다 — "먹혔다" 고 보인다.
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: 409 });
+            return { ok: true };
+          })
+          .route("POST", "/api/terminal/:id/resize", async (c) => {
+            const body = (await readBody(c.req)) as { cols?: number; rows?: number };
+            const r = terminal.resize(c.params.id ?? "", Number(body.cols ?? 80), Number(body.rows ?? 24));
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: 409 });
+            return { ok: true };
+          })
+          .route("POST", "/api/terminal/:id/close", async (c) => {
+            const r = terminal.close(c.params.id ?? "");
+            hub?.publish({ type: "terminal.closed", id: c.params.id ?? "" } as never);
+            // "이미 끝난 셸" 은 실패가 아니라 **알려진 사실** 이라 200 으로 말한다.
+            return r;
           })
           .route("GET", "/api/git/head", async (c) => {
             const p = c.query.get("path") || "";

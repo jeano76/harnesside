@@ -11,10 +11,25 @@ import { authHeaders, wsUrl } from "./session.js";
 export class ApiError extends Error {
   constructor(
     readonly status: number,
-    message: string
+    message: string,
+    /**
+     * 응답 본문 전체.
+     *
+     * **409 충돌의 `conflict`(서버본문·버전)를 여기에 실어야** 편집기가 "내 편집 vs
+     * 서버본문" 을 나란히 보여줄 수 있다. 본문을 버리면 사용자는 "저장 실패" 라는
+     * 글자만 보고 자기 편집을 잃는다(§3.4) — 가장 나쁜 실패.
+     */
+    readonly body: unknown = null
   ) {
     super(message);
     this.name = "ApiError";
+  }
+
+  /** 충돌 응답에서 서버본문을 꺼낸다. 없으면 null — **빈 문자열이 아니다.** */
+  get conflict(): { content: string; version: number } | null {
+    const c = (this.body as { conflict?: { content?: unknown; version?: unknown } } | null)?.conflict;
+    if (!c || typeof c.content !== "string") return null;
+    return { content: c.content, version: typeof c.version === "number" ? c.version : 0 };
   }
 }
 
@@ -52,16 +67,18 @@ export class ApiClient {
     const res = await f(path, init);
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
+      let parsed: unknown = null;
       try {
-        const parsed = (await res.json()) as { error?: string };
-        if (parsed?.error) detail = parsed.error;
+        parsed = (await res.json()) as { error?: string };
+        if ((parsed as { error?: string } | null)?.error) detail = (parsed as { error: string }).error;
       } catch {
         // 본문이 JSON 이 아니면 상태 코드만으로 말한다
       }
       if (res.status === 401) {
-        throw new ApiError(401, `인증 실패 — 토큰이 없거나 세션이 만료됐습니다. (${detail})`);
+        throw new ApiError(401, `인증 실패 — 토큰이 없거나 세션이 만료됐습니다. (${detail})`, parsed);
       }
-      throw new ApiError(res.status, detail);
+      // **본문을 그대로 실어 보낸다** — 409 의 서버본문을 안 쓰면 충돌 UI 가 없다.
+      throw new ApiError(res.status, detail, parsed);
     }
     return (await res.json()) as T;
   }

@@ -145,6 +145,40 @@ test("읽기 전용 경로 저장은 거부된다", async () => {
   }
 });
 
+test("읽기 전용 경로를 **절대 경로** 로 줘도 거부된다 — 조용히 뚫리면 안 된다", async () => {
+  // 실측에서 발견된 버그: 절대 경로를 `join(root, p)` 로 무조건 붙이면
+  // `/root` + `/root/.harnesside` = `/root/root/.harnesside` 가 되어 **아무 경로와도
+  // 일치하지 않았다.** 보호가 조용히 실패하고, 사용자에게는 "디스크에서 변경되었습니다"
+  // 라는 전혀 다른 이유가 보였다.
+  const s = await sandbox();
+  try {
+    const r = await safeWriteFile("state/token.json", "훔쳐쓴 토큰", {
+      root: s.dir,
+      readOnlyPaths: [join(s.dir, "state")],
+    });
+    assert.equal(r.ok, false, "절대 경로로 주어진 읽기 전용 목록이 통하지 않았다");
+    assert.equal(!r.ok && r.reason, "read-only", `다른 이유로 거부됐다: ${!r.ok ? r.reason : ""}`);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("읽기 전용 판정은 **접두사** 다 — 형제 디렉터리로 새지 않는다", async () => {
+  const s = await sandbox();
+  try {
+    await mkdir(join(s.dir, "state"), { recursive: true });
+    await mkdir(join(s.dir, "stateful"), { recursive: true });
+    // `state` 를 막는데 `stateful` 은 **지나갈 수 있어야** 한다. "startsWith" 문자열 비교로
+    // 처리하면 `stateful` 이 함께 막혀 버린다(과잉 봉쇄 — 사용자를 안 통하게 한다).
+    const inside = await safeWriteFile("stateful/a.ts", "allowed", { root: s.dir, readOnlyPaths: [join(s.dir, "state")] });
+    assert.equal(inside.ok, true, `붙잡혔어야 하는데 막았다: ${!inside.ok ? inside.reason : ""}`);
+    const outside = await safeWriteFile("state/a.ts", "blocked", { root: s.dir, readOnlyPaths: [join(s.dir, "state")] });
+    assert.equal(outside.ok, false);
+  } finally {
+    await s.cleanup();
+  }
+});
+
 test("디렉토리 목록은 깊이 1 이고, 디렉터리가 먼저 온다", async () => {
   const s = await sandbox();
   try {
