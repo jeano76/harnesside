@@ -9,6 +9,8 @@
  * **배치 횟수로** 기억한다. 이 기억은 **사용자가 끄면 안 남는다**.
  */
 
+import { t } from "../i18n/install.js";
+
 export type Zone = "left" | "right" | "top" | "bottom" | "center";
 export type PanelId = "explorer" | "agent" | "editor" | "terminal" | "diff" | "monitor" | "log" | "settings";
 
@@ -187,6 +189,19 @@ export const MOVE_LABEL: Record<Zone, string> = {
   center: "중앙 (플로팅)",
 };
 
+/** 존 → 사전 키. 라벨 문자는 **카탈로그가 정본**이다(§11.1 M9). */
+const ZONE_KEY: Record<Zone, string> = {
+  left: "zone.left",
+  right: "zone.right",
+  top: "zone.top",
+  bottom: "zone.bottom",
+  center: "zone.center",
+};
+
 export function zoneLabel(zone: Zone, detached = false): string {
-  return detached ? "분리 창" : MOVE_LABEL[zone];
+  if (detached) return t("zone.detached");
+  // 키가 없으면 **원래 라벨로 되돌린다.** `t()` 는 없는 키를 키 자체로 돌려주므로
+  // 그대로 두면 화면에 "zone.left" 이 찍힌다 — 사전이 비어 있는 사고가 눈에 보인다.
+  // 조용히 옛 문자열로 덮으면 **영역이 거짓말을 하게 된다**(§5.8).
+  return t(ZONE_KEY[zone], undefined) || MOVE_LABEL[zone];
 }

@@ -31,6 +31,10 @@ import { WsClient } from "./wsClient.js";
 import { DEFAULT_LAYOUT, movePanel, toggleCollapse, keyboardMove, panelOf, zoneLabel, type PanelId, type Zone } from "./layout/engine.js";
 import { loadDraft, saveDraft, clearDraft, searchCommands, type Command, type Toast } from "./panels/notify.js";
 import { filterEntries, defaultFilter, visibleTail, bufferFullLabel, filterLabel, type Filter, type LogLevel } from "./panels/logFilter.js";
+import { useI18n } from "./i18n/index.js";
+// 이 import 가 카탈로그를 **등록한다**. 훅만 쓰고 여기 안 쓰면 사전이 비어 있고,
+// `t()` 는 키 문자열을 그대로 돌려준다(2026-09-30 까지 실제로 그랬다).
+import "./i18n/install.js";
 import type { LogEntry } from "../server/logRing.js";
 import type { Metrics } from "../shared/metrics.js";
 
@@ -57,16 +61,20 @@ const EXAMPLES = [
 ];
 
 /** 패널 제목. 존과 무관하게 **같은 이름** 이어야 한다 — 제목을 존에서 만들면
- *  패널이 옮겨갈 때 제목까지 바뀐다(사용자가 못 찾는다). */
-const TITLES: Record<string, string> = {
-  explorer: "탐색기",
-  agent: "에이전트",
-  editor: "에디터",
-  terminal: "터미널",
-  diff: "변경 검토",
-  monitor: "모니터",
-  log: "서버 로그",
-  settings: "설정",
+ *  패널이 옮겨갈 때 제목까지 바뀐다(사용자가 못 찾는다).
+ *
+ *  값이 아니라 **키** 다(M9): 문장은 카탈로그가 정본이다. 키가 사전에 없으면 화면에
+ *  `panel.editor` 가 그대로 찍힌다 — 그게 "옮기지 않은 문자열" 을 눈에 보이게 하는
+ *  방법이고, 조용히 옛 문자열로 되돌리면 배치가 거짓말을 하게 된다(§5.8). */
+const TITLE_KEY: Record<string, string> = {
+  explorer: "panel.explorer",
+  agent: "panel.agent",
+  editor: "panel.editor",
+  terminal: "panel.terminal",
+  diff: "panel.diff",
+  monitor: "panel.monitor",
+  log: "panel.log",
+  settings: "panel.settings",
 };
 
 function Empty({ title, hint, actions }: { title: string; hint: string; actions?: { label: string; onClick: () => void }[] }) {
@@ -163,6 +171,9 @@ function Panel({
 }
 
 export default function App() {
+  // M9: 문자열은 여기서 키로 바꾼다. 훅이 **함수** 를 돌려주는 이유는 로케일이
+  // 바뀌면 다시 그려야 해서다 — 함수를 그대로 받아쓰면 stale 이 된다.
+  const t = useI18n();
   const [steps, setSteps] = useState<BootStep[] | null>(null);
   const [gpu, setGpu] = useState<GpuInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -536,9 +547,9 @@ export default function App() {
           )}
         </div>
         {tree === null ? (
-          <Empty title="탐색기를 읽지 못했습니다" hint="워크스페이스 경로와 권한을 확인하세요." actions={[{ label: "다시 시도", onClick: () => void loadTree() }]} />
+          <Empty title={t("empty.treeFailed.title")} hint={t("empty.treeFailed.hint")} actions={[{ label: t("action.retry"), onClick: () => void loadTree() }]} />
         ) : tree.length === 0 ? (
-          <Empty title="빈 폴더입니다" hint={`${workspace?.root ?? ""} 에 파일이 없습니다.`} />
+          <Empty title={t("empty.folderEmpty.title")} hint={t("empty.folderEmpty.hint", { root: workspace?.root ?? "" })} />
         ) : (
           <ul style={{ listStyle: "none", margin: 0, padding: 4 }}>
             {tree.map((e) => (
@@ -625,9 +636,9 @@ export default function App() {
       />
     ) : (
       <Empty
-        title="열린 파일이 없습니다"
-        hint="탐색기에서 파일을 여세요. 저장하지 않은 탭은 창을 닫아도 세션에 남습니다."
-        actions={[{ label: "새로고침", onClick: () => void refreshTree() }, ...EXAMPLES.slice(0, 1).map((t) => ({ label: "예시 프롬프트", onClick: () => setDraft(t) }))]}
+        title={t("empty.noFile.title")}
+        hint={t("empty.noFile.hint")}
+        actions={[{ label: t("action.refresh"), onClick: () => void refreshTree() }, ...EXAMPLES.slice(0, 1).map((ex) => ({ label: t("empty.noFile.example"), onClick: () => setDraft(ex) }))]}
       />
     ),
     terminal: (
@@ -714,7 +725,7 @@ export default function App() {
           }}
         />
         <span style={{ color: DIM }}>{modelName ?? "모델 미연결"}</span>
-        {steps && <span style={{ color: DIM }}>부팅 {bootDone}/{steps.length}</span>}
+        {steps && <span style={{ color: DIM }}>{t("app.booting", { stage: bootDone, total: steps.length })}</span>}
         {full && <span style={{ color: full.color, fontSize: 11 }} title="로그 상한">{full.text}</span>}
         {error && <span style={{ color: "#f85149" }}>{error}</span>}
         <span style={{ flex: 1 }} />
@@ -741,7 +752,7 @@ export default function App() {
           {zones.top.map((id) => (
             <div key={id} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
               <Panel
-                title={TITLES[id] ?? id}
+                title={t(TITLE_KEY[id] ?? `panel.${id}`)}
                 zone="top"
                 collapsed={panelOf(layout, id)?.collapsed}
                 onToggle={() => setLayout((l) => toggleCollapse(l, id))}
@@ -782,7 +793,7 @@ export default function App() {
                 return <MonitorPanel key={id} latest={metrics} series={metricSeries} collapsed={p?.collapsed} onToggle={toggle} />;
               }
               return (
-                <Panel key={id} title={TITLES[id] ?? id} zone={z} collapsed={p?.collapsed} onToggle={toggle} onMove={move}>
+                <Panel key={id} title={t(TITLE_KEY[id] ?? `panel.${id}`)} zone={z} collapsed={p?.collapsed} onToggle={toggle} onMove={move}>
                   {BODY[id]}
                 </Panel>
               );
