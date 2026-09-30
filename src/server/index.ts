@@ -26,8 +26,9 @@ import { HttpServer, readBody } from "./httpServer.js";
 import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type DaemonMode } from "./daemon.js";
 import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
-import { safeListDir, safeReadFile, safeWriteFile } from "../fs/safePath.js";
+import { safeListDir, safeReadFile, safeWriteFile, safeResolve } from "../fs/safePath.js";
 import { gitStatus, gitShowHead } from "./gitDiff.js";
+import { planClone, clone, redactUrl, pull, push, summarize, currentBranch } from "../git/sync.js";
 import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
@@ -45,7 +46,7 @@ import { issueToken } from "../auth/token.js";
 import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { mkdir, access, readdir, stat, readFile } from "node:fs/promises";
 import stripAnsi from "strip-ansi";
 
@@ -475,6 +476,55 @@ async function main(): Promise<number> {
             const r = await gitStatus(workspace.root());
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-a-repo" ? 400 : 500 });
             return r.value;
+          })
+          // ── §9.3 GitHub 연동 (P14) ─────────────────────────────────────────
+          // 요구 16: clone → 파일 열기 → 커밋 → pull. **충돌이면 자동병합 없이 중단.**
+          // 그 마지막 부분이 이 경로의 존재 이유다 — 조용히 섞어 넣으면 사용자는
+          // 자기 파일이 바뀐 것도 모른다(모듈 주석 참조).
+          .route("GET", "/api/git/summary", async () => {
+            const r = await summarize(workspace.root());
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "not-a-repo" ? 400 : 500 });
+            return r.value;
+          })
+          .route("POST", "/api/git/clone", async (c) => {
+            const body = (await readBody(c.req)) as { url?: string; dir?: string; branch?: string; depth?: number };
+            const url = String(body.url ?? "");
+            if (!url) throw Object.assign(new Error("url 이 필요합니다"), { status: 400 });
+            // **저장 위치는 워크스페이스 아래로 제한한다** — 임의 경로에 clone 되면
+            // 경로 안전(§3.4) 밖에서 파일을 쓰게 된다.
+            const dirInput = String(body.dir ?? "repo");
+            const target = isAbsolute(dirInput) ? dirInput : join(workspace.root(), dirInput);
+            const safe = await safeResolve(target, { root: workspace.root() });
+            if (!safe.ok) throw Object.assign(new Error(safe.detail), { status: 403 });
+            // **이미 있으면 덮어쓰지 않는다** — clone 은 통째로 쓰는 일이라 실수 비용이 크다.
+            if (await stat(safe.value).then(() => true, () => false)) {
+              throw Object.assign(new Error(`이미 있는 경로입니다: ${safe.value}`), { status: 409 });
+            }
+            const plan = planClone({ url, dir: safe.value, branch: body.branch, depth: body.depth });
+            ring.info("git", `clone 시작: ${redactUrl(url)}`, "server");
+            const r = await clone(plan);
+            if (!r.ok) {
+              ring.error("git", `clone 실패: ${r.detail}`, "server");
+              throw Object.assign(new Error(r.detail), { status: 400 });
+            }
+            return { ok: true, dir: r.value.dir, tail: r.value.tail };
+          })
+          .route("POST", "/api/git/pull", async (c) => {
+            const body = (await readBody(c.req)) as { branch?: string };
+            // **브랜치를 지정하지 않으면 저장소의 실제 브랜치** 를 쓴다. "main" 을
+            // 기본값으로 쓰면 master 저장소에서 조용히 "새 변경 없음" 이 된다(실측).
+            const branch = body.branch ?? (await currentBranch(workspace.root()));
+            // 충돌하면 **그 상태로 멈춘다**(자동 병합 금지). 사용자가 해결한다.
+            const r = await pull(workspace.root(), branch);
+            if (r.outcome === "conflict") {
+              // **자동 병합하지 않는다**(§9.3). 어떤 파일을 사람이 고쳐야 하는지까지 말한다.
+              ring.warn("git", "pull 충돌 — 자동 병합하지 않고 중단했습니다", "server", { files: r.filesChanged });
+            }
+            return r;
+          })
+          .route("POST", "/api/git/push", async (c) => {
+            const body = (await readBody(c.req)) as { branch?: string; setUpstream?: boolean };
+            return push(workspace.root(), body.branch ?? (await currentBranch(workspace.root())), body.setUpstream === true);
           })
           .route("GET", "/api/git/head", async (c) => {
             const p = c.query.get("path") || "";

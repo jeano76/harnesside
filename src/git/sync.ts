@@ -14,6 +14,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { dirname } from "node:path";
 
 const run = promisify(execFile);
 
@@ -197,6 +198,65 @@ export interface PullResult {
  * `-X ours`/`-X theirs` 같은 자동 해결 옵션을 **어절로도 넣지 않는다** — 넣는 순간
  * "자동병합 없이 중단" 이라는 요구가 깨진다.
  */
+/**
+ * clone 실행.
+ *
+ * ENV(터미널 프롬프트 차단·페이지러 무음 등)는 **이 모듈의 것이며** 밖에서 다시 만들지
+ * 않는다. 두 벌의 git 환경이 있으면 "이쪽에서는 동작하고 저쪽에서는 안 된다" 가 된다.
+ *
+ * 실패는 **원인 문장 그대로** 돌려준다. "clone 실패" 만으로는 사용자가 아무것도 못
+ * 고친다 — 키가 없다든가, 주소가 틀렸다든가 말해야 한다.
+ */
+export async function clone(plan: ClonePlan): Promise<GitResult<{ dir: string; tail: string[] }>> {
+  try {
+    // **cwd 는 목적지의 부모** 다 — `git clone` 이 그 디렉터리를 **만든다.**
+    // 존재하지 않는 디렉터리로 cwd 를 잡으면 spawn 자체가 실패하고 원인이 빈 문자열이 된다
+    // (실측: "알 수 없는 오류" 만 남고 진짜 이유를 잃었다).
+    const { stdout, stderr } = await run("git", cloneArgs(plan), {
+      cwd: dirname(plan.dir),
+      env: { ...process.env, ...ENV },
+      timeout: 600_000,
+    });
+    return { ok: true, value: { dir: plan.dir, tail: `${stdout}${stderr}`.trim().split("\n").slice(-8) } };
+  } catch (e) {
+    return { ok: false, reason: "failed", detail: describeGitError(e) };
+  }
+}
+
+/** git 실패에서 사람이 읽을 수 있는 원인을 꺼낸다(내부 스택은 노출하지 않는다). */
+export function describeGitError(e: unknown): string {
+  const err = e as { stderr?: string; stdout?: string; message?: string; code?: string } | undefined;
+  const raw = [String(err?.stderr ?? ""), String(err?.stdout ?? ""), String(err?.message ?? "")].filter(Boolean).join("\n");
+  // **spawn 자체가 실패한 경우**엔 stderr 도 message 도 비어 있을 수 있다. 그때
+  // "알 수 없는 오류" 만 남으면 사용자가 아무것도 못 고친다(실측).
+  if (err?.code === "ENOENT") return "git 실행 파일을 찾을 수 없습니다 — git 이 설치되어 있는지 확인하십시오.";
+  // git 은 잡음과 원인을 함께 찍는다. `fatal:`/`error:` 를 먼저 찾고, 없으면 마지막 줄.
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+  const line = lines.find((l) => l.startsWith("fatal:") || l.startsWith("error:")) ?? lines[lines.length - 1] ?? "";
+  if (/Permission denied|publickey|Could not read from remote repository/i.test(raw)) {
+    return `${line} — SSH 키가 없거나 등록되지 않았습니다. https 로 시도하거나 키를 등록하십시오.`;
+  }
+  if (/Authentication failed|could not read Username|terminal prompts disabled/i.test(raw)) {
+    return `${line} — 인증에 실패했습니다. 개인 접근 토큰이 필요합니다.`;
+  }
+  if (/not a git repository/i.test(raw)) return "저장소가 아닙니다 — .git 이 없습니다.";
+  return line;
+}
+
+/**
+ * 저장소의 **현재 브랜치**.
+ *
+ * "main" 을 기본값으로 박아두면 `master` 저장소에서 pull 이 "원격에 새 변경이 없습니다"
+ * 라고 **거짓말** 한다(실측: 다른 브랜치를 물어봤는데 없는 브랜치라 조용히 통과했다).
+ * 없는 브랜치를 조용히 통과시키는 것이 pull 에서 가장 나쁜 실패다 — 사용자는
+ * "받았다"고 믿고 코드를 잃는다.
+ */
+export async function currentBranch(cwd: string): Promise<string> {
+  const r = await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+  const name = r.ok ? r.value.trim() : "";
+  return name && name !== "HEAD" ? name : "main";
+}
+
 export async function pull(cwd: string, branch = "main"): Promise<PullResult> {
   // **`--` 를 넣으면 안 된다.** `--` 는 *경로(pathspec)* 구분자다. `git fetch -- origin main`
   // 은 "origin 과 main 을 경로로.fetch 하라" 가 되고 실제론 `does not appear to be a
