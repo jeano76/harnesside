@@ -15,12 +15,15 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  DEFAULT_ROLLBACK,
   isNewer,
+  judgeBoot,
   parseVersion,
   planApply,
+  rollbackReason,
   verifyHash,
   VERSION_SLOTS,
   type ApplyGuard,
@@ -29,6 +32,8 @@ import {
   type ReleaseInfo,
   type UpdateChannel,
   type UpdatePhase,
+  type BootVerdict,
+  type RollbackPolicy,
 } from "./update/pipeline.js";
 
 export interface ReleaseAsset {
@@ -262,6 +267,142 @@ export class UpdateService {
       this.set({ lastError: detail });
       this.opts.onError?.(detail);
       return { ok: false, detail };
+    }
+  }
+
+  /**
+   * 적용: **교체 → 부팅 확인 → 실패 시 롤백**.
+   *
+   * "설치 성공 = 성공" 함정(§5.13.1)이 여기서 끝나면 안 된다. 파일을 **깨끗이
+   * 갈아끼운 것**과 **새 버전이 실제로 기동하는 것** 은 다른 사실이고, 둘째가 없으면
+   * 사용자는 업데이트를 적용한 뒤 IDE 를 못 쓴다.
+   *
+   * 순서를 어기면 안 되는 이유:
+   *  1. 되돌릴 곳(슬롯)이 없으면 **거부**한다 — 여기서 만들지 않는다. 교체 **전에**
+   *     현재 파일을 슬롯에 복사해야 한다(교체 후에 만들면 옛 것이 이미 없다).
+   *  2. 교체는 **임시 경로 → rename** 이다. 전원 차단으로 반만 남으면 다음 실행이
+   *     깨진 파일을 실행한다.
+   *  3. 부팅 확인은 주입된 `probeHello` 다. 판정 규칙은 `judgeBoot`(파이프라인의
+   *     순수 함수)이고, 여기서 **판정을 다시 쓰지 않는다** — 두 개의 판단원이 생기면
+   *     어느 쪽이 진짜인지 알 수 없다.
+   *  4. 실패면 슬롯에서 되돌리고 **다시 기동**한다. 복구만 하고 띄우지 않으면
+   *     사용자는 "복구됐다" 는 메시지와 함께 죽은 창을 본다.
+   */
+  async apply(opts: {
+    /** 슬롯에 받아 둔 새 실행 파일. */
+    newBinary: string;
+    /** 새 프로세스가 기동했는지 — 보통 `/api/health` 응답. */
+    probeHello: () => Promise<boolean>;
+    /** 재기동. 주입 이유: 서버는 자기 자신을 못 띄운다(§4.4 와 같은 이유). */
+    restart: () => Promise<void>;
+    /** 되돌린 뒤 다시 띄울 때. 없으면 `restart` 를 쓴다. */
+    restartAfterRollback?: () => Promise<void>;
+    policy?: RollbackPolicy;
+    now?: () => number;
+    /** 기다리는 동안 100ms 간격으로 부른다 — UI 가 멈춘 것처럼 보이면 안 된다. */
+    onTick?: (elapsedSec: number) => void;
+  }): Promise<{
+    ok: boolean;
+    rolledBack: boolean;
+    detail: string;
+    elapsedSec: number;
+    verdict: BootVerdict;
+  }> {
+    const now = opts.now ?? this.opts.now ?? Date.now;
+    const policy = opts.policy ?? DEFAULT_ROLLBACK;
+    const { decision, guard } = await this.planApply();
+    if (!decision.ok) {
+      // **되돌릴 곳이 없는데 진행하면 베팅이다.** (`planApply` 의 결정을 그대로 쓴다)
+      return {
+        ok: false,
+        rolledBack: false,
+        detail: `적용하지 않았습니다: ${decision.blockers.join(" / ")}`,
+        elapsedSec: 0,
+        verdict: "pending",
+      };
+    }
+
+    // 1. 되돌릴 곳 — **교체 전에** 만든다.
+    const slot = await this.makeSlot();
+    if (!slot.ok) {
+      return { ok: false, rolledBack: false, detail: `롤백 슬롯을 만들지 못해 적용하지 않았습니다: ${slot.detail}`, elapsedSec: 0, verdict: "pending" };
+    }
+
+    // 2. 교체 — 검증된 파일만. 검증 없이 덮어쓰면 롤백 슬롯만 남는다.
+    try {
+      const buf = await readFile(opts.newBinary);
+      const tmp = `${this.opts.selfPath}.harnesside-tmp`;
+      await writeFile(tmp, buf);
+      await chmod(tmp, 0o755);
+      await rename(tmp, this.opts.selfPath);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      this.set({ lastError: detail });
+      return { ok: false, rolledBack: false, detail: `교체 실패: ${detail}`, elapsedSec: 0, verdict: "pending" };
+    }
+
+    // 3. **재기동 후** 부팅 확인.
+    //
+    // 순서가 중요하다: 실행 파일을 **갈아끼운 것만으로는 아무것도 바뀌지 않는다**
+    // (실측: 재기동을 빼면 성공 보고만 하고 옛 프로세스가 계속 돈다 — 새 버전이
+    // 실행된 적도 없다). 그래서 교체 → 재기동 → 확인 순서로 고정한다.
+    //
+    // **주의**: 이 메서드가 실행 중인 프로세스라면 `restart` 가 그 프로세스를 죽인다.
+    // 그래야 `apply` 는 되돌리기까지 할 수 없고, 실제로는 **상위 감시기(supervisor)** 가
+    // 이 일을 맡는다(§5.13.1). `restart`/`probeHello` 가 주입인 이유이고, 자기가
+    // 자신을 갈아끼우면서 롤백까지 하려면 별도 프로세스가 필요하다.
+    this.phase("verifying", "새 버전을 실행하고 기동을 확인합니다", 80);
+    try {
+      await opts.restart();
+    } catch (e) {
+      const detail = `재기동에 실패했습니다: ${e instanceof Error ? e.message : String(e)}`;
+      this.set({ lastError: detail });
+      this.phase("failed", detail, 0, detail);
+      return { ok: false, rolledBack: false, detail, elapsedSec: 0, verdict: "pending" };
+    }
+    const startedAt = now();
+    let sentHello = false;
+    let verdict: BootVerdict = "pending";
+    while (true) {
+      const elapsedSec = (now() - startedAt) / 1000;
+      try {
+        sentHello = await opts.probeHello();
+      } catch {
+        sentHello = false;
+      }
+      verdict = judgeBoot(sentHello, elapsedSec, policy);
+      opts.onTick?.(Math.round(elapsedSec));
+      if (verdict !== "pending") break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    if (verdict === "healthy") {
+      this.set({ lastError: null });
+      this.phase("idle", `새 버전(${this.status.current})이 기동했습니다`, 100);
+      return { ok: true, rolledBack: false, detail: "새 버전이 기동 신호를 보냈습니다", elapsedSec: Math.round((now() - startedAt) / 1000), verdict };
+    }
+
+    // 4. 실패 — 되돌리고 **다시 띄운다**.
+    const reason = rollbackReason(policy);
+    try {
+      const buf = await readFile(slot.detail);
+      const tmp = `${this.opts.selfPath}.harnesside-rollback`;
+      await writeFile(tmp, buf);
+      await chmod(tmp, 0o755);
+      await rename(tmp, this.opts.selfPath);
+      await (opts.restartAfterRollback ?? opts.restart)();
+      this.set({ lastError: reason });
+      this.phase("failed", reason, 0, reason);
+      this.opts.onError?.(reason);
+      return { ok: false, rolledBack: true, detail: reason, elapsedSec: Math.round((now() - startedAt) / 1000), verdict };
+    } catch (e) {
+      // **되돌리기까지 실패했다면 그 사실을 그대로 말한다.** "복구됨" 이라고 말하면
+      // 사용자는 없는 파일을 실행한다. 실행 파일이 **안 된다** 는 것도 가능한 사실이다.
+      const detail = `이전 버전으로 되돌리기도 실패했습니다: ${e instanceof Error ? e.message : String(e)}. 실행 파일이 ${this.opts.selfPath} 에서 실행되지 않을 수 있습니다.`;
+      this.set({ lastError: detail });
+      this.phase("failed", detail, 0, detail);
+      this.opts.onError?.(detail);
+      return { ok: false, rolledBack: false, detail, elapsedSec: Math.round((now() - startedAt) / 1000), verdict };
     }
   }
 
