@@ -177,6 +177,28 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // ── 최초 구동: llama.cpp 세 가지 상태를 먼저 판정한다 ──────────────────────
+  //
+  // 여기서 `allowInstall: false` 다. **기본 부팅은 설치하지 않는다** — cmake 도
+  // 20GB 다운로드도 사용자가 모르게 일어나면 안 된다. 판정 결과는 그대로 알린다.
+  // 설치는 `harnesside doctor --install` 이 한다(요구: 세 경우를 나누는 경로).
+  //
+  // 그런데 이 판정이 이미 있는 bootstrap 안에 **중복**된다는 게 걸린다. `bootstrap` 의
+  // [3]·[6] 이 이미 "바이너리 찾기"와 "떠 있는 서버 채택" 을 한다. 그래서 여기서는
+  // **판정만** 하고 결과는 부팅 단계에 실어서, 한 곳에 모은다 — 두 판정이 어긋나면
+  // 어느 쪽이 옳은지 알 수 없다(실측: adopt 죽은 코드 사건).
+  {
+    const { inspectLlama } = await import("../setup/firstRun.js");
+    const seen = await inspectLlama({ home }).catch(() => null);
+    if (seen?.situation === "running") {
+      emit(`[0] 실행 중인 llama-server 를 사용합니다: ${seen.running!.baseUrl} (${seen.running!.model}) — 설치하지 않습니다.`);
+    } else if (seen?.situation === "installed") {
+      emit(`[0] 설치된 llama-server: ${seen.llama!.binPath} — ${seen.llama!.source}`);
+    } else {
+      emit(`[0] llama-server 를 찾지 못했습니다. 'harnesside doctor --install' 로 이 머신에 맞춰 설치하십시오.`);
+    }
+  }
+
   // §8.3: 지문을 **한 번** 구한다. 이후 모든 판정이 같은 값을 봐야 전환 중에
   // 트리와 도구의 기준이 어긋나지 않는다.
   await workspace.init();
@@ -414,7 +436,9 @@ async function main(): Promise<number> {
     // "브라우저 GPU 는 무조건 꺼" 라고 말할 수 있어야 하고, `off` 경로를 검증하려면
     // (GPU 없는 러너 말고) 이 머신에서 강제로 꺼 보는 수단이 있어야 한다.
     forcedGpuMode: gpuModeOf(process.env.HARNESSIDE_GPU_MODE),
-    allowBuild: false,
+    // **`--install` 가 명시됐을 때만** 빌드한다. 기본 부팅에서 cmake 를 띄우면
+    // 사용자가 무엇을 설치하는지 모른 채 몇십 분을 기다리게 된다.
+    allowBuild: process.argv.includes("--install"),
     skipLlamaSpawn: true, // 아래에서 실제 스폰(단계 7/8 을 여기서 이어받는다)
     lock, // 락은 여기서만 획득한다 — 두 곳이 잡으면 자기 자신을 "이미 실행 중" 으로 본다
     lateSteps: {

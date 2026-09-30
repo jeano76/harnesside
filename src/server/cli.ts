@@ -21,6 +21,8 @@ import {
   type Paths,
 } from "./daemon.js";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { parseNdjson } from "./logRing.js";
 
 export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이전트 (웹 IDE)
@@ -32,9 +34,11 @@ export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이
   harnesside status          상태 (JSON 은 --json)
   harnesside logs [-f]       로그 보기 (데몬이어도 가능)
   harnesside down            우아한 종료 (체크포인트 기록 후)
-  harnesside doctor          환경 진단
+  harnesside doctor          환경 진단 (읽기 전용)
+  harnesside doctor --install  없으면 설치 · 모델이 없으면 받는다 [포트]
 
 옵션:
+  --install      doctor 와 함께 판정에 이어 설치·수령한다
   --no-browser    창을 띄우지 않고 서버만 (디버깅용)
   --keep-alive    창을 닫아도 종료하지 않음
   --daemon        = up -d
@@ -169,7 +173,16 @@ export async function cmdDown(paths: Paths): Promise<number> {
   return 0;
 }
 
-export async function cmdDoctor(paths: Paths): Promise<number> {
+/**
+ * 진단. `--install` 을 주면 판정에 이어 **그 판단대로** 설치·수령한다.
+ *
+ * 판정과 실행이 같은 함수(`planFirstRun`) 를 쓴다는 게 요점이다. 두 경로를 따로 만들면
+ * "확인하러 왔더니 20GB 를 받았다" 가 된다 — 실제로 그랬다(§setup/bootstrap.ts).
+ */
+export async function cmdDoctor(
+  paths: Paths,
+  opts: { install?: boolean; llamaPort?: number } = {},
+): Promise<number> {
   const s = await collectStatus(paths);
   emit(C.bold("harnesside doctor"));
   emit(`  서버: ${s.running ? C.green("실행 중") : C.dim("정지")}`);
@@ -183,12 +196,42 @@ export async function cmdDoctor(paths: Paths): Promise<number> {
       );
     });
 
-  // llama-server 위치는 **이미 있는 탐색 규칙** 을 재사용한다. 여기서 경로를
-  // 하드코딩하면(했다 — `/home/jeano/...`) 이 저장소를 클론한 다른 사람의
-  // `doctor` 가 "찾을 수 없음" 을 말하고, 어디가 잘못됐는지 아무도 모른다.
-  const { findLlamaServer } = await import("../setup/llamaCpp.js");
-  const llama = await findLlamaServer();
-  emit(llama ? `  llama-server: ${C.green(llama.binPath)}` : `  llama-server: ${C.red("찾을 수 없음")}`);
+  // llama-server 상태는 **판정 정본**(`firstRun.inspectLlama`) 을 쓴다. 여기서
+  // `findLlamaServer` 만 부르면 **세 경우 중 하나가 사라진다** — "떠 있는 서버" 를
+  // doctor 가 "찾을 수 없음" 으로 말한다. 실제로 그랬다.
+  const { inspectLlama } = await import("../setup/firstRun.js");
+  const llamaState = await inspectLlama({ home: homedir() }).catch(() => null);
+  if (llamaState?.situation === "running") {
+    emit(`  llama-server: ${C.green(`실행 중 — ${llamaState.running!.baseUrl} (${llamaState.running!.model})`)}`);
+  } else if (llamaState?.situation === "installed") {
+    emit(`  llama-server: ${C.green(llamaState.llama!.binPath)} ${C.dim("(설치됨 · 미구동)")}`);
+  } else {
+    emit(`  llama-server: ${C.red("찾을 수 없음")} ${C.dim("— 'harnesside doctor --install' 로 설치할 수 있습니다")}`);
+  }
+
+  // 설치가 명시적으로 요청됐을 때만 손댄다. 기본 `doctor` 는 **읽기 전용**이다.
+  if (opts.install) {
+    emit("");
+    emit(C.bold("설치"));
+    const { planFirstRun } = await import("../setup/firstRun.js");
+    const plan = await planFirstRun({
+      llamaPort: opts.llamaPort,
+      modelsDir: process.env.HARNESSIDE_MODELS_DIR ?? join(homedir(), ".harnesside", "models"),
+      home: homedir(),
+      allowInstall: true,
+      log: (line) => emit(`  ${C.dim(line)}`),
+    });
+    for (const r of plan.reasons) emit(`  ${r}`);
+    for (const e of plan.errors) emit(`  ${C.red(e)}`);
+    emit(
+      plan.ok
+        ? `  ${C.green("준비됨")} — llama 포트 ${plan.llamaPort}` +
+            (plan.llama ? ` · ${plan.llama.binPath}` : "") +
+            (plan.downloaded ? ` · 모델 ${plan.downloaded.file}` : "")
+        : `  ${C.red("준비되지 않음")} — 위 사유를 확인하십시오`,
+    );
+    for (const line of plan.errors) return 1;
+  }
 
   for (const [label, cmd, args] of [["chrome", "google-chrome", ["--version"]]] as const) {
     const r = await probe(cmd, [...args]);
@@ -210,7 +253,14 @@ export async function runStandalone(argv: string[]): Promise<number | null> {
   if (command === "status") return cmdStatus(paths, json);
   if (command === "logs") return cmdLogs(paths, rest);
   if (command === "down") return cmdDown(paths);
-  if (command === "doctor") return cmdDoctor(paths);
+  if (command === "doctor") {
+    // `--install` 은 **판정만 하는 경로와 같은 코드** 를 쓴다. 확인만 하려는데
+    // cmake 가 돌아가거나 20GB 가 다운로드되면 그건 "진단" 이 아니다.
+    // 포트는 **숫자로만** 받는다. 문자열을 그대로 넘기면 나중에 `-DGGML_CUDA` 같은
+    // 인자가 포트로 들어가 조용히 이상한 설정이 된다.
+    const portArg = rest.find((r) => /^\d+$/.test(r));
+    return cmdDoctor(paths, { install: flags.has("--install"), llamaPort: portArg ? Number(portArg) : undefined });
+  }
   if (command === "open") {
     // 이미 떠 있으면 창만 추가한다(§3.2 [1]).
     const { readInstance, isAlive } = await import("./daemon.js");
