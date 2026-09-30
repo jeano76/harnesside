@@ -57,7 +57,7 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
     let alive = true;
     setLoading(true);
     void client
-      .get<{ content: string }>(`/api/fs/read?path=${encodeURIComponent(path)}`)
+      .get<{ content: string }>(`/api/fs/file?path=${encodeURIComponent(path)}`)
       .then((r) => {
         if (alive) setContent(r.content);
       })

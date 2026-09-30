@@ -134,7 +134,7 @@ function FileBlock({ label, path, done, client }: { label: string; path: string;
     if (!open || content !== null || !client) return;
     let alive = true;
     void client
-      .get<{ content: string }>(`/api/fs/read?path=${encodeURIComponent(path)}`)
+      .get<{ content: string }>(`/api/fs/file?path=${encodeURIComponent(path)}`)
       .then((r) => {
         if (alive) setContent(r.content);
       })

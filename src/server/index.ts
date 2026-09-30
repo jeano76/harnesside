@@ -85,6 +85,9 @@ function stateDir(projectRoot: string): string {
   return join(projectRoot, ".harnesside", "state");
 }
 
+/** 모듈 로드 시각 — 프로세스 기동의 기준. `/api/health` 가 그대로 노출한다. */
+const STARTED_AT = Date.now();
+
 async function main(): Promise<number> {
   const projectRoot = process.cwd();
   const home = homedir();
@@ -513,6 +516,19 @@ async function main(): Promise<number> {
             ok: true,
             llamaUp: r.llamaReady,
             version: "0.1.0",
+            /**
+             * 이 프로세스가 **떠난 시각** (2026-10-01).
+             *
+             * 왜 필요했나: 병렬 시험이 "디렉터리가 또 안 움직인다" 고 결론지었는데,
+             * 코드는 이미 고쳐져 있었다 — **서버가 수정 이전에 떠 있었을 뿐**이었다.
+             * 모든 결과가 옛 코드의 성능이었다. 이것은 시험이 할 수 있는 가장 위험한
+             * 오류인데, **누군가 코드를 고친 뒤 서버를 안 띄운 순간**에만 생긴다.
+             *
+             * 그래서 기동 시각을 **공개**한다 — 누군가 시험을 돌릴 때 "이게 지금
+             * 코드인가" 를 스스로 확인할 수 있어야 한다. 확인 수단이 없으면 전부 조용히
+             * 거짓말이 된다.
+             */
+            startedAt: STARTED_AT,
           }))
           .route("GET", "/api/gpu", () => ({ ...r.gpu, llama: r.ports?.llamaPort, ide: port }))
           .route("GET", "/api/bootstrap", () => ({
@@ -650,6 +666,14 @@ async function main(): Promise<number> {
             // **공유 작업 경로 + 최근 본 디렉터리** (2026-10-01). 셸 위쪽 탐색 막대의
             // 정본이다. 화면이 따로 들고 있으면 어느 쪽이 맞는지 알 수 없다.
             cwd: terminal.cwd,
+            /**
+             * **경계(루트)** — 셸이 나갈 수 없는 곳. `cwd` 와 **다르다**.
+             *
+             * `cwd` 는 사용자가 옮긴 현재 위치라 바뀌지만, 루트는 고정이다. 화면의
+             * 탐색 막대가 "위로" 를 얼마나 되돌릴 수 있는지 판단하려면 이 값이 필요하다
+             * — `cwd` 만으로는 "여기가 루트인가" 를 알 수 없다.
+             */
+            root: terminal.root,
             recent: terminal.recentDirs(),
           }))
           // 디렉터리 목록 — 셸 탐색 막대의 후보. **디렉터리만** 준다(파일은 아래로).
