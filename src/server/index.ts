@@ -48,7 +48,7 @@ import { issueToken } from "../auth/token.js";
 import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, resolve } from "node:path";
 import { mkdir, access, readdir, stat, readFile } from "node:fs/promises";
 import stripAnsi from "strip-ansi";
 
@@ -106,7 +106,24 @@ async function main(): Promise<number> {
 
   // §5.5: 계측은 **서버가 1Hz 로 한 번만** 한다. 라우트는 마지막 샘플만 읽는다 —
   // 요청마다 `nvidia-smi` 를 실행하면 계측 자체가 부하가 된다.
-  const metrics = new MetricsSampler();
+  /**
+   * 컨텍스트 사용량 — **실측값**만 담는다 (2026-10-01).
+   *
+   * 실측: `MetricsSampler` 를 **의존성 없이** 만들어서 `deps.context` 가 항상
+   * `undefined` 였다. 그래서 `context` 는 매 샘플 `null` 이었고, 모니터 패널의
+   * 컨텍스트 게이지는 **"측정 불가"** 로 영구히 표시됐다. 그런데 값은 이미 어딘가에
+   * 있었다 — `AgentService` 가 `onContextUsage` 로 **실측해서** 보내고 있었고, 그것은
+   * 에이전트 스트림의 상태 줄(`컨텍스트 1221/32768`)로만 흘렀다.
+   *
+   * 즉 **수는 있었고 화면만 못 봤다.** 추측으로 채우지 않고 그 실측값을 그대로
+   * 계측기에 물린다. "측정 불가" 를 "0" 으로 바꾸면 사용자는 "컨텍스트가 안 찼다" 고
+   * 읽는데 실제로는 100 임을 알지 못한다 — 그래서 **0 이 아니라 null** 이 옳다.
+   */
+  let lastContext: { usedTokens: number; totalTokens: number } | null = null;
+
+  const metrics = new MetricsSampler(undefined, {
+    context: () => lastContext,
+  });
   // §8.3 워크스페이스 — **살아 있는 루트** 를 들고 있다. 경로 API 는 상수를 쓰지 않고
   // 여기서 읽는다. 전환은 확인을 거치고, 전이는 실패해도 이전 상태를 보존한다.
   const workspace = new WorkspaceService({
@@ -628,7 +645,39 @@ async function main(): Promise<number> {
           // ── M1 터미널 ─────────────────────────────────────────────────────
           // PTY 출력은 **WS 로만** 보낸다. 라우트로 폴링하면 타이핑이 200ms 늦게
           // 도착하고, 더 나쁘게는 "셸이 멈췄다" 고 보인다(실측: 폴링 주기 = 지연).
-          .route("GET", "/api/terminal", () => ({ tabs: terminal.list() }))
+          .route("GET", "/api/terminal", () => ({
+            tabs: terminal.list(),
+            // **공유 작업 경로 + 최근 본 디렉터리** (2026-10-01). 셸 위쪽 탐색 막대의
+            // 정본이다. 화면이 따로 들고 있으면 어느 쪽이 맞는지 알 수 없다.
+            cwd: terminal.cwd,
+            recent: terminal.recentDirs(),
+          }))
+          // 디렉터리 목록 — 셸 탐색 막대의 후보. **디렉터리만** 준다(파일은 아래로).
+          .route("GET", "/api/terminal/dirs", async (c) => {
+            const target = resolve(terminal.cwd, String(c.query.get("path") ?? "."));
+            // `resolve` 는 `..` 로 루트를 벗어난다 — `safePath` 와 같이 게이트를 둔다.
+            if (!target.startsWith(terminal.cwd)) {
+              throw Object.assign(new Error("루트 밖으로는 나갈 수 없습니다"), { status: 403 });
+            }
+            const names = await readdir(target, { withFileTypes: true }).catch(() => []);
+            return {
+              cwd: terminal.cwd,
+              path: target,
+              parent: target === terminal.cwd ? null : resolve(target, ".."),
+              dirs: names
+                .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+                .map((d) => d.name)
+                .sort((a, b) => a.localeCompare(b)),
+            };
+          })
+          // 작업 경로 변경. **존재하는 디렉터리만** 받고, 루트 밖은 **거절한다**(조용히
+          // 되돌리지 않는다 — 이유를 말해야 사용자가 알아서 고친다).
+          .route("POST", "/api/terminal/cwd", async (c) => {
+            const body = (await readBody(c.req)) as { path?: string };
+            const r = await terminal.setCwd(String(body.path ?? ""));
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: 400 });
+            return r;
+          })
           .route("POST", "/api/terminal", async (c) => {
             const body = (await readBody(c.req)) as { cwd?: string; cols?: number; rows?: number; title?: string };
             const r = terminal.create({ cwd: body.cwd, cols: body.cols, rows: body.rows, title: body.title });
@@ -785,7 +834,17 @@ async function main(): Promise<number> {
                   return { file: n, path: join(modelsDir, n), bytes: st?.size ?? 0 };
                 })
             );
-            return { dir: modelsDir, active: boot?.model?.path ?? null, entries };
+            return {
+              dir: modelsDir,
+              // **채택한 서버가 서빙 중인 모델 이름**도 돌려준다. 경로가 아닐 수 있다
+              // — 그래서 이름과 경로를 **따로** 보낸다. 화면이 이 둘을 섞어
+              // "파일 없음" 을 "모델 없음" 으로 읽게 하지 않는다.
+              active: boot?.model?.path ?? null,
+              servedModel: boot?.servedModel ?? null,
+              // 채택 상태 — 경로가 없어도 **연결은 되어 있다** 는 사실.
+              servedByAdopted: !!boot?.ports?.adopted,
+              entries,
+            };
           })
           // 검색+추천. **네트워크를 못 쓰면 그 사실을 말한다** — 빈 목록을 "결과 없음" 으로
           // 돌려주면 사용자는 모델이 없다고 믿는다.

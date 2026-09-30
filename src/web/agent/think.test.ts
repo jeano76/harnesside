@@ -23,17 +23,29 @@ import {
   DEFAULT_MAX_REASONING,
 } from "./think.js";
 
-test("기본값은 thinking **OFF** — 켜면 도구 호출이 누락될 수 있다(§5.3)", () => {
+test("기본값은 thinking **ON** — 사고가 안 보이면 '기능이 없다' 고 읽힌다 (2026-10-01)", () => {
   const s = initialThink();
-  assert.equal(s.enabled, false, "기본이 켜져 있다");
-  assert.equal(s.needsWarning, false);
+  assert.equal(s.enabled, true, "기본이 꺼져 있다 — 화면에 사고가 안 보인다");
+  // **경고는 켜짐과 무관**이다. 켜져 있는 것과 위험한 것은 다르다.
+  assert.equal(s.needsWarning, false, "시작하자마자 경고를 띄운다 — 상시 보이는 경고는 경고가 아니다");
   assert.equal(toolChoiceFor(s), "auto");
 });
 
-test("켜면 경고를 함께 표시한다 — 상한 지정 안내가 붙어야 한다", () => {
-  const s = initialThink({ enabled: true });
-  assert.equal(s.needsWarning, true);
-  assert.equal(s.maxReasoningTokens, DEFAULT_MAX_REASONING);
+test("기본을 켜도 **안전장치는 그대로다** — 상한과 강제 전환 (§5.3 함정)", () => {
+  // 원본에서 겪은 사고: 420토큰 예산에서 thinking 을 켜면 tool_call 이 하나도 안 나왔다.
+  // 그래서 상한과 초과 시 `tool_choice: "required"` 전환을 **유지**해야 한다.
+  // 기본을 켠 것이 이 두 가지를 없애는 근거가 아니다.
+  const s = initialThink();
+  assert.equal(s.maxReasoningTokens, DEFAULT_MAX_REASONING, "상한이 없다 — 사고가 예산을 다 쓸 수 있다");
+  let over = ingest(s, { reasoning: "가".repeat(20000) });
+  assert.equal(over.forcedToolChoice, true, "초과해도 강제 전환하지 않는다 — tool_call 이 사라진다");
+  assert.equal(over.enabled, false, "초과했는데 사고가 계속된다");
+  assert.equal(toolChoiceFor(over), "required");
+  assert.equal(over.needsWarning, true, "위험해진 순간에 경고를 띄우지 않는다");
+});
+
+test("명시적으로 끌 수 있다 — 기본값이 강제가 아니다", () => {
+  assert.equal(initialThink({ enabled: false }).enabled, false);
 });
 
 test("사고 델타가 누적된다", () => {

@@ -196,7 +196,21 @@ export interface Command {
   category: "파일" | "에이전트" | "보기" | "설정" | "기타";
   keys: string[];
   when?: string;
-  run: string;
+  /**
+   * **실제로 실행되는 함수.**
+   *
+   * 여기는 예전부터 문자열이었다(`run: "view.toggleLog()"`). 그리고 **아무도 그 문자열을
+   * 실행하지 않았다** — 호출부가 `cmd.run` 을 찾지 못했다. 그래서 팔레트에서 Enter 를
+   * 눌러도 **아무 일도 일어나지 않았다**(2026-10-01 실측: `grep '\.run' src/web/` 의
+   * 결과는 `searchCommands` 안의 문자열 비교뿐).
+   *
+   * 조용히 안 되는 메뉴는 **없다고 알아채기 더 어렵다** — 목록은 보이는데 아무것도
+   * 안 하는 항목이 몇 개 있으면 사용자는 "이 프로그램의 몇몇 기능이 죽었네" 하고
+   * 프로그램 전체를 의심한다. 그래서 **문자열이 아니라 함수**로 바꿨다.
+   */
+  run: () => void | Promise<void>;
+  /** 검색에만 쓰이는 대표 문자열(그래프·스크립트). 화면에는 안 나온다. */
+  runHint?: string;
 }
 
 export interface FuzzyHit {
@@ -238,7 +252,9 @@ export function searchCommands(cmds: Command[], query: string, limit = 20): Fuzz
   for (const c of cmds) {
     const byTitle = fuzzyScore(query, c.title);
     const byId = fuzzyScore(query, c.id);
-    const byRun = fuzzyScore(query, c.run);
+    // `run` 은 이제 **함수**다(2026-10-01). 검색은 문자열만 대상이므로 `runHint` 을 쓴다.
+    // `runHint` 이 없으면 **id** 로 대체한다 — 그래야 "log" 로 "view.toggleLog" 가 잡힌다.
+    const byRun = fuzzyScore(query, c.runHint ?? c.id);
     const best = [byTitle, byId, byRun].filter((x): x is { score: number; matched: string } => x !== null).sort((a, b) => b.score - a.score)[0];
     if (best) hits.push({ cmd: c, score: best.score, matched: best.matched });
   }

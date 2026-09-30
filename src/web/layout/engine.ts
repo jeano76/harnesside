@@ -12,9 +12,25 @@
 import { t } from "../i18n/install.js";
 
 export type Zone = "left" | "right" | "top" | "bottom" | "center";
-export type PanelId = "explorer" | "agent" | "editor" | "terminal" | "diff" | "monitor" | "log" | "settings";
 
-export const ALL_PANELS: PanelId[] = ["explorer", "agent", "editor", "terminal", "diff", "monitor", "log", "settings"];
+/**
+ * 패널 종류 (2026-10-01 축소).
+ *
+ * **줄인 것**과 **왜 줄였나**:
+ *  - `explorer` — 셸 위쪽 탐색 막대(디렉터리 목록 + 최근 경로)가 같은 일을 한다.
+ *    그런데 트리는 화면 4분의 1을 **영구히** 차지하고 "프로젝트 전체" 와 "지금 여기" 를
+ *    구분하지 못한다. 셸 위는 **지금 작업하는 곳** 만 다룬다.
+ *  - `editor` — 파일은 **대화 안에 블록으로** 열린다(요구). 별도 패널이 있으면
+ *    "왜 이 파일을 봤나" 를 스크롤로 되돌아가야 한다.
+ *  - `diff` · `settings` — **에이전트 머리의 아이콘**으로 열고 대화 안에 블록으로
+ *    본다(요구). 별도 패널은 같은 내용을 **다른 화면**에 두 번 보여줄 뿐이었다.
+ *
+ * 남은 패널은 셋이다: **에이전트(메인) · 터미널(하단) · 모니터(측정)**. 이 앱은
+ * 코딩 에이전트 IDE 지만, 매번 보는 면은 대화 하나다.
+ */
+export type PanelId = "agent" | "terminal" | "monitor" | "log";
+
+export const ALL_PANELS: PanelId[] = ["agent", "terminal", "monitor", "log"];
 
 export interface Rect {
   x: number;
@@ -111,18 +127,30 @@ const base = (id: PanelId, zone: Zone, size?: number, z?: number): PanelState =>
   ...(z ? { z } : {}),
 });
 
+/**
+ * 기본 배치 (2026-10-01 사용자 지정).
+ *
+ * 원칙이 하나 바뀌었다. **무엇을 하는 창이 무엇을 보는 창인지**로 나눈다.
+ *
+ *  - **메인(중앙)** = 에이전트 출력 + 프롬프트. 사람이 일하는 자리다.
+ *  - **하단** = 터미널과 로그. 둘 다 "기다리고 있는 것" 이고, 위에서 줄여 보이고
+ *    필요할 때 펼친다. **셸을 중앙에 두면 에이전트 출력을 밀어낸다.**
+ *  - **설정은 중앙에 두지 않는다.** 평소 필요 없으므로 **접힌 채로 하단에 놓고**
+ *    메뉴로 연다. 중앙에 펼치면 메인이 자기를 밀어낸다.
+ *
+ * 왜 이렇게 정했나 — 이전 배치가 틀렸던 이유는 구조가 아니라 **우선순위**였다.
+ * 에디터와 터미널과 설정이 모두 중앙 존을 공유했고, 셸을 열면 그 자리에 겹쳤다.
+ * 그래서 사용자는 "셸이 화면을 차지한다" 고 느꼈다. 존을 분리하면 겹칠 수 없다.
+ */
 export const DEFAULT_LAYOUT: LayoutState = {
   panels: [
-    base("explorer", "left", 260),
-    base("agent", "right", 380),
-    base("editor", "center"),
-    // M1 터미널. 기본으로는 **접혀 있다**(z=1) — 열면 모든 창에서 셸이 떠 있고
-    // 사용자가 아무것도 하지 않은 채 프로세스가 쌓인다.
-    base("terminal", "center", undefined, 1),
-    base("diff", "center", undefined, 1),
+    // **메인.** 프롬프트 창이 여기 붙는다(§5.7 — 입력창은 정확히 한 곳).
+    base("agent", "center"),
+    // 터미널: **하단**. 셸은 도구이지 주된 작업 면이 아니다(2026-10-01).
+    base("terminal", "bottom"),
     base("monitor", "right", 200),
+    // 로그는 **접힌 채로** 기본. 데몬 상태 창이지 매번 보는 창이 아니다.
     base("log", "bottom"),
-    base("settings", "center", undefined, 2),
   ],
   logHeight: 180,
 };

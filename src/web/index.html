@@ -62,6 +62,145 @@
         white-space: nowrap;
         border: 0;
       }
+      /* ── 스크롤바 ─────────────────────────────────────────────────────────
+         이 앱에 스크롤바 스타일은 **하나도 없었다**(2026-10-01 실측). 그래서 Chrome 기본
+         스크롤바가 그대로 보였다 — 밝은 회색 트랙에 두꺼운 thumb, 어두운 테마와
+         전혀 어울리지 않는다. 기본값은 **webkit 를 묻는 것이 아니라** 시스템 기본을
+         물어보는데, 어두운 배경에서 밝은 thumb 는 배경보다 눈에 띈다.
+
+         규칙은 셋이다:
+          1. **얇게** — 10px. 기본값(15~17px)은 로그·에디터 같은 **내용 영역** 에서
+             커서 옆을 차지한다. IDE 는 스크롤바를 "보이지 않지만 있는 것" 으로 둔다.
+          2. **테마에 맞는 색** — thumb 는 `#30363d`(패널 경계와 같은 값). 그러면
+             스크롤바가 **패널의 일부**처럼 보이고 별도 요소로 튀지 않는다.
+          3. **호버/드래그 때만** 조금 밝아진다. 평소엔 눈에 띄지 않아야 한다.
+
+         `.xterm-viewport` 는 **제외한다** — xterm 이 스크롤바를 **자신의 DOM** 으로
+         그린다. 여기에 webkit 규칙을 주면 xterm 의 스크롤바와 **두 겹**이 되거나
+         터미널 폭 계산(`fit()`)이 어긋난다. 남는 건 `overflow-y: auto` 뿐이다.
+         xterm 쪽은 `src/web/panels/TerminalView.tsx` 가 다룬다.
+      */
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      /* 모서리를 눌러도 스크롤되게 둔다 — 트랙을 눌렀는데 아무 일도 안 되면
+         "고장났다" 고 읽는다. 기본값은 이미 그랬지만, width 를 바꾼 뒤에는
+         명시적으로 남겨 두는 편이 낫다. */
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #30363d;
+        border-radius: 5px;
+        /* 안쪽에 2px 여백을 주면 thumb 가 트랙보다 얇아 보인다. 폭을 줄이는
+           것과 별개로, **테두리를 같은 색으로 두는** 방법도 있다 — 여기서는
+           여백을 쓴다. `background-clip` 을 쓰면 hover 때 여백이 사라져서
+           thumb 가 갑자기 굵어진다(보이는 버그). */
+        border: 2px solid transparent;
+        background-clip: content-box;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #484f58;
+      }
+      ::-webkit-scrollbar-thumb:active {
+        background: #6e7681;
+      }
+      ::-webkit-scrollbar-corner {
+        background: transparent;
+      }
+      /* Firefox. webkit 만 고치면 여기서 기본 두께가 그대로 난다. */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: #30363d transparent;
+      }
+      /* xterm 은 **자기 스크롤바** 를 그린다. 여기서 `width` 를 건드리면
+         fit() 이 계산한 열 수와 실제 표시 폭이 달라진다 — 그래서 폭은 두고
+         색만 준다. */
+      .xterm-viewport::-webkit-scrollbar {
+        width: 10px;
+      }
+      .xterm-viewport::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .xterm-viewport::-webkit-scrollbar-thumb {
+        background: #30363d;
+        border-radius: 5px;
+        border: 2px solid transparent;
+        background-clip: content-box;
+      }
+      .xterm-viewport::-webkit-scrollbar-thumb:hover {
+        background: #484f58;
+      }
+
+      /* ── 입체감(elevation) ───────────────────────────────────────────────────
+         어두운 테마에서 "떠 있는 면" 을 만들려면 **그림자보다 경계와 대비** 가 먼저다.
+         그래서 순서를 지킨다:
+
+           1. 표면 단계 — 배경이 한 단계 밝아질수록 **더 높은 곳** 이다(ISOelevation).
+              그림자 없이도 높이가 읽힌다.
+           2. 그림자 — 표면이 높아질수록 **크고 어둡고 넓게** 번진다. 좁고 날카로운
+              그림자는 "실물" 이 아니라 "효과" 다.
+           3. 상단 하이라이트 — 어두운 배경에서 그림자는 **안쪽으로** 모이므로, 가장자리
+              위쪽에 1px 의 밝은 선을 두어 면이 빛을 받는 것처럼 만든다.
+
+         **왜 `box-shadow` 만으로 끝내지 않는가**: 어두운 배경에서 검은 그림자는 배경과
+         같은 색이라 **안 보입니다**(그게 실측이었다 — 기본 상태에서 패널은 평평했다).
+         검은 그림자가 보이려면 그보다 밝은 면이 위에 있어야 한다. 그래서 표면 단계가
+         그림자보다 **먼저**다.
+
+         단계는 **셋** 이다. 다섯이면 계단이 아니라 높이 측정기를 본다 — 이 앱은
+         12px 본문 텍스트를 가진 IDE 다(§4.7 은 GPU off 로 픽셀 비용까지 낮췄다).
+         여기서 그림자를 많이 쓰면 그 예산을 **그림자** 에 쓰게 된다.
+      */
+      :root {
+        --surface-0: #0d1117; /* 가장 낮음 — 앱 배경 */
+        --surface-1: #161b22; /* 패널 본체 */
+        --surface-2: #1e1e1e; /* 올라간 면 — 헤더, 입력 */
+        --surface-3: #21262d; /* 최상위 — 메뉴, 떠 있는 목록 */
+        --hairline: #30363d; /* 경계선 */
+
+        /* 그림자는 검정이 아니라 **배경색에 가까운** 색이다. 순수 검정은
+           어두운 테마에서 가장자리 계단현상(banding)을 만든다. */
+        --shadow-1: 0 1px 2px rgba(1, 4, 9, 0.4), 0 0 0 1px rgba(48, 54, 61, 0.55);
+        --shadow-2: 0 4px 12px rgba(1, 4, 9, 0.5), 0 0 0 1px rgba(48, 54, 61, 0.7);
+        --shadow-3: 0 12px 32px rgba(1, 4, 9, 0.62), 0 0 0 1px rgba(72, 79, 88, 0.85);
+        /* 상단 하이라이트 — 면이 빛을 받는 가장자리. */
+        --rim-top: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+      }
+
+      /* 떠 있는 패널 — 도킹된 패널의 기본값. */
+      .elev-1 {
+        box-shadow: var(--shadow-1);
+      }
+      .elev-2 {
+        box-shadow: var(--shadow-2), var(--rim-top);
+      }
+      /* 최상위 — 메뉴·팔레트·드롭다운. 화면에서 **떠 있는** 물건. */
+      .elev-3 {
+        box-shadow: var(--shadow-3), var(--rim-top);
+      }
+
+      /* 포커스/호버 때 **약간** 떠오른다. 애니메이션은 120ms — 더 길면 화면이
+         흔들리는 느낌이 난다(§5.7: "계속 움직인다" 고 느껴지면 안 된다). */
+      .elev-lift {
+        transition: box-shadow 120ms ease-out;
+      }
+      .elev-lift:hover {
+        box-shadow: var(--shadow-2), var(--rim-top);
+      }
+
+      /* reduced-motion 에서는 **제거**한다. 이 전이가 유일한 움직임이어도
+         반복되면 어지럽다(M8: prefers-reduced-motion 은 실제로 강제되어야 한다). */
+      @media (prefers-reduced-motion: reduce) {
+        .elev-lift {
+          transition: none;
+        }
+        .elev-lift:hover {
+          box-shadow: var(--shadow-1);
+        }
+      }
+
       /* M8: 모션 감소를 요청한 사용자에게는 **움직임을 없앤다**.
          `animation` 뿐 아니라 `transition` 도 대상이다 — 잔잔한 트랜지션도 반복되면
          어지럽다(§5.7 의 다크 모션 요구). */

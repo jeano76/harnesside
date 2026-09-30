@@ -31,13 +31,24 @@ export interface ThinkState {
 export const DEFAULT_MAX_REASONING = 1024;
 
 export function initialThink(opts: Partial<Pick<ThinkState, "enabled" | "style" | "maxReasoningTokens">> = {}): ThinkState {
-  const enabled = opts.enabled ?? false;
+  // 2026-10-01: **기본 ON.** 사고 표시는 기본이 꺼져 있었다 — 요구 6 은 "Think UI" 라는
+  // 이름으로 "켜야 하는 기능" 이 아니라 **보이는 것** 으로 읽힌다. 꺼져 있으면 화면에
+  // 사고가 안 보이는 것을 사용자가 "기능이 없다" 고 읽는다.
+  //
+  // **그래도 예전의 함정은 그대로 방어한다.** 켜졌다고 무해해지는 게 아니다 —
+  // 예산을 사고가 다 쓰면 tool_call 이 안 나온다. 그래서 두 가지를 **유지**한다:
+  //   1. 예산 상한(`maxReasoningTokens`)
+  //   2. 초과 시 강제 전환(`ingest` → `forcedToolChoice: "required"`)
+  //
+  // 그리고 `needsWarning` 은 **기본 false** 다. 예전에는 `enabled` 를 그대로 따랐는데,
+  // 기본을 켜면 **모든 세션이 시작하자마자 경고를 띄운다** — 경고가 상시 보이면 경고가
+  // 아니다. 실제로 위험해지는 순간(초과)에만 켠다.
+  const enabled = opts.enabled ?? true;
   return {
-    // §5.3: **기본 OFF 유지.** 켜면 tool_call 이 누락될 수 있다.
     enabled,
     style: opts.style ?? "dots",
     maxReasoningTokens: opts.maxReasoningTokens ?? DEFAULT_MAX_REASONING,
-    needsWarning: enabled,
+    needsWarning: false,
     usedTokens: 0,
     startedAt: null,
     forcedToolChoice: false,
@@ -72,6 +83,8 @@ export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
       // §5.3: 초과하면 thinking 을 끄고 강제 도구 호출 모드로 전환한다.
       forcedToolChoice: true,
       enabled: false,
+      // **위험해진 순간에만** 경고를 켠다. 켜져 있는 것과 위험한 것은 다르다.
+      needsWarning: true,
       reason: `사고 토큰이 상한(${s.maxReasoningTokens.toLocaleString("ko-KR")})을 넘어 thinking 을 끄고 도구 호출을 강제합니다.`,
     };
   }

@@ -35,7 +35,19 @@ function gib(n: number): string {
 
 export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; onNotice: (kind: "info" | "warn" | "error", title: string, body: string) => void; onPhase: (p: { state: string; progress: number; message: string }) => void }) {
   const [dir, setDir] = useState<string | null>(null);
+  // 진행 단계는 **한 줄로** 보인다(§11.3: 무언가 happening 하고 있어야 한다).
+  // `setBlocks` 도 deps 에 넣으면 동일한 무한 루프가 되므로 ref 로 거둔다.
+  const phaseRef = useRef(onPhase);
+  phaseRef.current = onPhase;
   const [active, setActive] = useState<string | null>(null);
+  /**
+   * **실제로 서빙 중인 모델 이름.** 채택한 서버가 있으면 경로가 아닐 수 있다.
+   * 2026-10-01 실측: 실제 llama-server 가 `Ornith-1.5-35B-Q4_K_M.gguf` 를 서빙하는데
+   * 화면은 "사용 중: 없음 (adopt 했다면 그 서버가 사용 중입니다)" 라고 **추측 문장**을
+   * 붙였다. 답을 모른다고 말하는 자리였고, 알고 있었다 — 단계 6 이 이미 알고 있다.
+   */
+  const [served, setServed] = useState<string | null>(null);
+  const [servedByAdopted, setServedByAdopted] = useState(false);
   const [local, setLocal] = useState<{ file: string; path: string; bytes: number }[]>([]);
   const [q, setQ] = useState("");
   const [result, setResult] = useState<{ ok: boolean; detail?: string; local?: string[]; pinned: Scored | null; top: Scored[]; fallbackReason: string | null; pinnedNote: string | null } | null>(null);
@@ -62,12 +74,26 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
     (kind: "info" | "warn" | "error", title: string, body: string) => noticeRef.current(kind, title, body),
     [],
   );
+  /** `onPhase` 도 같다 — 부모가 매 렌더 새 함수를 넘기면 진행 단계가 루프를 만든다. */
+  const onPhaseStable = useCallback(
+    (p: { state: string; progress: number; message: string }) => phaseRef.current(p),
+    [],
+  );
 
   const loadLocal = useCallback(async () => {
     try {
-      const r = await client.get<{ dir: string; active: string | null; entries: { file: string; path: string; bytes: number }[] }>("/api/models");
+      const r = await client.get<{
+        dir: string;
+        active: string | null;
+        /** 실행 중인 서버가 실제로 서빙 중인 이름. 경로가 아닐 수 있다. */
+        servedModel?: string | null;
+        servedByAdopted?: boolean;
+        entries: { file: string; path: string; bytes: number }[];
+      }>("/api/models");
       setDir(r.dir);
       setActive(r.active);
+      setServed(r.servedModel ?? null);
+      setServedByAdopted(!!r.servedByAdopted);
       setLocal(r.entries);
     } catch (e) {
       notice("error", "모델 목록을 읽지 못했습니다", e instanceof ApiError ? e.message : String(e));
@@ -194,7 +220,23 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
       <div style={{ fontSize: 11 }}>
         <strong>모델</strong>
         <div style={{ color: DIM }}>저장 위치: {dir ?? "확인 중"}</div>
-        <div style={{ color: DIM }}>사용 중: {active ?? "없음 (모델 서버가 adopt 했다면 그 서버가 사용 중입니다)"}</div>
+        {/* **사용 중인 모델** — 경로가 있으면 경로, 없으면 실행 중인 서버가 말한 이름.
+            둘 다 없을 때만 "없음" 이다. 그리고 **어디서 온 건지** 를 밝힌다 —
+            다른 곳에서 띄운 서버면 그 파일은 ~/.harnesside/models 에 없을 수 있다. */}
+        <div style={{ color: served || active ? FG : DIM }}>
+          사용 중:{" "}
+          {active ??
+            (served ? (
+              <>
+                {served}
+                {servedByAdopted && (
+                  <span style={{ color: DIM }}> (외부에서 띄운 서버가 서빙 중 — 이 디렉터리에 없을 수 있습니다)</span>
+                )}
+              </>
+            ) : (
+              "없음"
+            ))}
+        </div>
       </div>
 
       {/* llama.cpp 상태 — **세 경우를 각각 말한다.** "모델 없음" 과 "llama-server 없음" 과
@@ -322,7 +364,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
       </div>
       {/* `notice` 는 deps 가 안정적이다 — `onNotice` 를 그대로 넘기면 그쪽에서 같은
           순환이 다시 시작된다. */}
-      <UpdateSection client={client} onNotice={notice} onPhase={onPhase} />
+      <UpdateSection client={client} onNotice={notice} onPhase={onPhaseStable} />
     </div>
   );
 }

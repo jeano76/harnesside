@@ -24,6 +24,18 @@ export interface MonitorPanelProps {
   latest: Metrics | null;
   /** 스파크라인용 최근 수열(최신이 뒤). */
   series?: (number | null)[];
+  /**
+   * **최소** 높이. 최대 높이가 아니다.
+   *
+   * 2026-10-01 실측: 이 값이 **최대** 높이로 쓰이고 있어서 패널이 항상 잘렸다 —
+   * 게이지 4개, 바 4개, 스파크라인, 코어 히트맵, 기준 시각이 있는데 200px 안에
+   * 들어가지 않아 **항상 스크롤바**가 났다. 물리 상태를 보려고 여는 창에서
+   * 스크롤바가 있다는 것은 "아래에 뭐가 더 있다" 를 의미하는데, 그 아래는
+   * **같은 화면의 나머지** 다. 스크롤을 요구하지 않는 유일한 정보가 이것이다.
+   *
+   * 그래서 잘라내지 않는다 — **내용이 전부 보이도록** 키운다. 좁은 도크에서는
+   * 바깥 스크롤이 생겨도 **패널 안은 항상 전부** 보인다.
+   */
   height?: number;
   onToggle?: () => void;
   collapsed?: boolean;
@@ -101,13 +113,27 @@ export interface GaugeProps {
   color?: string;
   size?: number;
   warning?: string;
+  /**
+   * true 면 커질수록 위험(기본). false 면 **적을수록** 위험 — 디스크 여유가 그렇다.
+   * 모양은 그대로 두고 **색 판정만** 뒤집는다(§5.5: 임계치는 색만 바꾼다).
+   */
+  higherIsWorse?: boolean;
 }
 
-/** 도넛 게이지 — 0→N% 로 그려지며 수치도 카운트업한다. SVG 는 ref 로 직접 갱신한다. */
-export function Gauge({ label, pct, value, color, size = 72 }: GaugeProps) {
+/**
+ * 도넛 게이지 — 0→N% 로 그려지며 수치도 카운트업한다. SVG 는 ref 로 직접 갱신한다.
+ *
+ * `higherIsWorse: false` 를 주면 **적을수록 위험한** 값(디스크 여유)도 같은 모양으로
+ * 그린다. 같은 종류의 계측이 **모양까지 다르면** 읽는 사람이 "이건 다른 종류의 수치구나"
+ * 를 배워야 하고, 그 차이를 배우는 대가가 작지 않다 — 그래서 형태는 같게 두고
+ * **색 판정만** 뒤집는다.
+ */
+export function Gauge({ label, pct, value, color, size = 72, higherIsWorse = true }: GaugeProps) {
   const r = size / 2 - 7;
   const c = 2 * Math.PI * r;
-  const sev = pct === null ? "unknown" : severity(pct);
+  // **위험 판정은 값이 아니라 여유로 한다.** 디스크가 91% 차 있으면 초록(정상)이
+  // 되어야 한다 — `usedPct` 로 색을 정하면 9% 남았는데 정상처럼 보인다.
+  const sev = pct === null ? "unknown" : severity(higherIsWorse ? pct : 100 - pct);
   const fill = color ?? SEVERITY_COLOR[sev];
   const arc = useRef<SVGCircleElement>(null);
   const shown = useAnimatedNumber(pct ?? 0, 200, true);
@@ -268,8 +294,13 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
         padding: 10,
         display: "grid",
         gap: 10,
-        overflow: "auto",
-        maxHeight: height,
+        // **잘라내지 않는다.** `maxHeight` + `overflow: auto` 였을 때 이 패널은
+        // 항상 스크롤바가 났다(실측) — 물리 상태를 보려고 여는 창이 스크롤을 요구하면
+        // 그건 "아직 더 있다" 를 의미하는데, 그 아래는 같은 화면의 나머지다.
+        // 높이는 **최소**로만 준다. 좁은 도크에서는 바깥이 스크롤되지만
+        // **패널 안은 언제나 전부** 보인다.
+        minHeight: height,
+        overflow: "visible",
       }}
     >
       {!latest ? (
@@ -302,16 +333,43 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
             )}
           </div>
 
+          <div style={{ display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+            {/* ── 원형으로 통일 (2026-10-01) ─────────────────────────────────────
+                디스크·GPU 사용률을 **막대**에서 **도넛**으로 바꿨다. 옆에 있는 CPU·RAM 과
+                **모양이 다른 수치**는 읽는 사람이 "다른 종류구나" 를 배워야 하고, 그
+                대가가 작지 않다. 같은 종류의 계측은 같은 형태로 읽힌다(§5.5).
+
+                디스크는 **여유가 적을수록 위험**하므로 `higherIsWorse: false` 다.
+                `usedPct` 로 색을 정하면 9% 남았는데도 초록이 된다 — 실제로
+                "10.0 GiB 남음 / 115.8 GiB" 인데 정상처럼 보일 수 있다.
+
+                **온도·전력·RSS 는 막대로 둔다.** 이건 **비율이 아니라 절대값**이라
+                원형으로 그릴 수 없다(80W 의 72% 가 무슨 뜻이 없는지 모른다. 도넛에 억지로
+                넣으면 수치가 있다는 사실이 사라진다. */}
+            <Gauge
+              label="디스크 여유"
+              pct={100 - latest.disk.usedPct}
+              value={`${fmtBytes(latest.disk.freeBytes)}`}
+              higherIsWorse={false}
+            />
+            {latest.gpu && (
+              <Gauge label="GPU 사용률" pct={latest.gpu.utilPct} value={`${latest.gpu.utilPct.toFixed(0)}%`} />
+            )}
+          </div>
+
+          {/* 온도·전력·메모리는 **비율이 아니라 수치**다. 막대가 맞다 — 도넛에 넣으면
+              "전력 72%" 라는 말도 없는 값이 된다. */}
           <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
-            <Bar label="디스크" pct={latest.disk.usedPct} text={`${fmtBytes(latest.disk.freeBytes)} 남음 / ${fmtBytes(latest.disk.totalBytes)}`} />
             {latest.gpu && (
               <>
-                <Bar label="GPU 사용률" pct={latest.gpu.utilPct} text={`${latest.gpu.utilPct.toFixed(0)}%`} />
-                {latest.gpu.tempC !== null && <Bar label="GPU 온도" pct={latest.gpu.tempC} text={`${latest.gpu.tempC.toFixed(0)}°C`} color={latest.gpu.tempC > 85 ? SEVERITY_COLOR.crit : undefined} />}
+                {latest.gpu.tempC !== null && (
+                  <Bar label="GPU 온도" pct={latest.gpu.tempC} text={`${latest.gpu.tempC.toFixed(0)}°C`} color={latest.gpu.tempC > 85 ? SEVERITY_COLOR.crit : undefined} />
+                )}
                 {latest.gpu.powerW !== null && <Bar label="전력" pct={null} text={`${latest.gpu.powerW.toFixed(0)} W`} color="#a371f7" />}
               </>
             )}
             {latest.llama && <Bar label="llama RSS" pct={null} text={fmtBytes(latest.llama.rssBytes)} color="#58a6ff" />}
+            <span style={{ fontSize: 10, color: DIM }}>디스크 총 {fmtBytes(latest.disk.totalBytes)}</span>
           </div>
 
           <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>

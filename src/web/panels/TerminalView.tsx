@@ -21,6 +21,21 @@ const DIM = "#6e7681";
 const FG = "#c9d1d9";
 const BORDER = "#30363d";
 
+/** 경로 조립 — 서버와 같은 규칙을 쓴다. 화면에서 `a + "/" + b` 를 흩어 쓰면
+ *  이중 슬래시가 되고, 그 경로가 그대로 서버로 간다. */
+const joinPath = (base: string, name: string): string => `${base.replace(/\/+$/, "")}/${name}`;
+
+const dirBtn: React.CSSProperties = {
+  background: "#161b22",
+  border: `1px solid ${BORDER}`,
+  color: FG,
+  cursor: "pointer",
+  font: "inherit",
+  fontSize: 10,
+  padding: "1px 6px",
+  borderRadius: 3,
+};
+
 export interface TerminalSession {
   id: string;
   title: string;
@@ -51,9 +66,69 @@ export function TerminalView({
   client: ApiClient;
   onNotice: (kind: "info" | "warn" | "error", title: string, body: string) => void;
 }) {
+  // ── 콜백이 매 렌더 새로 만들어져 deps 를 오염시킨다 (2026-10-01 실측) ──────────
+  //
+  // 부모(`main.tsx`)는 인라인 화살표를 넘긴다. 그래서 `onNotice` 의 동일성이 매 렌더마다
+  // 바뀌고, `newTab`·`close`·그리고 **`XtermPane` 의 effect** 가 그걸 의존하므로 계속
+  // 다시 돈다. `XtermPane` 의 effect 는 그 안에서 **xterm 을 dispose 하고 새로 만든다** —
+  // 그래서 입력한 줄이 사라지고 스크롤이 리셋되며 PTY 출력이 뜨다 사라진다.
+  //
+  // **증거**(실측): 서버 PTY 는 멀쩡했다(셸 생성 200 · `echo` 입력 200 · 탭 `running`).
+  // 그런데 브라우저의 `/api/terminal/{id}/resize` 가 **10초에 17회** 갔다 — 새
+  // ResizeObserver 가 붙을 때마다 한 번씩. 재마운트가 돌고 있다는 뜻이다.
+  //
+  // `ModelPanel` 에서 **같은 버그**가 `/api/models` 5초 3303회로 측정됐다. 한 번이면
+  // 실수가 두 번 나지 않는다.
+  const noticeRef = useRef(onNotice);
+  noticeRef.current = onNotice;
+  const notice = useCallback(
+    (kind: "info" | "warn" | "error", title: string, body: string) => noticeRef.current(kind, title, body),
+    [],
+  );
+
   const [tabs, setTabs] = useState<TerminalSession[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+
+  // ── 셸 위쪽 탐색 (2026-10-01) ──────────────────────────────────────────────
+  // 요구: "쉘 상단에 탐색기능을 통해 디렉토리 변경 을 제공하고 그 변경된 디렉토리가
+  // 작업경로가 되고 쉘 창에는 변경된 디렉토리 리스가 최대로 나오게"
+  //
+  // **탐색기는 지워졌다.** 같은 일을 두 곳(왼쪽 트리 + 상단 목록)이 하는데, 왼쪽은
+  // 화면 4분의 1을 영구히 차지하고 "프로젝트 전체" 와 "지금 여기" 를 구분하지 못한다.
+  // 셸 위는 **지금 작업하는 곳** 만 다루고, 전체 구조를 보고 싶을 때 쓰는 곳은 없다.
+  const [cwd, setCwd] = useState<string | null>(null);
+  const [recent, setRecent] = useState<string[]>([]);
+  const [dirs, setDirs] = useState<{ path: string; parent: string | null; dirs: string[] } | null>(null);
+  const [navigatorOpen, setNavigatorOpen] = useState(false);
+
+  const loadDirs = useCallback(
+    async (path?: string) => {
+      try {
+        const q = path ? `?path=${encodeURIComponent(path)}` : "";
+        setDirs(await client.get(`/api/terminal/dirs${q}`));
+      } catch (e) {
+        // **사유를 말한다.** 목록이 안 뜨면 사용자는 "디렉터리가 없다" 고 읽는다.
+        notice("warn", "디렉터리를 읽지 못했습니다", e instanceof ApiError ? e.message : String(e));
+      }
+    },
+    [client, notice],
+  );
+
+  const changeCwd = useCallback(
+    async (path: string) => {
+      try {
+        const r = await client.post<{ cwd: string; detail: string }>("/api/terminal/cwd", { path });
+        setCwd(r.cwd);
+        await loadDirs();
+        setNavigatorOpen(false);
+      } catch (e) {
+        // **거절 사유를 그대로 보인다** — 서버가 이유를 말했는데 화면이 삼킨다.
+        notice("warn", "디렉터리를 옮기지 못했습니다", e instanceof ApiError ? e.message : String(e));
+      }
+    },
+    [client, loadDirs, notice],
+  );
 
   const newTab = useCallback(async () => {
     try {
@@ -64,9 +139,9 @@ export function TerminalView({
     } catch (e) {
       // **열지 못했다는 사실을 알린다.** 조용히 실패하면 사용자는 "버튼이 고장났다" 고
       // 판단하고 (한도 초과인지 셸이 없는지) 알 수 없다.
-      onNotice("warn", "터미널을 열지 못했습니다", e instanceof ApiError ? e.message : String(e));
+      notice("warn", "터미널을 열지 못했습니다", e instanceof ApiError ? e.message : String(e));
     }
-  }, [client, onNotice]);
+  }, [client, notice]);
 
   // 앱의 **공유 WS** 로 상태를 따라간다. 소켓을 따로 열지 않는다 — 열면 재연결이
   // 패널 수만큼 생기고, 다른 패널이 탭을 닫을 때 출처를 잃는다.
@@ -90,9 +165,11 @@ export function TerminalView({
     });
     void (async () => {
       try {
-        const r = await client.get<{ tabs: TerminalSession[] }>("/api/terminal");
+        const r = await client.get<{ tabs: TerminalSession[]; cwd: string; recent: string[] }>("/api/terminal");
         if (!alive) return;
         setTabs(r.tabs);
+        setCwd(r.cwd);
+        setRecent(r.recent ?? []);
         setLoaded(true);
         setActive((a) => a ?? r.tabs[0]?.id ?? null);
       } catch {
@@ -109,7 +186,7 @@ export function TerminalView({
   const close = useCallback(
     (id: string) => {
       void client.post(`/api/terminal/${encodeURIComponent(id)}/close`).catch((e) => {
-        onNotice("warn", "탭을 닫지 못했습니다", e instanceof ApiError ? e.message : String(e));
+        notice("warn", "탭을 닫지 못했습니다", e instanceof ApiError ? e.message : String(e));
       });
       setTabs((prev) => {
         const next = prev.filter((x) => x.id !== id);
@@ -117,13 +194,151 @@ export function TerminalView({
         return next;
       });
     },
-    [client, onNotice]
+    [client, notice]
   );
 
   const session = useMemo(() => tabs.find((t) => t.id === active) ?? null, [tabs, active]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      {/* ── 셸 상단 탐색 막대 (2026-10-01) ──────────────────────────────────────
+          요구: "쉘 상단에 탐색기능을 통해 디렉토리 변경 을 제공하고 그 변경된
+          디렉토리가 작업경로가 되고 쉘 창에는 변경된 디렉토리 리스가 최대로 나오게"
+
+          "최대로" = **자주 가는 곳이 위에 오는 순서**. 그래서 목록이 아니라
+          **최근 순**이며, 같은 곳을 다시 고르면 맨 위로 올라간다. 알파벳 정렬은
+          "자주 가는 곳" 을 전혀 반영하지 못한다.
+
+          탐색기가 없어졌으므로 **여기가 유일한 "어디로 가나" 수단**이다. 그래서
+          지금 경로와 목록이 **항상** 보인다(펼치기 상태를 한 번에 잃으면 돌아올
+          방법이 화면에 없다). */}
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          alignItems: "center",
+          padding: "3px 6px",
+          borderBottom: `1px solid ${BORDER}`,
+          flex: "0 0 auto",
+          fontSize: 10,
+          background: "#161b22",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            setNavigatorOpen((v) => !v);
+            if (!navigatorOpen) void loadDirs();
+          }}
+          aria-expanded={navigatorOpen}
+          title="디렉터리 탐색"
+          style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 10 }}
+        >
+          {navigatorOpen ? "▾" : "▸"} 탐색
+        </button>
+        {/* **지금 경로는 항상 보인다.** 이것을 접으면 사용자는 "어디서 실행되고
+            있나" 를 알 수 없다 — 셸이 하는 일의 전제가 된다. */}
+        <button
+          type="button"
+          onClick={() => void changeCwd(cwd ?? ".")}
+          title="현재 경로 — 클릭하면 이 경로를 목록의 맨 위로 올립니다"
+          style={{
+            background: "none",
+            border: 0,
+            color: FG,
+            cursor: "pointer",
+            font: "inherit",
+            fontSize: 10,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {/* **뒷부분만** 보여준다. 경로의 앞부분(루트)은 늘 같아서 정보가 없고,
+              유효한 부분은 끝(디렉터리 이름)이다. `direction: rtl` 로 뒤집으면
+              **슬래시까지 거꾸로** 보여 경로가 이상해진다 — 하지 않는다. */}
+          {cwd ?? "확인 중…"}
+        </button>
+        <span style={{ flex: 1 }} />
+        {recent.slice(0, 4).map((r) => (
+          <button
+            key={r}
+            type="button"
+            onClick={() => void changeCwd(r)}
+            title={r}
+            style={{
+              background: "#21262d",
+              border: 0,
+              color: DIM,
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 10,
+              padding: "1px 5px",
+              borderRadius: 3,
+              maxWidth: 120,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {r.split("/").pop() || "/"}
+          </button>
+        ))}
+      </div>
+
+      {navigatorOpen && (
+        <div
+          style={{
+            flex: "0 0 auto",
+            maxHeight: 150,
+            overflow: "auto",
+            padding: "4px 6px",
+            borderBottom: `1px solid ${BORDER}`,
+            background: "#0d1117",
+            display: "grid",
+            gap: 4,
+          }}
+        >
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ color: DIM }}>여기:</span>
+            {dirs?.parent && (
+              <button type="button" onClick={() => void loadDirs(dirs.parent!)} style={dirBtn}>
+                .. (위로)
+              </button>
+            )}
+            {(dirs?.dirs ?? []).map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => void changeCwd(joinPath(dirs!.path, d))}
+                style={dirBtn}
+                title={joinPath(dirs!.path, d)}
+              >
+                {d}
+              </button>
+            ))}
+            {dirs && dirs.dirs.length === 0 && <span style={{ color: DIM }}>디렉터리가 없습니다</span>}
+            {!dirs && <span style={{ color: DIM }}>읽는 중…</span>}
+          </div>
+          {recent.length > 1 && (
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ color: DIM }}>최근:</span>
+              {recent.map((r, i) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => void changeCwd(r)}
+                  style={{ ...dirBtn, opacity: 1 - i * 0.08 }}
+                  title={r}
+                >
+                  {i + 1}. {r.split("/").pop() || "/"}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 4, alignItems: "center", padding: "3px 6px", borderBottom: `1px solid ${BORDER}`, flex: "0 0 auto", overflowX: "auto" }}>
         {tabs.map((t) => {
           const label = exitLabel(t);
@@ -171,7 +386,7 @@ export function TerminalView({
       </div>
 
       {session ? (
-        <XtermPane key={session.id} session={session} client={client} onNotice={onNotice} />
+        <XtermPane key={session.id} session={session} client={client} notice={notice} />
       ) : (
         // **빈 패널을 두지 않는다**(§11.3) — 여는 방법부터 말한다.
         <div style={{ padding: 16, color: DIM, display: "grid", gap: 8, justifyItems: "start" }}>
@@ -197,11 +412,12 @@ export function TerminalView({
 function XtermPane({
   session,
   client,
-  onNotice,
+  notice,
 }: {
   session: TerminalSession;
   client: ApiClient;
-  onNotice: (kind: "info" | "warn" | "error", title: string, body: string) => void;
+  /** TerminalView 의 안정적인 래퍼. 값은 항상 최신, 동일성은 고정. */
+  notice: (kind: "info" | "warn" | "error", title: string, body: string) => void;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const term = useRef<Terminal | null>(null);
@@ -219,7 +435,22 @@ function XtermPane({
       convertEol: false,
       scrollback: 5000,
       theme: { background: "#0d1117", foreground: FG, cursor: FG },
+      // **xterm 은 스크롤바를 자기 DOM 으로 그린다** — 브라우저 기본 스크롤바가
+      // 아니다. 그래서 `index.html` 의 `::-webkit-scrollbar` 규칙이 통하지 않는다.
+      // 여기서 색을 준다. 안 주면 xterm 기본(밝은 회색)이 어두운 터미널에 그대로
+      // 나온다 — 2026-10-01 실측.
+      //
+      // 두께는 **바꾸지 않는다.** xterm 의 `scrollbarWidth` 는 `fit()` 이 계산한 열 수와
+      // 묶여 있다 — 여기서 좁히면 줄이 화면 밖으로 넘어가고 줄바꿈이 어긋난다.
+      // 위에서 `t.options.scrollbarWidth` 로 따로 지정한 이유다.
     });
+    // **한 번만** 지정한다. `scrollbarWidth` 가 지원되는 xterm 버전은
+    // `scrollback` 옵션이 아니라 이 속성을 쓴다 — 둘 다 주면 마지막 것이 이긴다.
+    try {
+      (t.options as { scrollbarWidth?: number }).scrollbarWidth = 10;
+    } catch {
+      /* 지원하지 않는 버전이면 기본 두께로 둔다 — 열 계산이 깨지는 쪽이 더 나쁘다 */
+    }
     const f = new FitAddon();
     t.loadAddon(f);
     t.open(el);
@@ -259,7 +490,7 @@ function XtermPane({
         // 판단하고, 사실은 "셸이 끝났는데 화면이 살아 있다" 다.
         if (err instanceof ApiError && err.status === 409) {
           setDead(true);
-          onNotice("warn", "셸이 이미 끝났습니다", `${session.title} — ${err.message}`);
+          notice("warn", "셸이 이미 끝났습니다", `${session.title} — ${err.message}`);
         }
       });
     });
@@ -271,7 +502,7 @@ function XtermPane({
       t.dispose();
       term.current = null;
     };
-  }, [session.id, client, onNotice, session.title]);
+  }, [session.id, client, notice, session.title]);
 
   const label = exitLabel(session);
   return (

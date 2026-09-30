@@ -20,7 +20,7 @@ import { AgentLoop } from "../agent/loop.js";
 import { OpenAICompatibleClient } from "../backend/openaiClient.js";
 import type { ModelBackend } from "../backend/types.js";
 import type { CompactionThresholds } from "../compaction/compactor.js";
-import { applyEvent, type AgentBlock } from "../session/blocks.js";
+import { applyEvent, normalizeTool, type AgentBlock } from "../session/blocks.js";
 import { resumeInfo, type ResumeInfo } from "../compaction/checkpoint.js";
 
 /**
@@ -130,7 +130,10 @@ export class AgentService {
     this.blocks = applyEvent(this.blocks, {
       type: e.type,
       text: e.text ?? (e.tool ? e.tool.name : undefined),
-      tool: e.tool,
+      // `args` 는 서버에서 **문자열** 로 온다(OpenAI 규격). `normalizeTool` 이
+      // 객체로 편다 — 여기서 손대지 않으면 블록 타입이 두 모양을 다뤄야 하고,
+      // 그 차이는 화면 쪽에서 버그로 나타난다.
+      tool: normalizeTool(e.tool),
       at: e.at,
     });
     this.opts.emit(e);

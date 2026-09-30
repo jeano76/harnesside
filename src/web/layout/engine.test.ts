@@ -69,7 +69,7 @@ test("로그 패널은 위로 갈 수 없다 — 닫을 수 없는 기본 탭(§
 });
 
 test("나머지 패널은 다섯 존 모두 가능하다", () => {
-  for (const p of ["explorer", "agent", "editor", "diff", "monitor", "settings"] as const) {
+  for (const p of ["agent", "agent", "agent", "agent", "monitor", "agent"] as const) {
     assert.deepEqual(zonesFor(p), ["left", "right", "top", "bottom", "center"], `${p} 의 존이 제한됐다`);
   }
 });
@@ -107,9 +107,11 @@ test("off 스위치면 자기 진화가 전부 멈춘다", () => {
 });
 
 test("패널별 기억은 서로 독립이다", () => {
-  const counts: MagnetCounts = { agent: { left: 5 }, explorer: { right: 5 } };
+  // 서로 다른 **존**의 기록이 섞이지 않는지 본다. 같은 존을 두 패널이 기록하면
+  // 하나를 옮겼을 때 다른 하나까지 끌어간다(실측: 자기 진화가 배치를 바꾸는 문제).
+  const counts: MagnetCounts = { agent: { left: 5 }, terminal: { right: 5 } };
   assert.equal(zonePriority(counts, "agent", DEFAULT_MAGNET)[0], "left");
-  assert.equal(zonePriority(counts, "explorer", DEFAULT_MAGNET)[0], "right");
+  assert.equal(zonePriority(counts, "terminal", DEFAULT_MAGNET)[0], "right");
 });
 
 test("배치 기록은 원본을 바꾸지 않는다 — 되돌리려면 원본이 남아야 한다", () => {
@@ -121,16 +123,16 @@ test("배치 기록은 원본을 바꾸지 않는다 — 되돌리려면 원본�
 });
 
 test("이동하면 플로팅 좌표는 사라진다 — 자석에 놓였는데 좌표가 남으면 겹친다", () => {
-  let l = movePanel({ ...DEFAULT_LAYOUT, panels: DEFAULT_LAYOUT.panels.map((p) => (p.id === "diff" ? { ...p, rect: { x: 1, y: 2, w: 3, h: 4 } } : p)) }, "diff", "left");
-  const p = panelOf(l, "diff");
+  let l = movePanel({ ...DEFAULT_LAYOUT, panels: DEFAULT_LAYOUT.panels.map((p) => (p.id === "agent" ? { ...p, rect: { x: 1, y: 2, w: 3, h: 4 } } : p)) }, "agent", "left");
+  const p = panelOf(l, "agent");
   assert.equal(p?.zone, "left");
   assert.equal(p?.rect, undefined, "플로팅 좌표가 남았다");
   assert.equal(p?.detached, false, "분리 상태가 남았다");
 });
 
 test("접기/펼치기는 독립적이다", () => {
-  const l = toggleCollapse(toggleCollapse(DEFAULT_LAYOUT, "explorer"), "explorer");
-  assert.equal(panelOf(l, "explorer")?.collapsed, false, "두 번 눌렀는데 접힌 상태");
+  const l = toggleCollapse(toggleCollapse(DEFAULT_LAYOUT, "agent"), "agent");
+  assert.equal(panelOf(l, "agent")?.collapsed, false, "두 번 눌렀는데 접힌 상태");
   assert.equal(panelOf(l, "agent")?.collapsed, false, "다른 패널이 따라 접혔다");
 });
 

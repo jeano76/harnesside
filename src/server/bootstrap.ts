@@ -132,6 +132,15 @@ export interface BootstrapResult {
   ports?: PortPlanResult;
   /** [8] 헬스체크가 통과했는가. 모델이 없어도 뒤 단계는 진행한다(degrade 원칙). */
   llamaReady: boolean;
+  /**
+   * **실제로 서빙 중인 모델 이름.** 채택한 서버가 있으면 단계 6 의 `/v1/models`
+   * 응답으로 알 수 있다 — 단계 [4] 의 "모델 없음" 을 그대로 두면 화면이
+   * "사용 중: 없음" 을 쓰면서 추측 문장까지 붙인다(2026-10-01 실측).
+   *
+   * **경로가 아니라 이름일 수 있다.** 실제로 있는 파일인지 확인하지 않으면 경로로
+   * 지어내지 않는다.
+   */
+  servedModel?: string;
   errors: string[];
 }
 
@@ -434,6 +443,56 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
     });
   }
 
+  // ── 채택한 서버의 모델을 **현재 모델**로 기록한다 ────────────────────────────
+  //
+  // 실측(2026-10-01): 실제 llama-server 가 8080 에서 `Ornith-1.5-35B-Q4_K_M.gguf`
+  // 를 서빙하는데, 화면은 "사용 중: 없음 (모델 서버가 adopt 했다면 그 서버가 사용
+  // 중입니다)" 라고 **추측으로** 쓰고 있었다. 그 괄호 문장이 바로 "답을 모른다" 의
+  // 증거다 — **않으면 된다**. 단계 6 의 탐지가 `/v1/models` 로 실린 이름을 이미
+  // 알고 있다.
+  //
+  // 그래서 단계 [4] 의 "모델 없음" 을 **그대로 두지 않는다** — 단, 경로를 지어내지
+  // 않는다. 서빙 이름이 **실제 파일** 일 때만 경로로 쓰고, 아니면 이름으로만 둔다
+  // (`fake-model` 같은 이름을 경로로 만들면 그 파일을 열었다고 believing—that is worse).
+  if (adoptedServer) {
+    result.servedModel = adoptedServer.model;
+    const asPath = adoptedServer.model.startsWith("/") || adoptedServer.model.startsWith(".") ? adoptedServer.model : null;
+    const exists = asPath ? await fileSize(asPath).then((n) => n > 0).catch(() => false) : false;
+    if (exists) {
+      // **경로가 실재한다** — 이제 단계 4 의 결과를 지배한다.
+      result.model = {
+        path: asPath,
+        reason: `기존 서버가 서빙 중인 모델을 사용합니다: ${adoptedServer.model}`,
+        via: "priority-series",
+        suggestions: [],
+      };
+      // **단계 4 를 **성공**으로 다시 남긴다.** `record` 는 항목을 쌓기만 하고
+      // 지우지 않는다 — 그래서 여기서 다시 쓰면 "모델 없음 (실패)" 다음에
+      // "모델 있음" 이 연달아 나온다. 이건 **오류가 아니라 정정**이므로 사용자에게
+      // 두 줄을 보여주기보다 **한 줄로** 말해야 한다.
+      //
+      // 그래서 기존의 실패 항목을 **제자리에서 고친다**(§5.10: 세션에 남는 것은
+      // 최종 사실이어야 한다).
+      const prior = [...steps].reverse().find((s) => s.n === 4);
+      if (prior) {
+        prior.ok = true;
+        prior.detail = `기존 서버가 서빙 중인 모델을 사용합니다: ${asPath}`;
+        logger?.info({ step: 4, ok: true }, `부팅 4/12 정정: ${prior.detail}`);
+        log(`[4/12] ${prior.name} — ${prior.detail} (기존 서버 채택으로 정정 · 앞줄 "모델 없음" 은 superseded)`);
+      }
+    } else {
+      // **경로는 없다.** 이름만 안다는 사실을 구분해서 기록한다.
+      record({
+        n: 4,
+        name: STEP_NAMES[3],
+        detail: `모델 파일 경로는 모릅니다 — 실행 중인 서버가 "${adoptedServer.model}" 을 서빙 중입니다.`,
+        ok: true,
+        fatal: false,
+        tookSeconds: 0,
+      });
+    }
+  }
+
   // [8] 헬스체크 -------------------------------------------------------------
   {
     const t0 = Date.now();
@@ -448,7 +507,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       detail: adoptedServer
         ? `기존 서버 ${adoptedServer.model} 응답 확인(채택) — 스폰 없음`
         : result.llamaReady
-          ? `모델 ${result.model!.path} 준비됨`
+          ? `모델 ${result.model?.path ?? result.servedModel ?? "(경로 모름)"} 준비됨`
           : "모델 서버 미기동 — 창은 계속 뜨고 '모델 연결 실패' 배너를 표시합니다",
       tookSeconds: (Date.now() - t0) / 1000,
       fatal: false,

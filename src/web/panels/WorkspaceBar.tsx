@@ -101,13 +101,17 @@ export function WorkspaceBar({
         {current && current.kind.length ? ` · ${current.kind.map((k) => KIND_LABEL[k] ?? k).join("/")}` : ""}
         {current?.git ? " · git" : ""}
       </span>
-      <button
-        type="button"
-        onClick={openEditor}
-        style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "1px 6px", cursor: "pointer", font: "inherit", fontSize: 11 }}
-      >
-        폴더 바꾸기
-      </button>
+      {/* ── "폴더 바꾸기" 버튼을 **없앴다** (2026-10-01) ──────────────────────────
+          요구: "상위 폴더 바꾸기 버튼 기능은 쉘 위에 있는 디렉토리 탐색 기능으로 하면될거
+          같아". 셸 위 탐색 막대가 같은 일을 하므로 같은 일을 하는 버튼이 두 개면
+          하나가 "어느 쪽이 진짜지" 가 된다(§5.8: 라벨이 거짓말을 하는 배치가 나쁘다).
+
+          **그래서 말해야 하는trade-off**: 이 버튼은 **워크스페이스 루트**(서버가
+          도구를 실행하는 기준 디렉터리)를 바꿨고, 셸 탐색 막대는 그 루트 **안에서만**
+          움직인다(루트 밖은 승인 게이트를 무의미하게 하므로 막았다). 즉 **다른
+          프로젝트로 옮기는 기능**이 화면에서 사라진다 — 시작 디렉터리가 곧 루트가 된다.
+          되돌리려면 셸 탐색 막대의 "위로" 가 루트에 닿았을 때 **루트를 바꾸는 경로**로
+          연결해야 한다(아직 아니다 — 말하지 않고 구현했다고 하면 거짓말이 된다). */}
 
       {editing && (
         <div

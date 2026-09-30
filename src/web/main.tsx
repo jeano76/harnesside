@@ -16,6 +16,7 @@ import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
 import { WorkspaceBar } from "./panels/WorkspaceBar.js";
 import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js";
+import { openView } from "../session/blocks.js";
 import { ModelPanel } from "./panels/ModelPanel.js";
 import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
@@ -138,8 +139,36 @@ function Panel({
   dockable?: boolean;
 }) {
   return (
-    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden", background: BG }}>
+    <div
+      className="elev-1 elev-lift"
+      style={{
+        border: `1px solid ${BORDER}`,
+        borderRadius: 6,
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+        overflow: "hidden",
+        background: BG,
+      }}
+    >
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", background: "#161b22", borderBottom: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
+        {/* 패널 머리 — 본체보다 **한 단계 높은 면**(§elevation). 어두운 테마에서
+            어두운 머리는 아래 본체에 **파묻혀** 계단처럼 보인다. 한 단계 밝아야
+            "이건 바깥 덮개" 라 읽힌다. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "3px 8px",
+            background: "#161b22",
+            borderBottom: `1px solid ${BORDER}`,
+            borderTopLeftRadius: 5,
+            borderTopRightRadius: 5,
+            flex: "0 0 auto",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.045)",
+          }}
+        >
         <strong style={{ fontSize: 11, color: FG }}>{title}</strong>
         {/* 위치는 사람이 이해할 수 있는 말로 (§5.8) — 내부 식별자 노출 금지 */}
         <span style={{ fontSize: 10, color: DIM }}>{zoneLabel(zone)}</span>
@@ -164,6 +193,7 @@ function Panel({
             {collapsed ? "▸" : "▾"}
           </button>
         )}
+      </div>
       </div>
       {!collapsed && <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>{children}</div>}
     </div>
@@ -249,7 +279,10 @@ export default function App() {
     if (!text || turnRunning) return;
     setTurnRunning(true);
     // 사용자 입력을 대화 기록에 **먼저** 남긴다. WS 가 늦게 와도 순서가 뒤집히지 않는다.
-    setBlocks((prev) => applyEvent(prev, { type: "agent.status", text: `전송: ${text.slice(0, 60)}`, at: Date.now() }));
+    // **사람이 보낸 말을 블록으로 남긴다** — 이것이 대화 묶음의 경계다(2026-10-01).
+    // 예전에는 `전송: …` 라는 **상태 줄** 로만 남겼다. 그래서 묶음의 시작을 알 수
+    // 없었고, "어떤 물음에 대한 답인지" 가 화면에 남지 않았다.
+    setBlocks((prev) => applyEvent(prev, { type: "agent.user", text, at: Date.now() }));
     setDraft("");
     try {
       const r = await client.post<{ ok: boolean; detail: string }>("/api/agent/turn", { text });
@@ -494,15 +527,6 @@ export default function App() {
   }, [wsState]);
 
   // M5 팔레트
-  const commands: Command[] = useMemo(
-    () => [
-      { id: "view.toggleLog", title: "로그 패널 접기/펼치기", category: "보기", keys: [], run: "view.toggleLog()" },
-      { id: "view.toggleMonitor", title: "모니터 패널 접기/펼치기", category: "보기", keys: [], run: "view.toggleMonitor()" },
-      { id: "palette.open", title: "명령 팔레트", category: "기타", keys: ["Ctrl+K"], run: "palette.open()" },
-    ],
-    [],
-  );
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key.toLowerCase() === "k") {
@@ -527,59 +551,83 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /** 헤더·셸·설정이 **같은 알림 경로**를 쓴다 — 한 종류의 알림이 화면 한 곳에 모인다. */
+  const notice = useCallback(
+    (kind: "info" | "warn" | "error", title: string, body: string, source = "app") =>
+      pushToast({ id: `${source}:${title}`, kind, title, body, at: Date.now(), ttlMs: 12_000, requiresAck: false, source }),
+    [],
+  );
+
+  const onModelPhase = useCallback((p: { state: string; progress: number; message: string }) => {
+    setBlocks((prev) => applyEvent(prev, { type: "agent.status", text: `[업데이트] ${p.message}`, at: Date.now() }));
+  }, []);
+
+  /**
+   * 명령 팔레트 (M5) — 2026-10-01.
+   *
+   * 여기의 `run` 은 예전부터 **문자열**이었고 **아무도 실행하지 않았다**(실측:
+   * `grep '\.run' src/web/` 의 결과는 검색 대상 비교뿐). 팔레트에서 Enter 를 눌러도
+   * 아무 일도 없었고, 화면은 **정상처럼** 명령 목록을 보여줬다. 조용히 안 되는 메뉴는
+   * 죽었다고 알아채기 가장 어렵다.
+   *
+   * 그래서 **함수**로 바꿨다. 그리고 목록에 있던 세 항목이 **실제로 무엇을 하는지** 를
+   * 지금 있는 기능에 맞췄다 — 없는 기능을 팔레트에 적어두면 그것도 조용한 거짓말이다.
+   */
+  const commands: Command[] = useMemo(
+    () => [
+      { id: "view.toggleLog", title: "서버 로그 접기/펼치기", category: "보기", keys: [], run: () => setLogOpen((v) => !v) },
+      { id: "view.biggerShell", title: "셸 영역 키우기", category: "보기", keys: [], run: () => setBottomH((h) => Math.max(160, h - 80)) },
+      { id: "view.smallerShell", title: "셸 영역 줄이기", category: "보기", keys: [], run: () => setBottomH((h) => Math.min(window.innerHeight * 0.7, h + 80)) },
+      { id: "view.resetShell", title: "셸 영역 크기 초기화", category: "보기", keys: [], run: () => setBottomH(260) },
+      {
+        id: "view.openSettings",
+        title: "설정 열기",
+        category: "설정",
+        keys: [],
+        // **별도 패널이 아니라 대화 안의 블록**으로 연다(2026-10-01 요구).
+        run: () => setBlocks((prev) => openView(prev, { what: "settings" }, Date.now())),
+      },
+      {
+        id: "view.openDiff",
+        title: "변경 검토 열기",
+        category: "보기",
+        keys: [],
+        run: () => setBlocks((prev) => openView(prev, { what: "diff" }, Date.now())),
+      },
+      {
+        id: "terminal.newShell",
+        title: "새 셸 열기",
+        category: "기타",
+        keys: [],
+        run: () => client.post("/api/terminal", {}).catch((e) => notice("warn", "셸을 열지 못했습니다", String(e))),
+      },
+      { id: "palette.open", title: "명령 팔레트", category: "기타", keys: ["Ctrl+K"], run: () => setPaletteOpen((v) => !v) },
+    ],
+    [client, notice],
+  );
+
+  /**
+   * 설정 화면 — **`BODY` 보다 먼저** 만든다.
+   *
+   * 순서가 중요한 이유: 설정은 대화 **안의 블록**으로 그려지는데, 그 블록을 그리는
+   * `AgentPanel` 은 `BODY` **안**에 있다. 즉 `BODY` 가 설정 노드를 필요로 하고,
+   * `BODY` 안의 `AgentPanel` 이 같은 노드를 다시 받아야 한다 — 순서가 뒤집히면
+   * "선언 전 사용" 이 된다. 그래서 먼저 만들고 **두 곳이 공유**한다.
+   *
+   * deps 가 안정적이어야 한다 — `ModelPanel` 은 이 값으로 `useEffect` 를 돌고,
+   * 값이 매 렌더 바뀌면 무한 요청이 된다(2026-10-01 실측: `/api/models` 5초 3303회).
+   */
+  const settingsNode = useMemo(
+    () => <ModelPanel client={client} onNotice={notice} onPhase={onModelPhase} />,
+    [client, notice, onModelPhase],
+  );
+  const viewExtra = useMemo(() => ({ settings: settingsNode }), [settingsNode]);
+
   /**
    * 패널 본문. **존과 무관하게** 같은 내용 — 패널이 옮겨가면 내용까지 바뀌면
    * 사용자는 "어디로 옮긴 거지?" 하고 헤더만 찾게 된다.
    */
-  const BODY: Partial<Record<PanelId, React.ReactNode>> = {
-    explorer: (
-      <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-        {/* 루트를 바꾼 뒤에도 **무엇이 바뀌었는지**가 보인다 — 지문을 여기서 읽는다. */}
-        <div style={{ padding: "4px 8px", borderBottom: `1px solid ${BORDER}`, color: DIM, fontSize: 10 }}>
-          {workspace ? (
-            <>
-              {workspace.kind.map((k) => k).join("/")} · 규칙 {workspace.rules.length}개
-              {workspace.packageManager ? ` · ${workspace.packageManager}` : ""}
-              {workspace.buildHint ? ` · 빌드: ${workspace.buildHint}` : ""}
-            </>
-          ) : (
-            "지문 계산 중"
-          )}
-        </div>
-        {tree === null ? (
-          <Empty title={t("empty.treeFailed.title")} hint={t("empty.treeFailed.hint")} actions={[{ label: t("action.retry"), onClick: () => void loadTree() }]} />
-        ) : tree.length === 0 ? (
-          <Empty title={t("empty.folderEmpty.title")} hint={t("empty.folderEmpty.hint", { root: workspace?.root ?? "" })} />
-        ) : (
-          <ul style={{ listStyle: "none", margin: 0, padding: 4 }}>
-            {tree.map((e) => (
-              <li key={e.name}>
-                <button
-                  type="button"
-                  onClick={() => (e.kind === "file" ? void openFileByPath(e.name) : void loadTree())}
-                  disabled={e.kind === "dir"}
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    textAlign: "left",
-                    background: "none",
-                    border: 0,
-                    color: e.kind === "dir" ? FG : DIM,
-                    padding: "2px 6px",
-                    cursor: e.kind === "file" ? "pointer" : "default",
-                    font: "inherit",
-                    fontSize: 11,
-                  }}
-                >
-                  {e.kind === "dir" ? "▸ " : "· "}
-                  {e.name}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    ),
+  const BODY: Partial<Record<PanelId, React.ReactNode>> & Record<string, React.ReactNode> = {
     agent: (
       <>
         {/* M3 재개 배너 — **있을 때만** 나타난다. 항상 보이면 경고가 무시된다. */}
@@ -593,6 +641,9 @@ export default function App() {
         />
       <AgentPanel
         blocks={blocks}
+        client={client}
+        onOpenView={(what, path) => setBlocks((prev) => openView(prev, path ? { what, path } : { what }, Date.now()))}
+        viewExtra={viewExtra}
         running={turnRunning}
         think={think}
         onStyle={(s: ThinkStyle) => setThink((prev) => ({ ...prev, style: s }))}
@@ -608,88 +659,86 @@ export default function App() {
     ),
     // §9.3 커밋. diff(한 파일 비교)와 **커밋(저장소 전체)** 은 다른 일이라 같은
     // 존에 둘 수 있지만 같은 패널은 아니다 — 요구 16 의 커밋 단계가 여기다.
-    diff: diff ? (
-      <>
-        <DiffPanel path={diff.path} oldText={diff.oldText} newText={diff.newText} source="file" onClose={() => setDiff(null)} />
-        <CommitBox
-          client={client}
-          onNotice={(kind, title, body) =>
-            pushToast({ id: `git:${title}`, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "git" })
-          }
-        />
-      </>
-    ) : (
-      <CommitBox
-        client={client}
-        onNotice={(kind, title, body) =>
-            pushToast({ id: `git:${title}`, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "git" })
-      }
-      />
-    ),
-    editor: openFile ? (
-      <EditorView
-        client={client}
-        info={openFile}
-        onNotice={(kind, title, body) =>
-          pushToast({ id: `fs:${title}`, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "fs" })
-        }
-      />
-    ) : (
-      <Empty
-        title={t("empty.noFile.title")}
-        hint={t("empty.noFile.hint")}
-        actions={[{ label: t("action.refresh"), onClick: () => void refreshTree() }, ...EXAMPLES.slice(0, 1).map((ex) => ({ label: t("empty.noFile.example"), onClick: () => setDraft(ex) }))]}
-      />
-    ),
     terminal: (
       <TerminalView
         client={client}
-        onNotice={(kind, title, body) =>
-          pushToast({ id: `term:${title}`, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "terminal" })
-        }
+        onNotice={notice}
       />
     ),
-    settings: (
-      <ModelPanel
-        client={client}
-        onNotice={(kind, title, body) =>
-          pushToast({ id: `models:${title}`, kind, title, body, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "models" })
-        }
-        onPhase={(p) => {
-          // 진행 단계는 **한 줄로** 보인다(§11.3: 무언가 happening 하고 있어야 한다).
-          setBlocks((prev) => applyEvent(prev, { type: "agent.status", text: `[업데이트] ${p.message}`, at: Date.now() }));
-        }}
-      />
-    ),
+    // ── 설정은 **패널이 아니라 대화 안의 블록**이다 (2026-10-01) ────────────────
+    // `BODY` 의 키는 이제 "존에 놓는 패널" 이 아니라 **열 수 있는 것** 의 목록이다.
+    // 설정은 머리 아이콘으로 열고 대화 사이에 블록으로 쌓인다 — 그래야 "무엇을
+    // 설정하려다가 무엇을 봤나" 가 한 스크롤로 이어진다.
+    settings: settingsNode,
+
   };
 
   const visible = useMemo(() => visibleTail(filterEntries(logs, filter), 2000), [logs, filter]);
   const hits = useMemo(() => searchCommands(commands, paletteQuery, 12), [commands, paletteQuery]);
-  // 로그 패널은 항상 최하단에 붙으므로 배치 대상에서 제외한다(§5.12 닫을 수 없음).
-  const zones = useMemo(
-    () => groupByZone(layout.panels.filter((p) => p.id !== "log").map((p) => ({ id: p.id, zone: p.zone }))),
-    [layout],
-  );
-  /** 입력창을 그릴 열. **정확히 하나** — 두 곳에 그리면 같은 입력창이 두 개 보인다. */
-  const inputZone: Zone = zones.right.includes("agent")
-    ? "right"
-    : zones.left.includes("agent")
-      ? "left"
-      : zones.center.includes("agent")
-        ? "center"
-        : "center";
-  // 열 폭도 존에 따라 정한다 — 없는 열은 만들지 않는다(빈 공간을 남기면 낭비다).
-  const gridCols = `${zones.left.length ? "260px " : ""}1fr${zones.right.length ? " 380px" : ""}`;
-  const gridRows = ["28px", ...(zones.top.length ? ["auto"] : []), "1fr", "auto"].join(" ");
   const full = bufferFullLabel(logStatus);
   const bootDone = steps?.filter((s) => s.ok).length ?? 0;
+
+  // ── 셸 구조 (2026-10-01 사용자 사양) ─────────────────────────────────────────
+  //
+  //   ┌──────────────────────────────────────────────┐
+  //   │  에이전트 출력  (가장 넓게, 화면 중앙 위)      │  ← 1fr
+  //   ├──────────────────────────────────────────────┤
+  //   │  프롬프트 입력창                              │  ← 고정
+  //   ├───────────────────────────────┬──────────────┤
+  //   │  셸(터미널)                   │  계측 상태  │  ← 하단, 가변 배분
+  //   │                               │  (전부 노출) │     + 리사이즈
+  //   ├───────────────────────────────┴──────────────┤
+  //   │  서버 로그 (접힘 기본)                        │
+  //   └──────────────────────────────────────────────┘
+  //
+  // **왜 좌우 존을 없앴나**: 좌우에 260px 과 380px 을 두면 1600px 창에서 **46%** 가
+  // 대화가 아니다. 이 프로그램의 첫 화면은 대화다. 계측은 읽는 게 아니라 **확인하는**
+  // 것이므로 좁은 폭으로 충분하고, 그 폭을 대화에 주는 게 낫다.
+  //
+  // **계측 패널 폭의 근거**: 게이지 4개가 나란히 들어갈 최소 폭. 이보다 좁으면 줄이
+  // 접히고, 그것은 "전부 노출" 이라는 요구를 어긴다. 300px 은 4개 게이지(각 72px +
+  // 라벨)가 딱 들어가는 폭이다.
+  const MONITOR_MIN_W = 300;
+  const [monitorW, setMonitorW] = useState(MONITOR_MIN_W);
+  const [bottomH, setBottomH] = useState(() => {
+    try {
+      return Number(localStorage.getItem("harnesside.bottomH")) || 260;
+    } catch {
+      return 260;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("harnesside.bottomH", String(Math.round(bottomH)));
+    } catch {
+      /* 저장 불가 — 이번 실행에만 적용 */
+    }
+  }, [bottomH]);
+
+  /** 로그 접힘 — **기본 접힘**(2026-10-01). 데몬 상태 창이지 매번 보는 창이 아니다. */
+  const [logOpen, setLogOpen] = useState(() => {
+    try {
+      return localStorage.getItem("harnesside.logOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("harnesside.logOpen", logOpen ? "1" : "0");
+    } catch {
+      /* 저장 불가 — 접힘 상태만 이번 실행에 적용된다 */
+    }
+  }, [logOpen]);
 
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: gridCols,
-        gridTemplateRows: "28px 1fr auto",
+        // 열은 **하나**다. 좌우 존을 없앴으므로 좌우로 줄 것이 없다(2026-10-01).
+        gridTemplateColumns: "1fr",
+        // 행: 상단 바 · **에이전트(1fr)** · 프롬프트 · 하단(셸+계측) · 로그
+        gridTemplateRows: `28px 1fr auto ${bottomH}px ${logOpen ? `${layout.logHeight}px` : "28px"}`,
         height: "100vh",
         background: BG,
         color: FG,
@@ -734,118 +783,194 @@ export default function App() {
         </span>
       </header>
 
-      {/* 상단 도크 — 전용 행. 중앙 열에 넣으면 라벨이 거짓말이 된다(§5.4·§5.8). */}
-      {zones.top.length > 0 && (
+
+      {/* ── ① 에이전트 출력 (메인) ────────────────────────────────────────────
+          화면 중앙 위를 **가장 넓게** 차지한다(2026-10-01 사양). 이 앱의 첫 화면은
+          대화이고, 좌우 존을 없애면서 대화에 폭을 전부 줬다. */}
+      <div style={{ gridRow: 2, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", padding: "6px 6px 0" }}>
+        <div className="elev-1" style={{ flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {BODY.agent}
+        </div>
+      </div>
+
+      {/* ── ② 프롬프트 입력창 (에이전트 바로 아래) ────────────────────────────
+          요구: "하단에는 프롬프트 입력 창이됨". 대화의 **바로 아래**에 있어야
+          문맥이 이어진다 — 아래쪽 셸 영역에 두면 "무엇을 하려는지" 와 "무엇을 보고
+          있는가" 가 화면 양 끝으로 벌어진다. */}
+      <div style={{ gridRow: 3, padding: "6px", display: "flex" }}>
         <div
+          className="elev-1"
+          style={{ flex: 1, border: `1px solid ${BORDER}`, borderRadius: 6, display: "flex", flexDirection: "column", background: BG, overflow: "hidden" }}
+        >
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // **Enter 로 보내고 Shift+Enter 로 줄바꿈** — 대화창의 최대 규칙(§5.7).
+              // 키보드 중심 개발자에게 이것 없으면 다 줄을 Shift+Enter 로 눌러야 한다.
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                if (draft.trim() && !turnRunning) void sendTurn();
+              }
+            }}
+            placeholder="무엇을 할까요? (Enter 로 전송 · Shift+Enter 로 줄바꿈 · 창을 닫아도 입력 내용은 남습니다)"
+            style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", minHeight: 64, maxHeight: 220, padding: 8, font: "inherit" }}
+          />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}` }}>
+            <span style={{ fontSize: 10, color: DIM }}>{draft ? "드래프트 저장됨" : ""}</span>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={() => {
+                clearDraft(typeof localStorage !== "undefined" ? localStorage : null);
+                setDraft("");
+              }}
+              style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}
+            >
+              지우기
+            </button>
+            <button
+              type="button"
+              disabled={!draft.trim() || turnRunning}
+              onClick={() => void sendTurn()}
+              style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 10px", cursor: draft.trim() && !turnRunning ? "pointer" : "default", font: "inherit" }}
+            >
+              {turnRunning ? "응답 중…" : "보내기"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── ③ 하단: 셸(가변) + 계측(최소 폭, 전부 노출) ──────────────────────
+          요구: "패널간에는 사이즈가 플랙스하게 조정이 가능함" · "cpu 등 상태표시
+          내용은 제일 하단의 쉘 영역 우측에 최소 사이즈로 모두 다 노출될 수 있는
+          높이를 유지하면서 폭을 설정해서 반영해줘"
+
+          즉 (a) 둘 사이에 **드래그 경계선**이 있고, (b) 계측은 **줄이 보이지
+          않게** — 즉 자체 스크롤이 없어야 한다(2026-10-01 앞선 요구: "항상 전체를
+          보여줘야"). */}
+      <div style={{ gridRow: 4, display: "flex", minHeight: 0, minWidth: 0, padding: "0 6px 6px", gap: 0 }}>
+        <div className="elev-1" style={{ flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {BODY.terminal}
+        </div>
+
+        {/* 리사이저 — **키보드로도** 잡을 수 있게 했다. 마우스만으로는 "고정돼 있나?"
+           를 알 수 없다(M8: 키보드만으로 조작 가능해야 한다). */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="패널 크기 조절"
+          tabIndex={0}
+          onPointerDown={(e) => {
+            const startX = e.clientX;
+            const startW = monitorW;
+            const move = (ev: PointerEvent) => {
+              // **왼쪽으로 끌면 계측이 넓어진다** — 시작점 대비의 변화량을 그대로 쓴다.
+              setMonitorW(Math.max(MONITOR_MIN_W, Math.min(window.innerWidth * 0.6, startW - (ev.clientX - startX))));
+            };
+            const up = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") {
+              e.preventDefault();
+              setMonitorW((w) => Math.max(MONITOR_MIN_W, w + 24));
+            } else if (e.key === "ArrowRight") {
+              e.preventDefault();
+              setMonitorW((w) => Math.max(MONITOR_MIN_W, w - 24));
+            }
+          }}
+          style={{ width: 6, flex: "0 0 auto", cursor: "col-resize", background: "transparent" }}
+          onDoubleClick={() => setMonitorW(MONITOR_MIN_W)}
+        />
+        <div
+          className="elev-1"
           style={{
-            gridRow: 2,
-            gridColumn: "1 / -1",
-            display: "flex",
-            flexDirection: "row",
-            gap: 6,
-            padding: 6,
+            flex: `0 0 ${monitorW}px`,
+            width: monitorW,
             minWidth: 0,
-            borderBottom: `1px solid ${BORDER}`,
-            maxHeight: 280,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
           }}
         >
-          {zones.top.map((id) => (
-            <div key={id} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-              <Panel
-                title={t(TITLE_KEY[id] ?? `panel.${id}`)}
-                zone="top"
-                collapsed={panelOf(layout, id)?.collapsed}
-                onToggle={() => setLayout((l) => toggleCollapse(l, id))}
-                onMove={(target) => setLayout((l) => movePanel(l, id, target))}
-              >
-                {BODY[id]}
-              </Panel>
-            </div>
-          ))}
+          {/* **접지 않는다** — 계측은 언제나 보인다. 접으면 "이제 CPU 가 갑자기
+              100% 가 됐는데 왜 아무 말도 없지" 가 된다(요구: "전부 다 노출"). */}
+          <MonitorPanel latest={metrics} series={metricSeries} />
         </div>
-      )}
+      </div>
 
-      {/* 좌 / 중앙 / 우 — **존에서 계산한다**(고정 그리드 아님) */}
-      {(["left", "center", "right"] as const).map((zone) => {
-        const ids = zones[zone];
-        if (ids.length === 0) return null;
-        return (
-          <div
-            key={zone}
+      {/* 로그 — **닫을 수 없는 기본 탭**(§5.12)이지만 **접을 수 있다**(2026-10-01).
+          "닫을 수 없음" 은 사라져서는 안 된다는 뜻이지, 항상 펼쳐 두어야 한다는 뜻이 아니다.
+          접었을 때 **마지막 줄** 이 보인다 — 로그가 무언가를 하고 있다는 사실 자체가
+          제일 중요한 신호이고, 그걸 숨기면 "멈췄다" 고 읽힌다. */}
+      <footer
+        style={{
+          gridColumn: "1 / -1",
+          borderTop: `1px solid ${BORDER}`,
+          background: BG,
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          overflow: "hidden",
+        }}
+      >
+        {!logOpen && (
+          <button
+            type="button"
+            onClick={() => setLogOpen(true)}
+            aria-expanded={false}
+            title="서버 로그 펼치기"
             style={{
-              // 상단 도크가 있으면 본체는 그 다음 행이다.
-              gridRow: zones.top.length > 0 ? 3 : 2,
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-              padding: 6,
-              minHeight: 0,
-              minWidth: 0,
-              borderRight: zone === "right" ? "none" : `1px solid ${BORDER}`,
+              display: "flex", gap: 8, alignItems: "center",
+              background: "none", border: 0, color: DIM, cursor: "pointer",
+              font: "inherit", fontSize: 11, padding: "4px 10px", textAlign: "left", width: "100%",
             }}
           >
-            {ids.map((id) => {
-              const p = panelOf(layout, id);
-              const z = p?.zone ?? zone;
-              const move = (target: Zone) => setLayout((l) => movePanel(l, id, target));
-              const toggle = () => setLayout((l) => toggleCollapse(l, id));
-              if (id === "monitor") {
-                return <MonitorPanel key={id} latest={metrics} series={metricSeries} collapsed={p?.collapsed} onToggle={toggle} />;
-              }
-              return (
-                <Panel key={id} title={t(TITLE_KEY[id] ?? `panel.${id}`)} zone={z} collapsed={p?.collapsed} onToggle={toggle} onMove={move}>
-                  {BODY[id]}
-                </Panel>
-              );
-            })}
-            {/* 입력창은 **한 곳에만** 렌더한다. 에이전트 열이 있으면 그 열에,
-                없으면 중앙에. 두 열에 다 그리면 같은 입력창이 두 개 보이고
-                어느 쪽에 썼는지 모른다(실제로 그렇게 났다). */}
-            {zone === inputZone && (
-              <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, display: "flex", flexDirection: "column", flex: "0 0 auto" }}>
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder="무엇을 할까요? (실수로 창을 닫아도 입력 내용은 남습니다)"
-                  style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", minHeight: 72, padding: 8, font: "inherit" }}
-                />
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}` }}>
-                  <span style={{ fontSize: 10, color: DIM }}>{draft ? "드래프트 저장됨" : ""}</span>
-                  <span style={{ flex: 1 }} />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      clearDraft(typeof localStorage !== "undefined" ? localStorage : null);
-                      setDraft("");
-                    }}
-                    style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}
-                  >
-                    지우기
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!draft.trim() || turnRunning}
-                    onClick={() => void sendTurn()}
-                    style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 10px", cursor: draft.trim() && !turnRunning ? "pointer" : "default", font: "inherit" }}
-                  >
-                    {turnRunning ? "응답 중…" : "보내기"}
-                  </button>
-                </div>
-              </div>
+            <span>▴ 서버 로그</span>
+            {/* **내용이 있으면 접어도 보여준다.** 몇 줄인지 말하지 않으면
+                "접었으니 0 건" 으로 읽힌다 — 실제로는 계속 쌓이고 있다. */}
+            {visible.length > 0 && (
+              <span style={{ color: DIM, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                {visible[visible.length - 1].message}
+              </span>
             )}
-          </div>
-        );
-      })}
-
-      {/* 하단: 로그 — 닫을 수 없는 기본 탭 (§5.12) */}
-      <footer style={{ gridColumn: "1 / -1", borderTop: `1px solid ${BORDER}`, background: BG }}>
-        <LogPanel entries={visible} status={logStatus ?? undefined} level={filter.level as LogLevel} onSetLevel={(l) => setFilter((f) => ({ ...f, level: l }))} height={layout.logHeight} filterLabel={filterLabel(filter)} />
+            <span style={{ marginLeft: "auto" }}>
+              {visible.length.toLocaleString("ko-KR")}줄
+            </span>
+          </button>
+        )}
+        {logOpen && (
+          <>
+            <button
+              type="button"
+              onClick={() => setLogOpen(false)}
+              aria-expanded={true}
+              style={{
+                display: "flex", gap: 8, alignItems: "center",
+                background: "none", border: 0, color: DIM, cursor: "pointer",
+                font: "inherit", fontSize: 11, padding: "2px 10px", textAlign: "left",
+              }}
+            >
+              <span>▾ 서버 로그</span>
+              <span style={{ marginLeft: "auto" }}>접기</span>
+            </button>
+            <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}>
+              <LogPanel entries={visible} status={logStatus ?? undefined} level={filter.level as LogLevel} onSetLevel={(l) => setFilter((f) => ({ ...f, level: l }))} height={layout.logHeight} filterLabel={filterLabel(filter)} />
+            </div>
+          </>
+        )}
       </footer>
 
       {/* 팔레트 */}
       {paletteOpen && (
         <div onClick={() => setPaletteOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(1,4,9,0.6)", display: "grid", placeItems: "start center", paddingTop: "12vh", zIndex: 50 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 520, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 8, overflow: "hidden" }}>
+          <div onClick={(e) => e.stopPropagation()} className="elev-3" style={{ width: 520, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 8, overflow: "hidden" }}>
             <input
               autoFocus
               value={paletteQuery}
@@ -855,11 +980,38 @@ export default function App() {
             />
             <div style={{ maxHeight: 320, overflow: "auto" }}>
               {hits.length === 0 && <div style={{ padding: 12, color: DIM }}>일치하는 명령이 없습니다</div>}
+              {/* **이 항목들은 선택 가능하다.** 예전에는 `div` 였고 `onClick` 도
+                  `Enter` 처리도 **없었다** — 화면은 "메뉴" 처럼 보이는데 눌러도 아무
+                  일도 없었다(2026-10-01 실측). 조용히 안 되는 메뉴는 죽었다고
+                  알아채기 가장 어렵다: 목록이 보이므로 "기능이 없다" 가 아니라
+                  "이 몇 개가 말썽이다" 고 읽힌다.
+
+                  그래서 `button` 이고, 고른 항목은 **반드시 `run` 을 실행**한다.
+                  실패하면 **사유를 말한다** — 조용히 닫으면 "뭘 눌렀는지" 가 사라져
+                  아무 일도 없었다고 읽힌다. */}
               {hits.map((h) => (
-                <div key={h.cmd.id} style={{ padding: "6px 10px", display: "flex", gap: 8, borderBottom: `1px solid #21262d` }}>
-                  <span>{h.cmd.title}</span>
+                <button
+                  key={h.cmd.id}
+                  type="button"
+                  onClick={() => {
+                    setPaletteOpen(false);
+                    try {
+                      void h.cmd.run();
+                    } catch (e) {
+                      notice("error", "명령을 실행하지 못했습니다", e instanceof Error ? e.message : String(e));
+                    }
+                  }}
+                  style={{
+                    display: "flex", gap: 8, width: "100%", textAlign: "left",
+                    padding: "6px 10px", background: "none", border: 0,
+                    borderBottom: "1px solid #21262d", color: FG,
+                    cursor: "pointer", font: "inherit",
+                  }}
+                >
+                  <span style={{ flex: 1 }}>{h.cmd.title}</span>
                   <span style={{ color: DIM, fontSize: 10 }}>{h.cmd.category}</span>
-                </div>
+                  {h.cmd.keys.length > 0 && <span style={{ color: DIM, fontSize: 10 }}>{h.cmd.keys.join(" ")}</span>}
+                </button>
               ))}
             </div>
           </div>

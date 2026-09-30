@@ -65,10 +65,29 @@ export function buildLlamaArgs(o: LlamaLaunchOptions): BuiltArgs {
   args.push("-b", String(t.batchSize));
   args.push("-ub", String(t.ubatchSize));
 
+  // ── `--jinja` — 없으면 **대화가 되지 않는다** ──────────────────────────────
+  // 실측(2026-10-01): 이 플래그가 없던 llama-server 가 한국어 질문에 대해
+  // `separ separ separ…` 반복과 러시아어·중국어·히브리어 쓰레기를 냈다. 600토큰을
+  // 받아도 `content` 가 빈 채 `reasoning_content` 만 찢어졌다.
+  //
+  // 원인은 **채팅 템플릿이 적용되지 않은 것**이었다. `--jinja` 없으면 llama-server 는
+  // GGUF 에 들어 있는 Jinja 템플릿을 **쓰지 않고** 옛 내장 형식으로 감싼다. 그 템플릿은
+  // 이 모델(Qwen 계열 MoE)의 형식과 다르므로 모델은 "사람이 무슨 말을 한 것인지" 를
+  // 이해하지 못하고, 받은 문장을 **이어 쓰기 시작한다.**
+  //
+  // **증빙은 토큰 수다**: `"ABC"` 3글자를 보냈는데 `prompt_tokens: 11`. 템플릿이
+  // 붙었다면 역할 표시 + 생성 프롬프트로 30~50이 나온다. 11은 원문만 들어간 것이다.
+  //
+  // 도구 호출도 이 플래그가 없으면 **아예 안 된다** — 그래서 M13 권고 알림에
+  // "플래그가 현재 설정과 다릅니다" 가 뜨는 것이 이 문제다(지금 이 프로그램이
+  // 띄우는 서버도 이 플래그를 주지 않았다).
   // KV 캐시 양자화 — VRAM 이 가장 크게 줄어드는 항목이라 근거를 남긴다.
   args.push("--cache-type-k", t.cacheTypeK);
   args.push("--cache-type-v", t.cacheTypeV);
   rationale.push(`KV 캐시: k=${t.cacheTypeK} v=${t.cacheTypeV} (VRAM 절약)`);
+
+  args.push("--jinja");
+  rationale.push("--jinja: GGUF 의 채팅 템플릿 사용 (없으면 모델이 대화를 이해하지 못하고 문장을 이어 씁니다)");
 
   if (t.flashAttn) {
     args.push("--flash-attn", "on");

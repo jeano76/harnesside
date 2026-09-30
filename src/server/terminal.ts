@@ -18,6 +18,18 @@
 import { spawn as ptySpawn, type IPty } from "node-pty";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
+import { stat } from "node:fs/promises";
+
+/**
+ * 셸 인자를 **하나의 인자**로 만든다.
+ *
+ * 경로에 공백이 있으면 `cd /내 공간` 이 두 인자로 쪼개져 엉뚱한 곳으로 간다. 사용자
+ * 폴더명에 공백이 있는 것은 흔하고, 그때마다 "탐색이 고장났다" 고 보인다.
+ * `'` 안의 모든 것을 이스케이프하는 것이 표준적인 방법이다.
+ */
+export function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
 
 export type SessionState = "running" | "exited";
 
@@ -87,8 +99,15 @@ interface Entry {
 export class TerminalManager {
   private tabs = new Map<string, Entry>();
   private order: string[] = [];
+  /** 2026-10-01: 셸 탐색 막대가 바꾼 **공유 작업 경로**. */
+  private workingDir: string | null = null;
+  /** 최근 본 디렉터리(최신순). */
+  private recent: string[] = [];
 
-  constructor(private opts: TerminalManagerOptions) {}
+  constructor(private opts: TerminalManagerOptions) {
+    // 시작점도 기억에 넣는다 — 처음 목록이 비어 있으면 "이 기능이 안 돈다" 고 읽힌다.
+    this.recent = [this.opts.root];
+  }
 
   list(): TerminalSession[] {
     // **순서를 정해 반환한다.** Map 은 삽입 순서지만 " guaranteeing" 아니라
@@ -105,6 +124,70 @@ export class TerminalManager {
   }
 
   /**
+   * **작업 경로(cwd)** — 2026-10-01.
+   *
+   * 셸 위쪽 탐색 막대에서 옮긴 디렉터리가 곧 이 값이고, **새로 여는 모든 탭의 시작점**이
+   * 된다. 한 곳에 있어야 "탭마다 다른 곳에서 일한다" 는 상태가 생기지 않는다.
+   *
+   * 루트 밖으로는 못 간다 — 에이전트 승인 게이트를 무의미하게 만드는 것과 같으므로
+   * `create` 와 **같은 규칙**을 쓴다(두 곳에 쓰면 나중에 한쪽이 빠진다).
+   */
+  get cwd(): string {
+    return this.workingDir ?? this.opts.root;
+  }
+
+  /**
+   * 디렉터리를 바꾼다. **실제로 존재하고 루트 안일 때만** 받는다.
+   *
+   * 존재하지 않는 경로를 작업 경로로 삼으면 이후 모든 명령이 그 자리에서 실패하는데,
+   * 화면은 "바뀜" 이라고 말하고 있다. 그래서 **한 번 실제로 확인**한다.
+   */
+  async setCwd(next: string): Promise<{ ok: boolean; cwd: string; detail: string }> {
+    const root = resolve(this.opts.root);
+    // **인자 순서가 곧 동작이다** (2026-10-01 실측). `resolve(next, this.cwd)` 로 쓰면
+    // `path.resolve` 는 **오른쪽부터** 적용하므로 마지막의 절대경로가 이기고 `next` 는
+    // **조용히 버려진다**. 결과는 항상 cwd === 그대로인데, 존재 검사를 통과하므로
+    // `ok: true` 까지 반환된다 — **움직이지 않았는데 성공이라고 말한다.**
+    //
+    // 이게 "디렉터리를 선택해도 이동하지 않는다" 는 버그의 정체였다. 왼쪽이 기준,
+    // 오른쪽이 대상이다.
+    const target = resolve(this.cwd, next);
+    if (target !== root && !target.startsWith(`${root}/`)) {
+      // **루트 밖은 조용히 루트로 되돌리지 않는다.** 이유를 말한다 — 그래야
+      // "왜 안 바뀌지" 를 사용자가 따로 찾아보지 않는다.
+      return { ok: false, cwd: this.cwd, detail: `루트(${root}) 밖으로는 이동할 수 없습니다: ${next}` };
+    }
+    const st = await stat(target).catch(() => null);
+    if (!st?.isDirectory()) return { ok: false, cwd: this.cwd, detail: `디렉터리가 아닙니다: ${next}` };
+    this.workingDir = target;
+    this.remember(target);
+    // **열려 있는 모든 탭을 그 자리로 옮긴다.** 한 곳에서 일하게 하는 것이 목적이다.
+    // `cd` 를 PTY 에 쓰는 게 아니라 세션 값을 바꾸는 방식인데, 셸의 실제 프롬프트는
+    // 사용자가 직접 `cd` 로 바꿀 수 있다 — 그래서 화면은 **마지막으로 알고 있는 값**을
+    // 보여준다고 명시한다(거짓말하지 않기 위해).
+    for (const e of this.tabs.values()) {
+      if (e.session.state !== "running" || !e.pty) continue;
+      e.session.cwd = target;
+      e.pty.write(`cd ${shellQuote(target)}\n`);
+    }
+    return { ok: true, cwd: target, detail: `작업 경로 변경: ${target}` };
+  }
+
+  /**
+   * **최근 본 디렉터리.** 셸 위쪽 목록이 이것을 쓴다.
+   *
+   * 개수가 아니라 **목록**이라서 최근 순서를 그대로 노출한다. 같은 경로를 다시 고르면
+   * 맨 위로 올라간다 — 사용자가 자주 가는 곳이 자주 가는 곳이 되게.
+   */
+  recentDirs(limit = 12): string[] {
+    return this.recent.slice(0, limit);
+  }
+
+  private remember(dir: string): void {
+    this.recent = [dir, ...this.recent.filter((d) => d !== dir)].slice(0, 20);
+  }
+
+  /**
    * 탭을 연다.
    *
    * 실패하면 **왜인지 말하고 아무것도 만들지 않는다.** 셸이 없는데 "탭 열림" 을
@@ -118,7 +201,7 @@ export class TerminalManager {
       return { ok: false, session: null, detail: `탭이 ${max}개 열려 있습니다` };
     }
 
-    const requested = resolve(opts.cwd ?? this.opts.root);
+    const requested = resolve(opts.cwd ?? this.cwd);
     const root = resolve(this.opts.root);
     // **cwd 는 루트 안이어야 한다.** 밖이면 새지 않는다 — 에이전트 승인 없이
     // 임의 디렉터리에서 셸이 돌아간다면 승인 게이트가 무의미해진다.
