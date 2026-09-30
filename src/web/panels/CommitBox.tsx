@@ -156,6 +156,9 @@ export function CommitBox({
         <input
           value={msg}
           onChange={(e) => setMsg(e.target.value)}
+          // **placeholder 는 이름이 아니다**(M8). 화면 판독기는 placeholder 를
+          // 라벨로 읽지 않고, Tab 한 번 지나갈 때 이름 없는 입력이라는 사실만 남는다.
+          aria-label="커밋 메시지"
           onKeyDown={(e) => {
             // **빈 메시지는 서버가 막는다.** 여기서 조용히 막아도 되지만,
             // 왜 안 되는지 말해야 하므로 서버에 보내 그 문장을 그대로 받는다.

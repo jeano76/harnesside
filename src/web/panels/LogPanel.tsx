@@ -168,6 +168,7 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
+          aria-label="서버 로그 검색"
           placeholder="검색"
           style={{ flex: 1, fontSize: 11, background: "#0d1117", border: "1px solid #30363d", color: "#d4d4d4", padding: "2px 6px", borderRadius: 4 }}
         />

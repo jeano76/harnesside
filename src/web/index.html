@@ -34,6 +34,47 @@
         border: 1px solid #30363d;
         background: #1e1e1e;
       }
+
+      /* ── M8 접근성 ──────────────────────────────────────────────────────
+         컴포넌트마다 `outline: "none"` 을 인라인으로 박아 둔다(브라우저 기본 링이
+         어두운 테마에서 안 보이는 이유). 그래서 **전역 규칙이 인라인을 이겨야** 한다 —
+         인라인 스타일은 스타일시트보다 우선하므로 `!important` 가 필요하다.
+         이게 없으면 키보드로 Tab 해도 **어디에 포커스인지 전혀 보이지 않는다**(실측).
+      */
+      :focus-visible {
+        outline: 2px solid #58a6ff !important;
+        outline-offset: 1px !important;
+        border-radius: 3px;
+      }
+      /* 포커스 링만 남기고 배경 하이라이트는 없는 브라우저를 위해 box-shadow 도 같이 준다. */
+      :focus:not(:focus-visible) {
+        outline: none !important;
+      }
+      /* 스크린 리더 전용 텍스트 — 화면에는 보이지 않는다(레이아웃도 차지하지 않는다). */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      /* M8: 모션 감소를 요청한 사용자에게는 **움직임을 없앤다**.
+         `animation` 뿐 아니라 `transition` 도 대상이다 — 잔잔한 트랜지션도 반복되면
+         어지럽다(§5.7 의 다크 모션 요구). */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.001ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
     </style>
   </head>
   <body>

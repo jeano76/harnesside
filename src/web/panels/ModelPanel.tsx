@@ -221,7 +221,8 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void search()}
-          placeholder="HuggingFace 검색 (예: Ornith)"
+          aria-label="HuggingFace 모델 검색"
+            placeholder="HuggingFace 검색 (예: Ornith)"
           style={{ flex: 1, background: "#0d1117", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 6px", font: "inherit", fontSize: 11, outline: "none" }}
         />
         <button
