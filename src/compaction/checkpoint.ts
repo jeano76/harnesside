@@ -53,14 +53,80 @@ export async function writeCheckpoint(
   await writeFile(path, JSON.stringify(checkpoint, null, 2), "utf8");
 }
 
+/**
+ * **지금 재개할 수 있는가** — 화면이 그 질문을 직접 하는 대신 여기를 묻는다.
+ *
+ * 왜 이 함수가 필요한가: 재개는 다음 턴에서 **자동으로** 일어난다(`loop` 의
+ * `injectResumeContextIfPending`). 사용자는 아무 말 없이 그것을 보게 되는데, 화면이
+ * "이전 작업이 남아 있습니다" 를 말해 주지 않으면 재개가 **일어난 적이 없는 것처럼**
+ * 보인다. "없음" 과 "있으나 아직 안 보임" 을 구분해야 화면이 정직할 수 있다.
+ *
+ * 반환값은 그대로 노출한다 — 요약하면 사용자가 "뭘 재개한다는 말인가" 를 되묻는다.
+ */
+export interface ResumeInfo {
+  /** 재개할 작업이 있는가. */
+  present: boolean;
+  /** 무엇을 재개하는가 — 사람이 읽는 한 줄. 없으면 null. */
+  goal: string | null;
+  reason: Checkpoint["reason"] | null;
+  stepsDone: number;
+  stepsTotal: number;
+  savedAt: string | null;
+}
+
+export async function resumeInfo(projectRoot: string): Promise<ResumeInfo> {
+  const cp = await readCheckpoint(projectRoot).catch(() => null);
+  if (!cp) {
+    // **없음은 명시한다.** null 로 넘기면 화면이 0 과 모름을 구분하지 못한다.
+    return { present: false, goal: null, reason: null, stepsDone: 0, stepsTotal: 0, savedAt: null };
+  }
+  const steps = Array.isArray(cp.steps) ? cp.steps : [];
+  return {
+    present: true,
+    goal: cp.goal || null,
+    reason: cp.reason,
+    stepsDone: steps.filter((s) => s?.status === "done").length,
+    stepsTotal: steps.length,
+    savedAt: typeof cp.timestamp === "string" ? cp.timestamp : null,
+  };
+}
+
+/**
+ * 체크포인트를 읽고 **모양을 정규화**한다.
+ *
+ * 왜 정규화가 필요한가: 이 파일은 디스크에 남아 있으며, 정전으로 **반만** 써질 수
+ * 있고(쓰는 중 프로세스가 죽으면), 사람이 손댈 수도 있다. 그런데 소비자들은
+ * `checkpoint.files.length` 처럼 배열 필드를 그대로 믿고 있다. 실제로 손으로 만든
+ * 파일(배열 필드 없음) 하나가 **턴 전체를 TypeError 로 죽였다**
+ * (`Cannot read properties of undefined`) — 내부 오류가 그대로 사용자 화면에
+ * 나타나는 최악의 형태였다.
+ *
+ * 그래서 규칙은 하나: **배열 필드는 항상 배열이고, 없는 필드는 없는 그대로다.**
+ * 알 수 없는 형식(`version` 불일치·JSON 아님)은 **조용히 null** 이 아니라
+ * `null`(재개할 것 없음)으로 처리한다 — 반쪽짜리 상태로 턴을 시작하는 쪽이 더 위험하다.
+ */
 export async function readCheckpoint(projectRoot: string): Promise<Checkpoint | null> {
+  let parsed: unknown;
   try {
-    const raw = await readFile(checkpointPath(projectRoot), "utf8");
-    return JSON.parse(raw) as Checkpoint;
+    parsed = JSON.parse(await readFile(checkpointPath(projectRoot), "utf8"));
   } catch (err: any) {
     if (err?.code === "ENOENT") return null;
-    throw err;
+    // **깨진 파일은 조용히 재개 불가로 본다.** 파싱 예외를 턴에 흘리면 사용자는
+    // 재개 버튼을 눌렀을 때 원인을 알 수 없는 내부 오류를 본다.
+    return null;
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const cp = parsed as Record<string, unknown>;
+  if (cp.version !== 1) return null; // 다른 형식은 **모르는 것** — guesses 하지 않는다
+  const arr = (v: unknown) => (Array.isArray(v) ? v : []);
+  return {
+    ...(cp as unknown as Checkpoint),
+    goal: typeof cp.goal === "string" ? cp.goal : "",
+    summary: typeof cp.summary === "string" ? cp.summary : "",
+    steps: arr(cp.steps) as Checkpoint["steps"],
+    files: arr(cp.files) as Checkpoint["files"],
+    recentActions: arr(cp.recentActions) as string[],
+  };
 }
 
 /** Clears the checkpoint once its work has been successfully resumed and verified.

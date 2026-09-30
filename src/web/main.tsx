@@ -25,6 +25,7 @@ import { EditorView } from "./editor/EditorView.js";
 import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";
 import { CommitBox } from "./panels/CommitBox.js";
+import { ResumeBanner } from "./panels/ResumeBanner.js";
 import "@xterm/xterm/css/xterm.css";
 import { WsClient } from "./wsClient.js";
 import { DEFAULT_LAYOUT, movePanel, toggleCollapse, keyboardMove, panelOf, zoneLabel, type PanelId, type Zone } from "./layout/engine.js";
@@ -569,6 +570,16 @@ export default function App() {
       </div>
     ),
     agent: (
+      <>
+        {/* M3 재개 배너 — **있을 때만** 나타난다. 항상 보이면 경고가 무시된다. */}
+        <ResumeBanner
+          client={client}
+          running={turnRunning}
+          onResumed={() => setBlocks((prev) => prev)}
+          onNotice={(kind, title, body) =>
+            pushToast({ id: `agent:${title}`, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "agent" })
+          }
+        />
       <AgentPanel
         blocks={blocks}
         running={turnRunning}
@@ -582,6 +593,7 @@ export default function App() {
         }}
         onCancel={() => void client.post("/api/agent/cancel")}
       />
+      </>
     ),
     // §9.3 커밋. diff(한 파일 비교)와 **커밋(저장소 전체)** 은 다른 일이라 같은
     // 존에 둘 수 있지만 같은 패널은 아니다 — 요구 16 의 커밋 단계가 여기다.

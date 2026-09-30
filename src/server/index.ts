@@ -668,6 +668,21 @@ async function main(): Promise<number> {
             return agent.setThinking(body.enabled === true);
           })
           .route("POST", "/api/agent/cancel", async () => agent.cancel())
+          // M3 재개. 취소한 턴은 체크포인트에 남고 **다음 턴에서 자동으로** 이어진다.
+          // 문제는 그것이 눈에 보이지 않는다는 점이다 — 그래서 "있나?" 를 묻는 라우트로
+          // 화면이 정직해진다(없음/있음 을 구분해서 반환한다).
+          .route("GET", "/api/agent/resume", async () => agent.resumeInfo())
+          .route("POST", "/api/agent/resume", async () => {
+            // 진행 중일 때는 재개하지 않는다 — **동시에 두 턴** 이 되면 대화가 어긋난다.
+            if (agent.turn.running) {
+              throw Object.assign(new Error("진행 중인 턴이 있습니다 — 먼저 끝내거나 취소하십시오"), { status: 409 });
+            }
+            // 재개는 "사용자가 계속해 라고 말한 것" 으로 기록한다. 메시지를 조용히
+            // 주입하면 대화에 사용자가 한 말이 아닌 줄이 들어간다(§5.10).
+            const text = RESUME_PROMPT;
+            session.noteUser(text);
+            return agent.send(text);
+          })
           .route("POST", "/api/agent/turn", async (c) => {
             const body = (await readBody(c.req)) as { text?: string };
             const text = String(body.text ?? "");
@@ -1127,3 +1142,6 @@ if (await tryStandalone()) {
       process.exit(1);
     });
 }
+
+/** 재개 프롬프트 — 사용자가 "계속해" 라고 말한 것을 한 문장으로 남긴다. */
+const RESUME_PROMPT = "이전 작업을 이어서 진행해 주십시오.";

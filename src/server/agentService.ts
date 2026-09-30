@@ -21,6 +21,7 @@ import { OpenAICompatibleClient } from "../backend/openaiClient.js";
 import type { ModelBackend } from "../backend/types.js";
 import type { CompactionThresholds } from "../compaction/compactor.js";
 import { applyEvent, type AgentBlock } from "../session/blocks.js";
+import { resumeInfo, type ResumeInfo } from "../compaction/checkpoint.js";
 
 /**
  * 압축 임계값의 기본값.
@@ -180,6 +181,16 @@ export class AgentService {
         : "교체는 끝났지만 새 모델이 응답하지 않습니다 — '성공' 으로 세지 않습니다",
       responseOk: ready,
     };
+  }
+
+  /**
+   * 지금 **재개할 수 있는가**.
+   *
+   * 재개는 다음 턴에서 자동으로 일어난다. 사용자 입장에서 보면 아무 일도 없다 —
+   * 그래서 화면이 묻는다. "없음" 과 "있지만 아직 안 보임" 을 구분해서 돌려준다.
+   */
+  async resumeInfo(): Promise<ResumeInfo> {
+    return resumeInfo(this.opts.baseDir());
   }
 
   /** 채택한 서버를 쓰고 있는가. */
