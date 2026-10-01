@@ -647,6 +647,10 @@ export default function App() {
         onOpenView={(what, path) => setBlocks((prev) => openView(prev, path ? { what, path } : { what }, Date.now()))}
         viewExtra={viewExtra}
         running={turnRunning}
+        // 상태바 — 이미 **앱 전체가 하나씩** 붙들고 있는 값을 **읽기만** 넘긴다.
+        // 여기서 WS 를 새로 붙들면 소켓이 두 개 생기고 재연결이 두 배가 된다.
+        wsState={wsState}
+        context={metrics?.context ?? null}
         think={think}
         onStyle={(s: ThinkStyle) => setThink((prev) => ({ ...prev, style: s }))}
         onThinking={(on) => {

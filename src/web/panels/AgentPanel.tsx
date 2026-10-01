@@ -17,6 +17,7 @@ import { appendToBlock, applyEvent, groupTurns, type AgentBlock } from "../../se
 import type { ApiClient } from "../api.js";
 import { ToolBlock } from "./ToolBlock.js";
 import { Markdown } from "./Markdown.js";
+import { Ide } from "./Ide.js";
 
 export const THINK_STYLES: { id: ThinkStyle; label: string; hint: string }[] = [
   { id: "dots", label: "파동 점", hint: "기본. 생각 중임을 짧게 알립니다" },
@@ -139,64 +140,13 @@ function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle
  * 여기선 그걸 구조적으로 막는다 — 라벨을 **쓰지 않으면 컴파일되지 않게**.
  */
 /**
- * 머리 조작: **이름을 **글자로** 보여준다**(2026-10-01).
+ * **이 자리에는 조작 버튼이 없다** (2026-10-01).
  *
- * 예전엔 아이콘만 있었다(`aria-label` + `title`). 그런데:
- *  - `title` 은 **마우스를 올려야** 보인다. 키보드 사용자는 **아예 못 본다.**
- *  - `⎇`(변경 검토)와 `▤`(디렉터리)는 **도형이 아니라 임의 기호**다. 첫 사용자는
- *    무엇인지 알 수 없다 — `⚙` 만도 마찬가지.
- *
- * 그래서 **항상 보이는 짧은 라벨**을 함께 둔다. 아이콘은 위치를 잇는 보조로 남는다.
- * 폭이 문제면 **지금 열려 있는 것 하나만** 라벨을 보여준다 — 지금 어디에 있는지가
- * 가장 자주 필요한 정보라 남은 폭에 들어가고, 나머지는 아이콘 + `aria-label` 이 받는다.
- *
- * `labelHidden`(지금 열린 항목)를 생략하면 **항상 라벨** — 그래야 검사가
- * "이름이 보인다" 를 확인할 수 있다. 숨긴 항목은 `aria-label` 로 이름이 남는다.
+ * 예전에 `IconButton` 이 여기 있었다. **IDE 액티비티바**(`Ide` 의 `activity`)가 같은
+ * 일을 하므로 **죽은 코드가 됐다** — 고치지 않고 두면 "같은 일을 두 곳에 둔다" 가 되고,
+ * 어느 쪽이 진짜인지 알 수 없다. **지운 것**이 낫다.
  */
-function IconButton({
-  label,
-  glyph,
-  onClick,
-  active,
-}: {
-  label: string;
-  glyph: string;
-  onClick: () => void;
-  /** 지금 열려 있는가. */
-  active?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      aria-pressed={active}
-      style={{
-        // **열려 있으면 배경이 있다** — "어디에 있나" 를 색이 말하게 한다.
-        // 색만 바꾸지 않는다: 색을 못 보는 사람이 있으므로 **배경과 밑줄**도 함께 준다.
-        background: active ? "#30363d" : "none",
-        border: 0,
-        borderBottom: active ? "1px solid #58a6ff" : "1px solid transparent",
-        color: active ? "#c9d1d9" : "#8b949e",
-        cursor: "pointer",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 3,
-        font: "inherit",
-        fontSize: 11,
-        lineHeight: 1.4,
-        padding: "1px 5px",
-        borderRadius: 4,
-      }}
-    >
-      <span aria-hidden="true" style={{ fontSize: 12 }}>
-        {glyph}
-      </span>
-      {label}
-    </button>
-  );
-}
+
 
 export function AgentPanel({
   blocks,
@@ -207,6 +157,9 @@ export function AgentPanel({
   onCancel,
   client,
   onExample,
+  // 상태바용 — 셸이 준다(§`Ide` 의 `status`). 여기서 WS 를 붙들지 않는다.
+  wsState,
+  context,
   /** `view` 블록이 그릴 내용. 설정 패널처럼 **무거운 것**은 셸이 주입한다 —
    *  이 컴포넌트가 그 화면을 아는 것이 아니라 **무엇을 그릴지 알기만 하면** 되므로. */
   viewExtra,
@@ -220,6 +173,16 @@ export function AgentPanel({
   onCancel: () => void;
   /** 빈 상태의 예시를 **입력창에 채운다**(보내지는 않는다 — 사용자가 고쳐서 보낸다). */
   onExample: (text: string) => void;
+  /**
+   * 상태바용 — 연결 상태와 컨텍스트 (§`Ide` 의 `status`).
+   *
+   * **셸이 준다.** 이 컴포넌트가 WS 를 직접 붙들면 **소켓이 두 개** 생기고 재연결이
+   * 두 배가 된다(실측: 이미 그렇게 사고가 났고, 로그가 "창 연결이 끊어졌습니다" 를
+   * 두 번 찍었다). 그래서 **읽기만** 받는다.
+   */
+  wsState?: "connecting" | "open" | "closed";
+  /** 컨텍스트 사용량 — 상태바에 사는 값(§11.3: 모르는 것을 아는 것처럼 보이지 않는다). */
+  context?: { usedTokens: number; totalTokens: number } | null;
   /** 도구 블록이 에디터·셸을 **그 자리에서** 그리기 위해 필요. */
   client?: ApiClient;
   /** `view` 블록이 그릴 설정 패널 등. **셸이 대상을 알고** 있다. */
@@ -283,31 +246,44 @@ export function AgentPanel({
   }, [think.needsWarning, think.reason]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+    <Ide
+      title="대화"
+      activity={[
+        { id: "settings", glyph: "\u2699", label: "설정", active: openWhat === "settings", onClick: () => onOpenView("settings") },
+        { id: "diff", glyph: "\u2387", label: "변경 검토", active: openWhat === "diff", onClick: () => onOpenView("diff") },
+        { id: "dirs", glyph: "\u25A4", label: "디렉터리", active: openWhat === "dirs", onClick: () => onOpenView("dirs") },
+      ]}
+      tabs={
+        openWhat
+          ? [{ id: openWhat, label: openWhat === "settings" ? "설정" : openWhat === "diff" ? "변경 검토" : "디렉터리", active: true, onClick: () => {} }]
+          : []
+      }
+      status={[
+        { text: wsState === "open" ? "\u25CF 실시간" : wsState === "connecting" ? "\u25CB 연결 중" : "\u25B2 끊김", tone: wsState === "open" ? "good" : wsState === "connecting" ? "warn" : "error", title: "WebSocket 연결 상태" },
+        // **모르면 모른다고 쓴다** — 0 으로 두지 않는다. 0 은 "안 쓴다" 로 읽힌다.
+        ...(context
+          ? [{ text: `컨텍스트 ${context.usedTokens.toLocaleString("ko-KR")} / ${context.totalTokens.toLocaleString("ko-KR")}`, tone: context.usedTokens / context.totalTokens > 0.8 ? ("warn" as const) : ("normal" as const) }]
+          : [{ text: "컨텍스트 \u2014", title: "작업 중이 아니면 측정되지 않습니다" }]),
+        ...(running ? [{ text: "실행 중", tone: "warn" as const }] : []),
+        { text: `묶음 ${turns.length}` },
+      ]}
+    >
+      <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
       {/* 스타일/토글 — §5.3 의 선택지. 숨기면 "생각이 왜 안 보이냐" 를 답할 수 없다. */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 6px", borderBottom: "1px solid #30363d", flexWrap: "wrap" }}>
-        {/* ── 머리 아이콘 (2026-10-01) ────────────────────────────────────────────
+        {/* ── 머리 아이콘 → **IDE 액티비티바** 로 옮겼다 (2026-10-01) ────────────────
             요구(원문, 옮기면서 글자가 깨졌던 것을 읽히게 고침):
             "설정, 변경파일이력 모두 에이젼트 패널 타이틀에 아이콘으로 docking을
             제공하고 각 메뉴 선택시 대화창 처럼 출력화면 안에 블럭화 하여 내용을 보여준다.
             기존 설정과 , 변경검토 패널은 삭제를 한다."
 
-            왜 **제목에** 두나: 이 앱의 첫 화면은 대화다. 설정을 찾으러 **다른 패널로
-            가면** 문맥이 끊긴다. 제목을 클릭해 대화 안에 블록으로 열면 "무엇을
-            설정하려다가 무엇을 봤나" 가 한 스크롤로 이어진다.
+            **여기에도 두면 같은 일을 두 번 하게 된다** — VS Community 의 액티비티바가
+            같은 역할(무엇을 여는지를 고르는 자리)을 한다. 한 곳에 모아야 "지금 어디에
+            있는가" 를 **한 번만** 말할 수 있다. 두 곳에 있으면 하나가 어긋난다.
 
-            **글자 대신 아이콘을 쓴 이유**: 머리는 24px 두께다. "설정 · 변경 검토" 라고
-            적으면 agent · terminal · log 머리가 전부 말하는 화면이 된다 — 옆 패널
-            머리와 **같은 문법**을 써야 읽힌다. 그래서 아이콘 + `aria-label` + `title`
-            (M8: 이름을 가진 조작 요소는 **이름**이 있어야 한다).
+            **선택된 항목에만 이름을 보여준다** — 아이콘만 두면 첫 사용자가 무엇인지
+            모르고, 키보드 사용자는 아예 못 본다. */}
 
-            아이콘 글자는 **도형**이 아니라 라벨을 축약한 것이라 화면 판독기에는
-            의미가 없다. 그래서 `aria-label` 을 준다. */}
-        <span style={{ display: "flex", gap: 2 }} role="group" aria-label="보기">
-          <IconButton label="설정" glyph="⚙" active={openWhat === "settings"} onClick={() => onOpenView("settings")} />
-          <IconButton label="변경 검토" glyph="⎇" active={openWhat === "diff"} onClick={() => onOpenView("diff")} />
-          <IconButton label="디렉터리" glyph="▤" active={openWhat === "dirs"} onClick={() => onOpenView("dirs")} />
-        </span>
         <span style={{ width: 1, height: 14, background: "#30363d" }} />
         <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "#6e7681" }}>
           <input type="checkbox" checked={think.enabled} onChange={(e) => onThinking(e.target.checked)} />
@@ -524,7 +500,8 @@ export function AgentPanel({
         )}
         <div ref={bottom} />
       </div>
-    </div>
+      </div>
+    </Ide>
   );
 }
 
