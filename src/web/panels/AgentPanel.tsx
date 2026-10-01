@@ -16,6 +16,7 @@ import { animationFor, initialThink, ingest, finish, type ThinkState, type Think
 import { appendToBlock, applyEvent, groupTurns, type AgentBlock } from "../../session/blocks.js";
 import type { ApiClient } from "../api.js";
 import { ToolBlock } from "./ToolBlock.js";
+import { Markdown } from "./Markdown.js";
 
 export const THINK_STYLES: { id: ThinkStyle; label: string; hint: string }[] = [
   { id: "dots", label: "파동 점", hint: "기본. 생각 중임을 짧게 알립니다" },
@@ -557,10 +558,17 @@ function BlockBody({
     );
   }
   if (b.kind === "text") {
+    // **마크다운을 IDE 테마로** (2026-10-01). 예전엔 `pre` 에 원문을 그대로 넣었다 —
+    // 그래서 `**굵게**`, `` `코드` ``, `## 제목` 이 **기호 그대로** 보였다. 강조가
+    // 없었다는 말이고 그건 **맞았다.** 파일 미리보기만 색이 있었고 대화 본문은
+    // 플레인 텍스트였다.
+    //
+    // **사용자 발화(`kind === "user"`)는 그대로 둔다** — 사람이 쓴 원문이다.
+    // 사용자가 마크다운 기호를 친 것이 아니라면 **그대로 보여야** 한다.
     return (
-      <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", font: "12px/1.6 system-ui, sans-serif", color: "#c9d1d9" }}>
-        {b.text}
-      </pre>
+      <div style={{ margin: 0, wordBreak: "break-word" }}>
+        <Markdown text={b.text} />
+      </div>
     );
   }
   if (b.kind === "status") return <div style={{ color: "#6e7681", fontSize: 11 }}>· {b.text}</div>;

@@ -165,9 +165,39 @@ test("상태 문구는 **각각 한 줄** 다 — 같은 종류라는 이유로 
   );
 });
 
-test("도구 호출도 **각각** 쌓인다 — 같은 도구를 두 번 불렀다 한 줄이 되면 몇 번 불렀는지 모른다", () => {
+/**
+ * **설계를 뒤집었다** (2026-10-01) — 실측이 근거다.
+ *
+ * 예전엔 이렇게 고정했다: "도구 호출도 **각각** 쌓인다 — 같은 도구를 두 번 불렀다 한 줄이
+ * 되면 몇 번 불렀는지 모른다." 그때는 맞았다 — 화면에 명령이 두 개 뜨는 것을
+ * "따로 쌓이는 게 안전하다" 로 읽었다.
+ *
+ * **실측이 반대였다.** 서버는 `kill …` 을 **한 번만** 실행했는데 화면에는 `셸 실행` 이
+ **두 개** 있었다(서버 로그 1줄 · DOM 2개, y=98 / y=130). 원인은 서버가 같은 호출을
+ `done:false` 과 `done:true` 로 **두 번** 보내는데, `tool` 이 `streamable` 이 아니어서
+ **항상 새 블록**을 만든 것이었다.
+ *
+ * 그래서 **합치되**, 경계를 정했다: **완료(`done: true`)가 끝이다.** 완료된 블록 뒤의
+ * 같은 도구는 **새 호출**이므로 새 블록이어야 한다. 그러지 않으면 서로 다른 명령이
+ * 영원히 하나가 된다.
+ *
+ * 이 테스트는 그 **경계**를 고정한다. 아래 두 사건은 **둘 다 진행 중**이므로 하나가
+ * 맞다 — "같은 도구 두 번" 이 아니라 **"실행 시작과 완료"** 다.
+ */
+test("**진행 중인** 같은 도구는 **하나**다 — 호출과 완료가 별개 블록이면 명령이 두 개로 보인다", () => {
   let b: AgentBlock[] = [];
-  b = applyEvent(b, { type: "agent.tool", text: "read_file", tool: { name: "read_file" }, at: 1000 });
-  b = applyEvent(b, { type: "agent.tool", text: "read_file", tool: { name: "read_file" }, at: 1100 });
-  assert.equal(b.length, 2, "같은 도구 두 번이 한 사건으로 합쳐졌다");
+  b = applyEvent(b, { type: "agent.tool", text: "read_file", tool: { name: "read_file", done: false }, at: 1000 });
+  b = applyEvent(b, { type: "agent.tool", text: "read_file", tool: { name: "read_file", done: true }, at: 1100 });
+  assert.equal(b.length, 1, `호출과 완료가 ${b.length}개 블록이다 — 화면에 두 개로 보인다`);
+  assert.equal(b[0]!.tool?.done, true, "합쳐졌는데 완료 표시가 없다 — '실행 중' 이 남는다");
+});
+
+test("**완료된 뒤의** 같은 도구는 새 블록이다 — 경계가 없으면 명령이 영원히 하나가 된다", () => {
+  let b: AgentBlock[] = [];
+  b = applyEvent(b, { type: "agent.tool", text: "a", tool: { name: "run_shell", done: false }, at: 1000 });
+  b = applyEvent(b, { type: "agent.tool", text: "a", tool: { name: "run_shell", done: true }, at: 1100 });
+  // **끝난 뒤** 다시 호출 — 같은 도구 이름이어도 **별개 명령**이다.
+  b = applyEvent(b, { type: "agent.tool", text: "b", tool: { name: "run_shell", done: false }, at: 5000 });
+  assert.equal(b.length, 2, `서로 다른 두 명령이 ${b.length}개 블록이다 — 몇 번 불렀는지 모른다`);
+  assert.equal(b[1]!.tool?.done, false, "새 명령이 '완료' 로 표시된다");
 });

@@ -37,50 +37,64 @@ export interface LaunchOptions {
 }
 
 /**
- * CDP `webSocketDebuggerUrl` 이 **우리가 띄운 창**인지 판정한다 (2026-10-01 실측).
+ * CDP 에 붙은 **창이 우리 것인지** 판정한다 (2026-10-01 실측 2회).
  *
- * 왜 필요한가: CDP 포트(`9222`)는 **고정**이다. 이전 실행에서 남은 창이 그 포트를
- * 붙잡고 있으면 **우리 창은 붙지 못하고**, GPU 검사는 **남의 창**을 읽는다. 그 결과가
- * 부팅 로그에 `GPU budgeted 모드 (Disabled)` 로 찍혔다 — 실제로 그러았다. 우리가
- * 띄운 프로세스가 아니라 **옛 창**(`--disable-gpu` 로 떠 있던 것)의 값이었다.
+ * ── 무엇을 근거로 삼았고, 왜 틀렸나 ────────────────────────────────────────
  *
- * 이런 오탐은 위험하다. 통과도 실패도 **거짓말**이 되기 때문이다:
- *  - **남의 `off` 창**을 읽으면 → "GPU 비활성 확인" 이라고 **거짓 통과**.
- *  - **남의 `full` 창**을 읽으면 → "비활성 미확인" 이라고 **거짓 실패**.
+ * **첫 판정: `webSocketDebuggerUrl` 의 프로필 경로.** 틀렸다. 실측:
  *
- * 그래서 판정 불가하면 **모른다고** 말한다. `disabled_off` 같은 문자열을 보고
- * "확인했다" 고 말하는 것이 여기서 하지 않는다.
+ *   ws://127.0.0.1:9222/devtools/browser/6dade661-8a93-4ea9-b4e6-0f080f97f96a
  *
- * 디렉터리 경로가 드러나지 않는 빌드도 있다 — 그 경우에도 **포기하지 않는다**
- * 확인 가능한 범위(경로 노출 여부)를 그대로 돌려주며, 호출부가 그 사실로
- * "판정 불가" 를 남긴다.
+ * **프로필 경로가 아니다. UUID 다.** Chrome 은 CDP 브라우저 ID 를 준다.
+ * 그래서 첫 판정은 **자기 창에서도 항상 `ours: null`** 이 되었고, 결과적으로
+ * GPU 판정을 **영구히 막았다** — 부팅 로그가 매번 "남의 창입니다" 로 끝났다.
+ *
+ * **잘못 고친 쪽이 더 나쁜 결함이었다.** 원래 문제(남의 창을 측정)는 실제로 있었지만,
+ * 이 수정은 **자기 창도 막았다.** 검사 하나가 기능을 죽인 셈이다. 그래서 지금은
+ * **판정 불가일 때 막지 않는다** — 아래 근거를 못 얻으면 **측정한다**가 아니라
+ * 근거가 **확실히 없을 때만** 막는다.
+ *
+ * ── 지금 쓰는 근거 ─────────────────────────────────────────────────────────
+ *
+ * **앱 URL(포트 + 경로)** 이 실제로 자기 것임을 보여주는 값이다. 남의 창은
+ * 그 포트를 열고 있지 않다. 실측으로 자기 창의 탭이 `http://127.0.0.1:7317/` 다.
+ *
+ * 그래서 규칙은 **부정 방향**이다:
+ *  - **우리 앱 URL 이 보인다** → 확실히 우리 창 → **측정한다.**
+ *  - **앱 URL 이 하나도 안 보인다** → 근거 없음 → **측정하지 않는다**(자기 창이
+ *    아직 페이지를 못 열었을 수 있다. 이때 "남의 창" 이라고 단정하지 않는다.)
+ *  - **URL 형식이 못 읽혔다** → 알 수 없다 → **측정하지 않는다.**
  */
 export type WindowIdentity =
-  /** 확인했고, 우리 창이다. */
-  | { ours: true }
-  /** 다른 프로필의 창이다 — **측정하면 안 된다.** */
-  | { ours: false; seenDir: string }
-  /** 프로필 경로가 노출되지 않아 **알 수 없다.** 측정하면 안 된다. */
-  | { ours: null };
+  /** 앱 URL 로 확인 — 우리 창이다. 측정한다. */
+  | { ours: true; via: "app-url" }
+  /** 앱 URL 이 없다 — 근거가 없다. 측정하지 않는다. 단, "남의 창" 이라 단정하지 않는다. */
+  | { ours: null; why: string };
 
 /**
- * `wantDir` 은 우리가 띄울 때 넘긴 `userDataDir`, `wsUrl` 은 CDP 가 준
- * `webSocketDebuggerUrl`. 둘 다 **비교 가능한 형태**로 만든다 — 경로 끝의
- * 슬래시를 무시하고, 그렇지 않으면 `/tmp/p` 와 `/tmp/p/` 가 다른 창으로 보인다.
+ * CDP 의 탭 목록에서 **우리 앱 URL 이 있는지** 본다.
+ *
+ * `tabUrls` 는 CDP `/json/list` 의 url 들. 우리 앱은 IDE 포트(`7317`)에서 나오므로
+ * **포트를 본다** — 경로는 SPA 라 `/` 일 수 있다.
  */
-export function windowIdentity(wsUrl: string | undefined, wantDir: string | undefined): WindowIdentity {
-  if (!wsUrl || !wantDir) return { ours: null };
-  const m = /devtools\/browser\/(.*)$/.exec(wsUrl);
-  if (!m?.[1]) return { ours: null };
-  let seen: string;
-  try {
-    seen = decodeURIComponent(m[1]);
-  } catch {
-    // 깨진 퍼센트 인코딩 — 경로로 쓸 수 없다. **추측하지 않는다.**
-    return { ours: null };
+export function windowIdentity(
+  tabUrls: readonly string[] | undefined,
+  idePort: number | undefined,
+): WindowIdentity {
+  if (!tabUrls || tabUrls.length === 0) {
+    return { ours: null, why: "CDP 탭 목록이 비어 있다" };
   }
-  const norm = (p: string): string => p.replace(/\/+$/, "");
-  return norm(seen) === norm(wantDir) ? { ours: true } : { ours: false, seenDir: seen };
+  if (typeof idePort !== "number" || !Number.isFinite(idePort)) {
+    return { ours: null, why: "앱 포트를 모르겠다" };
+  }
+  const needle = `:${idePort}/`;
+  const hit = tabUrls.find((u) => typeof u === "string" && u.includes(needle));
+  if (!hit) {
+    // **"남의 창" 이라 단정하지 않는다** — 자기 창이 아직 페이지를 못 열었을 수 있다.
+    // 둘을 구분하지 못하면 **모른다고** 말하는 것이 거짓말보다 싸다.
+    return { ours: null, why: `우리 앱(:${idePort}) URL 이 CDP 탭에 없다` };
+  }
+  return { ours: true, via: "app-url" };
 }
 
 /** 항상 들어가는 기본 그룹 (§4.1). */

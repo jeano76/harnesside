@@ -1,119 +1,107 @@
 /**
- * GPU 판정이 **남의 창을 읽지 않는지** (2026-10-01).
+ * GPU 판정 — **자기 창인지** 확인하는 근거 (2026-10-01 실측 2회).
  *
- * 실측으로 출발했다. 부팅 로그에 이 줄이 있었다:
+ * ── 이 파일이 두 번 다시 쓰인 이유 ──────────────────────────────────────────
  *
- *   [gpu] GPU budgeted 모드 (Disabled)
+ * **1판: `webSocketDebuggerUrl` 의 프로필 경로.** 실제 CDP 응답은 이렇다:
  *
- * `budgeted` 인데 `Disabled` 라니 모순이다. 그래서 플래그 생성기를 직접 돌려 확인했다 —
- * **`budgeted` 플래그에는 `--disable-gpu` 가 없다.** 실제 `--disable-gpu` 로 떠 있던
- * 프로세스를 찾아보니 **이전 실행에서 남은 창**이었다(pid 763640, CDP 9222 점유).
+ *   ws://127.0.0.1:9222/devtools/browser/6dade661-8a93-4ea9-b4e6-0f080f97f96a
  *
- * 즉 이 검사는 **우리가 띄우지 않은 창**을 읽어 GPU 가 꺼졌다고 보고했다. 더 나쁜 건
- * 이게 **양방향으로** 거짓말한다는 것이다:
- *  - 남의 `off` 창 → "GPU 비활성 확인" 이라는 **거짓 통과**
- *  - 남의 `full` 창 → "비활성 미확인" 이라는 **거짓 실패**
+ * 경로가 **아니다. UUID 다.** 그래서 그 판정은 자기 창에서도 항상 `ours: null`
+ * 이 되었고, **GPU 판정을 영구히 막았다.** 부팅 로그가 매번 "남의 창입니다" 로
+ * 끝났다. 원래 문제(남의 창을 측정) 는 실제로 있었지만, 이 수정은 **자기 창도 막았다.**
  *
- * 여기서는 판정 함수 자체와, 판정 불가가 **거짓말로 바뀌지 않는지** 를 고정한다.
+ * **잘못 고친 쪽이 더 나쁜 결함이다.** 그래서 2판은 근거를 바꿨다 — **앱 URL** 은
+ * 실제로 자기 것임을 보여준다(실측: 자기 창의 탭은 `http://127.0.0.1:7317/`).
+ *
+ * 2판의 규칙은 **부정 방향**이다:
+ *   - 앱 URL 이 보인다 → **확실히 우리 창** → 측정한다.
+ *   - 없다 → **근거 없음** → 측정하지 않는다. 단 **"남의 창" 이라 단정하지 않는다.**
+ *   - 형식이 깨졌다 → 알 수 없다 → 측정하지 않는다.
+ *
+ * **`ours: false` 를 만들지 않는다.** "우리 것이 아님" 과 "모름" 을 구분할 수 없으면
+ * **모른다고** 말하는 게 낫다 — 단정은 근거 없이 하는 것이다.
  */
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { windowIdentity, gpuFlags, launchFlags, profileDir } from "./browserFlags.js";
+import { windowIdentity, gpuFlags, launchFlags, IDE_DEFAULT_PORT } from "./browserFlags.js";
 
-// ── 1. 자기 창 판정 ──────────────────────────────────────────────────────────
+const APP = `http://127.0.0.1:${IDE_DEFAULT_PORT}/`;
 
-test("**우리 프로필**이면 우리 창이다", () => {
-  const dir = "/tmp/opencode/ub";
-  const ws = `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent(dir)}`;
-  assert.deepEqual(windowIdentity(ws, dir), { ours: true });
+// ── 1. 자기 창 ──────────────────────────────────────────────────────────────
+
+test("**우리 앱 URL** 이 탭에 있으면 자기 창이다", () => {
+  const r = windowIdentity([APP], IDE_DEFAULT_PORT);
+  assert.equal(r.ours, true);
 });
 
-test("**다른 프로필**이면 남의 창이다 — 측정을 막아야 한다", () => {
-  const ws = `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent("/tmp/opencode/c3")}`;
-  const who = windowIdentity(ws, "/tmp/opencode/ub");
-  assert.equal(who.ours, false, "남의 창을 우리 창으로 봤다");
-  assert.equal((who as { seenDir: string }).seenDir, "/tmp/opencode/c3", "어느 창인지 말하지 않는다");
+test("앱 URL 이 **경로를 거쳐도** 우리 창이다 — SPA 라 `/` 일 수 있다", () => {
+  assert.equal(windowIdentity([`http://127.0.0.1:${IDE_DEFAULT_PORT}/?t=TOKEN`], IDE_DEFAULT_PORT).ours, true);
+  assert.equal(windowIdentity([`http://127.0.0.1:${IDE_DEFAULT_PORT}/anything`], IDE_DEFAULT_PORT).ours, true);
 });
 
-test("**경로 끝 슬래시**는 같은 창이다 — `/tmp/p` 와 `/tmp/p/` 가 다른 창으로 보이면 안 된다", () => {
-  const ws = `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent("/tmp/p/")}`;
-  assert.equal(windowIdentity(ws, "/tmp/p").ours, true, "끝 슬래시 하나 때문에 다른 창으로 봤다");
+test("**URL 이 여러 개**여도 우리 것이 하나 있으면 자기 창이다", () => {
+  assert.equal(windowIdentity(["about:blank", "chrome://newtab", APP], IDE_DEFAULT_PORT).ours, true);
 });
 
-test("**경로에 한글이나 공백**이 있어도 경로로 읽는다 — 인코딩만 풀면 된다", () => {
-  const dir = "/tmp/내 프로필/프로필 dir";
-  const ws = `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent(dir)}`;
-  assert.equal(windowIdentity(ws, dir).ours, true, "인코딩된 경로를 못 읽어 다른 창으로 봤다");
+test("**자기 창인데 막지 않는다** — 막으면 기능이 죽는다 (1판이 그렇게 죽었다)", () => {
+  // **이게 1판의 실제 실패다.** 자기 창이 `ours: null` 이 되어 GPU 판정이 영구히
+  // 막혔다. 막는 쪽이 풀리는 쪽보다 **오류가 크다** — 판정을 못 하는 것은
+  // "모르다" 지만, 측정 안 하는 것은 **기능이 죽은 것**이다.
+  const r = windowIdentity([APP], IDE_DEFAULT_PORT);
+  assert.notEqual(r.ours, null, "자기 창을 '모름' 으로 처리한다 — GPU 판정이 영구히 막힌다");
 });
 
-test("**앞부분만 같으면 남의 창이다** — `/tmp/p` 와 `/tmp/p2` 를 같다고 보면 안 된다", () => {
-  const ws = `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent("/tmp/p2")}`;
-  assert.equal(windowIdentity(ws, "/tmp/p").ours, false, "접두 일치로 우리 창이라 했다");
-});
+// ── 2. 남의 창 · 근거 없음 ──────────────────────────────────────────────────
 
-test("**깨진 퍼센트 인코딩**은 추측하지 않는다 — `ours: null` 이 정답", () => {
-  // `%` 가 단독으로 나오면 decodeURIComponent 가 예외를 던진다. 그때 **"아니다" 도
-  // "맞다" 도 아니고** 모른다고 말해야 한다 — 새는 창에서 false 를 내면 우리 창을
-  // 버리고, true 를 내면 남의 창을 믿는다.
-  const ws = "ws://127.0.0.1:9222/devtools/browser/%E0%A4%A";
-  assert.deepEqual(windowIdentity(ws, "/tmp/x"), { ours: null });
-});
-
-test("**wsUrl 이 없으면** 모른다 — 빈 문자열을 경로로 보지 않는다", () => {
-  assert.deepEqual(windowIdentity(undefined, "/tmp/x"), { ours: null });
-  assert.deepEqual(windowIdentity("", "/tmp/x"), { ours: null });
-});
-
-test("**경로 형식이 아니면** 모른다 — devtools/browser 가 없으면 경로가 없다", () => {
-  assert.deepEqual(windowIdentity("ws://127.0.0.1:9222/something/else", "/tmp/x"), { ours: null });
-});
-
-test("**우리 프로필을 모르면** 모른다 — 없는데 맞는 척하면 남의 창을 믿는다", () => {
-  const ws = `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent("/tmp/other")}`;
-  assert.deepEqual(windowIdentity(ws, undefined), { ours: null }, "모르는 것을 아는 척했다");
-});
-
-test("**`ours: null` 과 `ours: false` 는 다르다** — 둘을 합치면 결함이 숨는다", () => {
-  // false = **확인함·남의 창**. null = **모름**. 둘을 같은 값으로 두면
-  // "왜 GPU 확인이 안 되었나" 를 로그에서 못 찾는다.
-  const other = windowIdentity(
-    `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent("/tmp/other")}`,
-    "/tmp/mine",
+test("**남의 창**에는 우리 앱 URL 이 없다 — 근거 없음으로 처리한다", () => {
+  const r = windowIdentity(["http://127.0.0.1:7317/"], 9222); // 앱은 7317
+  assert.equal(r.ours, null);
+  // **"남의 창" 이라 단정하지 않는다** — 자기 창이 아직 페이지를 못 열었을 수 있다.
+  assert.ok(
+    !("seenDir" in r),
+    "근거 없이 '남의 창' 이라 단정했다 — 확인 못 한 것과 아는 것은 다르다",
   );
-  const unknown = windowIdentity("ws://127.0.0.1:9222/x", "/tmp/mine");
-  assert.equal(other.ours, false);
-  assert.equal(unknown.ours, null);
-  assert.notEqual(other.ours, unknown.ours);
 });
 
-// ── 2. 실측 근거: budgeted 는 GPU 를 끄지 않는다 ────────────────────────────
+test("**탭 목록이 비어 있어도** '남의 창' 이라 하지 않는다", () => {
+  const r = windowIdentity([], IDE_DEFAULT_PORT);
+  assert.equal(r.ours, null);
+  assert.ok(!("seenDir" in r), "빈 목록을 '남의 창' 이라 했다");
+});
+
+test("**탭 목록을 못 읽었으면** 모른다", () => {
+  assert.equal(windowIdentity(undefined, IDE_DEFAULT_PORT).ours, null);
+});
+
+test("**앱 포트를 모르면** 모른다 — 0 으로 비교하면 아무 창도 우리 창이 된다", () => {
+  // 실측 위험: 포트를 모르는 채 비교하면 `undefined` 와 비교해 **전부 걸린다.**
+  assert.equal(windowIdentity([APP], undefined).ours, null);
+  assert.equal(windowIdentity([APP], Number.NaN).ours, null);
+  // NaN 을 그대로 넣으면 문자열에 `NaN` 이 있어 우연히 통과할 수 있다.
+  assert.equal(windowIdentity(["http://127.0.0.1:NaN/"], Number.NaN).ours, null);
+});
+
+test("**다른 포트**의 URL 은 우리 것이 아니다 — 포트를 본다", () => {
+  // `73170` 처럼 포트 **접두사**로 겹치면 안 된다 — 경계가 필요해 보인다.
+  assert.equal(windowIdentity(["http://127.0.0.1:73170/"], IDE_DEFAULT_PORT).ours, null);
+  assert.equal(windowIdentity(["http://127.0.0.1:17317/"], IDE_DEFAULT_PORT).ours, null);
+});
+
+test("**ports 7317 과 73170 이 구별된다** — 문자열 검색이 아니라 경계를 본다", () => {
+  assert.equal(windowIdentity(["http://127.0.0.1:73170/"], 7317).ours, null);
+});
+
+// ── 3. 실측 근거 — 모드별 플래그 ───────────────────────────────────────────
 //
-// 이게 없으면 1번 검사가 "실제로 문제가 있었나" 를 증명하지 않는다. 즉 1번은
-// **실제 문제의 해법**이고, 여기 없으면 **없는 문제의 해법**이다.
-test("**budgeted** 는 `--disable-gpu` 를 넣지 않는다 — 실측된 모순의 근거", () => {
-  const flags = gpuFlags("budgeted");
-  assert.ok(
-    !flags.includes("--disable-gpu"),
-    `budgeted 에 --disable-gpu 가 있다: ${flags.join(" ")}`,
-  );
-  assert.ok(
-    !flags.includes("--use-gl=disabled"),
-    "GL 구현체를 없애면 GPU 를 끄는 것과 같다 — 예산 모드에서 과하다",
-  );
-});
-
-test("**off** 는 `--disable-gpu` 를 넣는다 — 두 모드가 **구별되어야** 판정이 의미를 갖는다", () => {
+// 위 규칙이 **실제 문제의 해법**이어야 한다. 이게 없으면 "없는 문제의 해법" 이다.
+test("**off** 는 `--disable-gpu` 를 넣는다 — 두 모드가 구별되어야 판정이 의미를 갖는다", () => {
   assert.ok(gpuFlags("off").includes("--disable-gpu"));
 });
 
-test("**off** 에는 소프트웨어 래스터 차단도 있다 — 없으면 GPU 를 꺼도 SwiftShader 가 산다", () => {
-  const f = gpuFlags("off");
-  assert.ok(f.includes("--disable-software-rasterizer"), "이게 빠지면 GPU off 를 측정할 수 없다");
-  assert.ok(
-    !f.includes("--use-angle=swiftshader"),
-    "이건 소프트웨어 GL 을 켜는 플래그다 — 정반대다",
-  );
+test("**budgeted** 는 GPU 를 끄지 않는다", () => {
+  assert.ok(!gpuFlags("budgeted").includes("--disable-gpu"), gpuFlags("budgeted").join(" "));
 });
 
 test("**전체 플래그**를 만들어도 budgeted 에서 GPU 차단 플래그가 없다", () => {
@@ -123,28 +111,38 @@ test("**전체 플래그**를 만들어도 budgeted 에서 GPU 차단 플래그�
     userDataDir: "/tmp/x",
     noSandbox: true,
   });
-  assert.equal(
-    built.args.includes("--disable-gpu"),
-    false,
-    `전체 조립 뒤에 GPU 차단 플래그가 생겼다: ${built.args.join(" ")}`,
+  assert.equal(built.args.includes("--disable-gpu"), false, built.args.join(" "));
+});
+
+test("**off** 에는 소프트웨어 래스터 차단도 있다 — 없으면 GPU 를 꺼도 SwiftShader 가 산다", () => {
+  const f = gpuFlags("off");
+  assert.ok(f.includes("--disable-software-rasterizer"));
+  assert.ok(!f.includes("--use-angle=swiftshader"), "이건 소프트웨어 GL 을 켜는 플래그다");
+});
+
+// ── 4. 자기 검사 ────────────────────────────────────────────────────────────
+
+test("[살아있는지] 앱 포트 상수가 **코드와 같다** — 상수를 하드코딩하지 않는다", () => {
+  // 검사에서 `7317` 을 그대로 썼으면, 포트가 바뀌면 **검사는 통과하는데 코드는 틀린다.**
+  assert.equal(IDE_DEFAULT_PORT, 7317);
+  assert.equal(windowIdentity([`http://127.0.0.1:${IDE_DEFAULT_PORT}/`], IDE_DEFAULT_PORT).ours, true);
+});
+
+test("**모든 경우**가 셋 중 하나다 — 네 번째 상태가 생기면 안 된다", () => {
+  // 판정 결과는 `true` 또는 `null` 뿐이다. `false` 는 **나올 수 없다** —
+  // 근거가 없으면 "모름" 이지 "남의 것" 이 아니다.
+  const cases = [windowIdentity([APP], IDE_DEFAULT_PORT), windowIdentity([], 1), windowIdentity(undefined, 1)];
+  for (const c of cases) {
+    assert.ok(c.ours === true || c.ours === null, `네 번째 상태: ${JSON.stringify(c)}`);
+  }
+  assert.ok(
+    cases.every((c) => !("oursFalse" in c)),
+    "판정에 쓸 수 없는 필드가 있다",
   );
-  assert.equal(built.mode, "budgeted");
 });
 
-// ── 3. 이 검사가 **자기 자신을** 속이지 않는지 ───────────────────────────────
-//
-// 1번이 "남의 창을 막는다" 고 말하려면, **우리가 띄운 창을 막지 않아야** 한다.
-// 이게 깨지면 실제 앱이 GPU 검사를 못 한다 — 막지도 않고 되지도 않는 상태다.
-test("**우리 창은 통과한다** — 막아 버리면 GPU 검사가 항상 실패한다", () => {
-  const dir = "/home/jeano/.harnesside/chrome-profile";
-  const ws = `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent(dir)}`;
-  assert.equal(windowIdentity(ws, dir).ours, true);
-});
-
-test("**경로를 정확히 넣으면 통과한다** — 우리가 띄울 때 넘기는 값을 그대로 쓴다", () => {
-  // 실제 호출은 `this.opts.userDataDir` 이며, 없으면 `profileDir(home)` 이다.
-  // 두 값이 다르면 자기 창을 막는다 — 그래서 **동일해야** 한다.
-  const dir = profileDir("/home/jeano");
-  const ws = `ws://127.0.0.1:9222/devtools/browser/${encodeURIComponent(dir)}`;
-  assert.equal(windowIdentity(ws, dir).ours, true);
+test("판정이 **모르다고 하면 이유**를 말한다 — 이유 없는 '모름' 은 방치가 된다", () => {
+  const r = windowIdentity([], IDE_DEFAULT_PORT);
+  assert.equal(r.ours, null);
+  assert.ok(r.ours === null && typeof (r as { why?: unknown }).why === "string", "이유가 없다");
 });

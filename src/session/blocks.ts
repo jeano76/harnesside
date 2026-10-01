@@ -234,8 +234,23 @@ export function appendToBlock(
   tool?: AgentBlock["tool"]
 ): AgentBlock[] {
   const last = blocks[blocks.length - 1];
-  const streamable = kind === "text" || kind === "reasoning";
-  const sameTool = kind !== "tool" || (!!last && last.tool?.name === tool?.name);
+  // **도구도 하나의 블록으로 합친다** (2026-10-01 실측).
+  //
+  // 서버가 같은 호출을 **두 번** 보낸다 — `agentService` 의 `onToolCall`(done:false)과
+  // `onToolCallDone`(done:true). 예전엔 `tool` 을 `streamable` 에서 빼서 **항상 새
+  // 블록**을 만들었고, 그 결과 **명령 하나가 화면에 두 개**로 떴다(실측: 서버 로그는
+  // `kill …` 을 **한 번만** 실행했는데 DOM 에 `셸 실행` 이 2개 있었다 — y=98, y=130).
+  //
+  // **요구**: "쉘 실행과 쉘 실행 결과는 하나의 블럭에서 관리가 되어야."
+  //
+  // **합치는 조건은 "진행 중인 같은 도구" 다.** 완료(`done: true`)된 블록 뒤의 새 호출은
+  // **새 블록이어야 한다** — 그렇지 않으면 연속된 서로 다른 명령이 하나로 뭉친다.
+  const streamable = kind === "text" || kind === "reasoning" || kind === "tool";
+  const sameTool =
+    kind !== "tool" ||
+    // **아직 끝나지 않은** 같은 도구일 때만 합친다. `last` 가 `done: true` 면 끝난
+    // 것이므로 다음 호출은 새 블록이 되어야 한다.
+    (!!last && last.tool?.name === tool?.name && last.tool?.done !== true);
   if (streamable && last && last.kind === kind && sameTool && at - last.at < MERGE_WINDOW_MS) {
     return [
       ...blocks.slice(0, -1),

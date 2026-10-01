@@ -12,7 +12,7 @@ import { createInterface } from "node:readline";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { launchFlags, profileDir, windowIdentity, CDP_DEFAULT_PORT, type LaunchOptions } from "./browserFlags.js";
+import { launchFlags, profileDir, windowIdentity, CDP_DEFAULT_PORT, IDE_DEFAULT_PORT, type LaunchOptions } from "./browserFlags.js";
 import type { GpuMode } from "../setup/gpuPolicy.js";
 
 /** 브라우저 바이너리 탐지 순서 (§4.1). */
@@ -376,35 +376,44 @@ export class BrowserLauncher {
   /**
    * CDP 로 GPU 정보 한 번 읽기. 소켓은 열었다 닫는다(장시간 유지하면 리소스를 붙잡는다).
    *
-   * **자기 창인지 먼저 확인한다**(2026-10-01 실측). CDP 포트(`9222`)는 **고정**이라,
-   * 이전 실행에서 남은 창이 붙잡고 있으면 **우리 창은 그 포트에 붙지 못하고**
-   * 여기서는 **남의 창**을 측정한다. 그 결과가 `budgeted` 인데 `Disabled` 라는
-   * 모순된 부팅 로그가 났고 — 실제로 그러였다(pid 763640 의 옛 창이 `--disable-gpu`
-   * 로 떠 있었고, 우리는 `budgeted` 플래그에는 `--disable-gpu` 가 **없음**을 확인했다).
+   * **자기 창인지 먼저 확인한다**(2026-10-01 실측 2회). CDP 포트(`9222`)는 **고정**이라
+   * 이전 실행에서 남은 창이 붙잡고 있으면 **우리 창은 그 포트에 붙지 못하고** 여기서는
+   * **남의 창**을 측정한다. 그 결과가 `budgeted` 인데 `Disabled` 라는 모순된 로그가 났고
+   * 실제로 그러였다.
    *
-   * **`webSocketDebuggerUrl` 에 프로필 디렉터리(=`` 와 `--user-data-dir`)가 실린다.**
-   * 이것으로 "이 창이 우리 것인가" 를 확인할 수 있다. 확인하지 않으면 **남의 창을
-   * 우리 창으로 보고** GPU 가 꺼졌다고 결론짓는다 — 통과도 실패도 거짓말이 되는
-   * 방향이다. 그래서 모르면 **모른다고** 남긴다.
+   * **근거는 탭 목록의 앱 URL 이다**(첫 판정의 프로필 경로는 **틀렸다** — CDP 가 주는
+   * `/devtools/browser/<UUID>` 는 경로가 아니라 ID 다. 그래서 자기 창도 막았다).
+   * 근거가 없으면 **측정하지 않는다** — 다만 "남의 창" 이라 단정하지 않는다.
    */
   private async readGpuOnce(port: number): Promise<Record<string, unknown> | null> {
     const f = this.deps.fetchImpl ?? fetch;
+
+    // **탭 목록** — 우리 앱 URL 이 있는지 본다.
+    const listRes = await f(`http://127.0.0.1:${port}/json/list`).catch(() => null);
+    let tabUrls: string[] | undefined;
+    if (listRes?.ok) {
+      try {
+        const arr = (await listRes.json()) as unknown;
+        if (Array.isArray(arr)) {
+          tabUrls = arr
+            .map((t) => (t && typeof t === "object" ? (t as { url?: unknown }).url : undefined))
+            .filter((u): u is string => typeof u === "string");
+        }
+      } catch {
+        /* 형식이 다르면 근거 없음 */
+      }
+    }
+
+    const who = windowIdentity(tabUrls, this.opts.idePort ?? IDE_DEFAULT_PORT);
+    if (who.ours !== true) {
+      this.log("warn", `CDP(${port}) 창이 우리 것인지 확인 못 했다 — ${who.why}. GPU 판정을 건너뜁니다`);
+      return null;
+    }
+
     const v = await f(`http://127.0.0.1:${port}/json/version`).catch(() => null);
     if (!v || !v.ok) return null;
     const info = (await v.json()) as { webSocketDebuggerUrl?: string; Browser?: string };
     if (!info.webSocketDebuggerUrl) return null;
-
-    // **자기 창인가.** 남의 창을 측정하면 통과도 실패도 거짓말이 된다.
-    const who = windowIdentity(info.webSocketDebuggerUrl, this.opts.userDataDir);
-    if (who.ours !== true) {
-      this.log(
-        "warn",
-        who.ours === false
-          ? `CDP(${port}) 에 붙은 창이 우리 것이 아닙니다 (프로필 ${who.seenDir} ≠ ${this.opts.userDataDir}) — GPU 판정을 건너뜁니다`
-          : `CDP(${port}) 창이 우리 것인지 확인할 수 없습니다 (프로필 경로 미노출) — GPU 판정을 건너뜁니다`,
-      );
-      return null;
-    }
     return this.systemInfo(info.webSocketDebuggerUrl);
   }
 
