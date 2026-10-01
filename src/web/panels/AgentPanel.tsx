@@ -44,6 +44,19 @@ export { applyEvent, appendToBlock };
  * 예시를 **텍스트로만** 적지 않는 이유는 "읽고 직접 타이핑" 을 요구하기 때문이다 —
  * 빈 화면의 목적은 "시작하기" 를 한 번의 클릭으로 줄이는 것이다.
  */
+/**
+ * 이만큼 묶이면 **요약줄을** 보여준다 (2026-10-01).
+ *
+ * 수를 **왜** 8으로 정했는지는 측정하지 않았다 — 대신 **기준**을 적어 둔다:
+ * 화면 높이를 넘기기 시작하는 정도면 사용자는 스크롤바를 찾고, 각 묶음을 하나씩
+ * 접으려면 화면을 먼저 훑어야 하는데 **무엇을 접어야 하는지 그 벽 안에서 모른다.**
+ * 그래서 "한 화면에 다 보이지 않을 만큼" 을 넘어가는 지점을 넘어서 생기는 불편을
+ * 없애는 최소치로 잡는다. 이 값이 맞는지 확인하지 않았으므로 **기준을 바꿔야 한다면
+ * 바꿔도 된다** — 다만 바꾸는 근거는 "벽이 사라졌어야" 가 아니라 "이 숫자 이후에
+ * 불편했다" 여야 한다.
+ */
+const COLLAPSE_AT = 8;
+
 const EXAMPLES = [
   "이 저장소의 구조를 한 문단으로 설명해 주세요",
   "최근 변경 파일을 찾아 Likely 버그를 하나만 골라 주세요",
@@ -124,26 +137,62 @@ function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle
  * 빠뜨리기 쉽고, 빠뜨리면 "화면 판독기가 무엇인지 말하지 못하는 버튼" 이 된다(M8).
  * 여기선 그걸 구조적으로 막는다 — 라벨을 **쓰지 않으면 컴파일되지 않게**.
  */
-function IconButton({ label, glyph, onClick }: { label: string; glyph: string; onClick: () => void }) {
+/**
+ * 머리 조작: **이름을 **글자로** 보여준다**(2026-10-01).
+ *
+ * 예전엔 아이콘만 있었다(`aria-label` + `title`). 그런데:
+ *  - `title` 은 **마우스를 올려야** 보인다. 키보드 사용자는 **아예 못 본다.**
+ *  - `⎇`(변경 검토)와 `▤`(디렉터리)는 **도형이 아니라 임의 기호**다. 첫 사용자는
+ *    무엇인지 알 수 없다 — `⚙` 만도 마찬가지.
+ *
+ * 그래서 **항상 보이는 짧은 라벨**을 함께 둔다. 아이콘은 위치를 잇는 보조로 남는다.
+ * 폭이 문제면 **지금 열려 있는 것 하나만** 라벨을 보여준다 — 지금 어디에 있는지가
+ * 가장 자주 필요한 정보라 남은 폭에 들어가고, 나머지는 아이콘 + `aria-label` 이 받는다.
+ *
+ * `labelHidden`(지금 열린 항목)를 생략하면 **항상 라벨** — 그래야 검사가
+ * "이름이 보인다" 를 확인할 수 있다. 숨긴 항목은 `aria-label` 로 이름이 남는다.
+ */
+function IconButton({
+  label,
+  glyph,
+  onClick,
+  active,
+}: {
+  label: string;
+  glyph: string;
+  onClick: () => void;
+  /** 지금 열려 있는가. */
+  active?: boolean;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label={label}
       title={label}
+      aria-pressed={active}
       style={{
-        background: "none",
+        // **열려 있으면 배경이 있다** — "어디에 있나" 를 색이 말하게 한다.
+        // 색만 바꾸지 않는다: 색을 못 보는 사람이 있으므로 **배경과 밑줄**도 함께 준다.
+        background: active ? "#30363d" : "none",
         border: 0,
-        color: "#8b949e",
+        borderBottom: active ? "1px solid #58a6ff" : "1px solid transparent",
+        color: active ? "#c9d1d9" : "#8b949e",
         cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
         font: "inherit",
-        fontSize: 13,
-        lineHeight: 1,
-        padding: "1px 4px",
+        fontSize: 11,
+        lineHeight: 1.4,
+        padding: "1px 5px",
         borderRadius: 4,
       }}
     >
-      {glyph}
+      <span aria-hidden="true" style={{ fontSize: 12 }}>
+        {glyph}
+      </span>
+      {label}
     </button>
   );
 }
@@ -186,6 +235,39 @@ export function AgentPanel({
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   const turns = useMemo(() => groupTurns(blocks), [blocks]);
   const toggle = (i: number) => setCollapsed((c) => ({ ...c, [i]: c[i] !== false }));
+  /**
+   * **전체 접기 / 펼치기**(2026-10-01).
+   *
+   * `collapsed[i] === false` 이 "펼친" 뜻이므로, 접으려면 **모두 true** 로 만든다.
+   * 상태를 **한 값**으로 채우지 않고 전부 덮어써야 새 묶음도 같은 상태를 따른다 —
+   * 개별 값을 계산해서 넣으면 새 대화가 붙을 때마다 규칙이 갈린다.
+   *
+   * **마지막 묶음은 `open` 계산에서 항상 펼친다**(아래). 그래서 여기서 접어도
+   * 진행 중인 묶음이 보이지 않는 일은 없다 — 어기지 않는다.
+   */
+  const setAllCollapsed = (closed: boolean) => {
+    setCollapsed(Object.fromEntries(turns.map((_, i) => [i, closed])));
+  };
+
+  /**
+   * **지금 열려 있는 뷰** — 머리 아이콘이 자기를 밝히는 근거(2026-10-01).
+   *
+   * 왜 블록에서 읽나: `openView` 가 **마지막 블록에 `view` 를 남기는 것**이 진본이다.
+   * 화면이 별도 상태를 들면 **어긋난다** — 열었는데 아무것도 안 밝거나, 안 열었는데
+   * 밝거나. "지금 어디에 있나" 를 모르면 사용자는 세 아이콘 중 무엇이 눌린 상태인지
+   * 몰라 같은 것을 또 눌러 화면을 쌓는다(실측: 같은 설정이 두 번 쌓임은 `openView` 가
+   * 막기 전 실제 있었다).
+   *
+   * **뒤에서부터** 찾는다 — 열림은 항상 **맨 뒤**에 있으므로 앞에서 찾으면 닫힌 뷰를
+   * "열려 있다" 고 착각한다.
+   */
+  const openWhat = useMemo(() => {
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const v = blocks[i]!.view;
+      if (v) return v.what;
+    }
+    return undefined;
+  }, [blocks]);
 
   useEffect(() => {
     // **붙어 있을 때만** 따라간다. 안 그러면 읽던 곳을 빼앗긴다.
@@ -204,7 +286,8 @@ export function AgentPanel({
       {/* 스타일/토글 — §5.3 의 선택지. 숨기면 "생각이 왜 안 보이냐" 를 답할 수 없다. */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 6px", borderBottom: "1px solid #30363d", flexWrap: "wrap" }}>
         {/* ── 머리 아이콘 (2026-10-01) ────────────────────────────────────────────
-            요구: "설정, 변경파일이력 모두 에이젼트 패널 타이틀에 아이콘으로ogi로 ding을
+            요구(원문, 옮기면서 글자가 깨졌던 것을 읽히게 고침):
+            "설정, 변경파일이력 모두 에이젼트 패널 타이틀에 아이콘으로 docking을
             제공하고 각 메뉴 선택시 대화창 처럼 출력화면 안에 블럭화 하여 내용을 보여준다.
             기존 설정과 , 변경검토 패널은 삭제를 한다."
 
@@ -220,9 +303,9 @@ export function AgentPanel({
             아이콘 글자는 **도형**이 아니라 라벨을 축약한 것이라 화면 판독기에는
             의미가 없다. 그래서 `aria-label` 을 준다. */}
         <span style={{ display: "flex", gap: 2 }} role="group" aria-label="보기">
-          <IconButton label="설정" glyph="⚙" onClick={() => onOpenView("settings")} />
-          <IconButton label="변경 검토" glyph="⎇" onClick={() => onOpenView("diff")} />
-          <IconButton label="디렉터리" glyph="▤" onClick={() => onOpenView("dirs")} />
+          <IconButton label="설정" glyph="⚙" active={openWhat === "settings"} onClick={() => onOpenView("settings")} />
+          <IconButton label="변경 검토" glyph="⎇" active={openWhat === "diff"} onClick={() => onOpenView("diff")} />
+          <IconButton label="디렉터리" glyph="▤" active={openWhat === "dirs"} onClick={() => onOpenView("dirs")} />
         </span>
         <span style={{ width: 1, height: 14, background: "#30363d" }} />
         <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "#6e7681" }}>
@@ -278,9 +361,80 @@ export function AgentPanel({
       >
         {blocks.length === 0 && !running && <FirstRun onPick={onExample} />}
 
+        {/* ── 많은 묶음 요약 (2026-10-01) ───────────────────────────────────────────
+            실측: 복원된 대화(211블록)가 **끝없이 이어지는 벽**으로 보였다. 묶음별로
+            접을 수는 있지만 그것을 하나씩 해야 하고, 사용자는 **무엇을 하나씩 접어야
+            하는지조차 모른다.** 211블록이면 몇 묶음인지도 화면에 말돼 있지 않다.
+
+            그래서 묶음이 **많을 때만** 요약을 맨 위에 둔다:
+            - **몇 묶음 · 몇 블록**인지 — 벽의 크기를 알 수 있어야 방향이 잡힌다.
+            - **전체 접기 / 펼치기** — 하나씩이 아니라 한 번에.
+            - 접어도 **마지막 묶음은 항상 펼친다** — 진행 중인데 접으면 안 된다는
+              기존 규칙과 같다. 여기서도 어기지 않는다.
+
+            묶음이 적으면 **숨긴다** — 요약줄이 벽보다 더 거슬리면 그게 더 나쁘다. */}
+        {turns.length > COLLAPSE_AT && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "3px 6px",
+              marginBottom: 6,
+              border: "1px solid #21262d",
+              borderRadius: 6,
+              color: "#8b949e",
+              fontSize: 11,
+            }}
+          >
+            <span>
+              {turns.length}개 대화 묶음 · {blocks.length}개 항목
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={() => setAllCollapsed(true)}
+              style={{
+                background: "#21262d",
+                color: "#c9d1d9",
+                border: "1px solid #30363d",
+                borderRadius: 4,
+                font: "inherit",
+                fontSize: 11,
+                padding: "1px 7px",
+                cursor: "pointer",
+              }}
+            >
+              전체 접기
+            </button>
+            <button
+              type="button"
+              onClick={() => setAllCollapsed(false)}
+              style={{
+                background: "#21262d",
+                color: "#c9d1d9",
+                border: "1px solid #30363d",
+                borderRadius: 4,
+                font: "inherit",
+                fontSize: 11,
+                padding: "1px 7px",
+                cursor: "pointer",
+              }}
+            >
+              전체 펼치기
+            </button>
+          </div>
+        )}
         {turns.map((turn, ti) => {
           const last = ti === turns.length - 1;
-          const open = last ? true : collapsed[ti] === false;
+          // **초기값이 `undefined` 인데 `=== false` 로 "펼침" 을 검사하고 있었다**
+          // (2026-10-01 실측). 그래서 **처음부터 모든 이전 묶음이 닫힘**으로 그려지고,
+          // 사용자가 "펼치기" 를 눌러도 계속 닫혀 있었다 — 닫힘에서 펼침으로 **전이가 안 된다**.
+          // `!== true` 가 맞다: 명시적으로 접은 것(`true`)만 닫힌 것으로 본다.
+          //
+          // **기본은 펼침**이어야 한다 — 대화는 사용자가 쌓아온 것이고, 처음부터 접혀
+          // 있으면 "내 대화가 어디 갔나" 를 해결하려면 **전부 펼치기** 를 눌러야 한다.
+          const open = last ? true : collapsed[ti] !== true;
           return (
             <div
               key={turn.at + "-" + ti}

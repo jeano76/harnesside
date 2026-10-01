@@ -169,8 +169,48 @@ check("URL 에 토큰이 남아있지 않음 (§3.4)", !/[?&]t=/.test(cleanUrl) 
 const monitors = await cdp.eval(`document.body.innerText.includes("모니터") || document.body.innerText.includes("CPU")`);
 check("모니터 패널 (§5.5) 표시", monitors === true);
 
-const agentEmpty = await cdp.eval(`document.body.innerText.includes("아직 메시지가 없습니다") || document.body.innerText.includes("무엇을 할까요")`);
-check("빈 상태가 채워짐 (§11.3: 빈 화면은 결함)", agentEmpty === true);
+/**
+ * 빈 상태 (§11.3: 빈 화면은 결함) — **텍스트가 아니라 클릭 가능성을 본다.**
+ *
+ * 예전 판정(`"아직 메시지가 없습니다"` 같은 **문구**가 있는가) 은 **한 줄 글자로
+ * 채워진 빈 화면을 통과**시켰다. 실제로 그랬다 — 이 검사가 실패한 것은 그 뒤에
+ * 추가된 빈 상태가 아니라, 그 이전의 상태였다. "글자가 하나 있다" 면 충분하다고
+ * 착각해서 왔다.
+ *
+ * 그래서 지금 보는 것:
+ *  1. **누를 수 있는 예시가** 있는가 — 읽고 직접 타이핑하라고 요구하지 않는다.
+ *     빈 상태의 목적은 시작을 **한 번의 클릭**으로 줄이는 것이다.
+ *  2. **키보드 힌트**가 있는가 — Enter/Shift+Enter/Ctrl+K 를 모르면 못 쓴다.
+ */
+const emptyState = await cdp.eval(`(() => {
+  const txt = document.body.innerText;
+  // 빈 상태일 때만 검사한다 — 대화가 있으면 예시 버튼은 당연히 없다.
+  const looksEmpty = txt.includes("여기서 지시를 입력하면");
+  const buttons = [...document.querySelectorAll("button")].map((b) => (b.innerText || "").trim());
+  const examples = buttons.filter((t) => /저장소|파일|테스트|예plain|설명|찾아|정리/.test(t) && t.length > 8);
+  return {
+    looksEmpty,
+    exampleCount: examples.length,
+    hints: /Enter/.test(txt) && /Ctrl\\+K/.test(txt),
+    headLabels: ["설정", "변경 검토", "디렉터리"].filter((l) => txt.includes(l)),
+  };
+})()`);
+check("빈 상태가 채워짐 (§11.3: 빈 화면은 결함)", emptyState.looksEmpty === true);
+check("빈 상태에 **누를 수 있는 예시**가 있다 (§11.3: 읽고 타이핑시키지 않는다)", emptyState.exampleCount >= 3);
+check("키보드 힌트가 보인다 — 모르면 못 쓴다", emptyState.hints === true);
+
+/**
+ * 머리 조작의 **이름이 보인다**(2026-10-01).
+ *
+ * `aria-label` 만으로는 충분하지 않다. **눈으로 보이는 이름**이어야 첫 사용자가
+ * `⎇` 가 무엇인지 안다 — `title` 은 마우스를 올려야 보이고, 키보드 사용자는
+ * 아예 못 본다.
+ */
+check("머리 조작에 **보이는 이름**이 있다 (§M8: 이름 없는 조작은 있을 수 없다)", emptyState.headLabels.length >= 3);
+check(
+  "이름이 **완전히 가려지지 않는다** — 아이콘만 남지 않는다",
+  (await cdp.eval(`[...document.querySelectorAll("button[aria-label]")].filter((b) => /설정|변경 검토|디렉터리/.test(b.getAttribute("aria-label") || "")).every((b) => (b.innerText || "").trim().length > 0)`)) === true,
+);
 
 const draft = await cdp.eval(`!!document.querySelector("textarea")`);
 check("입력창 존재 (§5.7 · M7)", draft === true);

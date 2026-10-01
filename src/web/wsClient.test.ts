@@ -94,13 +94,47 @@ test("seq 를 기억하고, 재연결 때 sinceSeq 로 이어받기를 요청한
   c.close();
 });
 
-test("역순·중복 seq 는 무시해도 이벤트는 전달된다 (필터는 서버 몫)", () => {
+/**
+ * **설계를 뒤집었다** (2026-10-01).
+ *
+ * 예전엔 이렇게 고정해 뒀다: "역순·중복 seq 는 무시해도 이벤트는 전달된다 —
+ * **필터는 서버 몫**." 그때는 맞았다. 서버(`wsHub`)가 `seq > since` 로 걸러준다고
+ * 생각했다.
+ *
+ * **실측이 그 설계를 틀렸다고 증명했다.** 사용자가 셸 명령 하나를 보냈는데 **같은
+ * 블록이 두 개** 떴다. 서버 필터는 `sinceSeq` 를 **보낸 뒤**의 재생에만 걸린다 —
+ * 재연결 중 **이미 도착한** 이벤트는 다시 흘러온다. 그리고 `appendToBlock` 의 `tool`
+ * 은 항상 새 블록을 만들기 때문에 두 번 적용되면 **명령이 두 개로 보인다.**
+ *
+ * 그래서 필터를 **클라이언트로 옮겼다.** 여기서 버리는 것이 화면의 중복을 막는다.
+ * `wsClient.dedupe.test.ts` 가 그 규칙(되감김·epoch·순서·seq 없는 이벤트)을 고정한다.
+ */
+test("**되감긴 seq** 는 버린다 — 재연결로 같은 이벤트가 또 오면 화면에 블록이 둘로 보인다", () => {
   const { c, sockets, events } = setup();
   c.connect();
   sockets[0].open();
   sockets[0].emit(JSON.stringify({ type: "log.append", epoch: "E1", seq: 10, message: "1" }));
   sockets[0].emit(JSON.stringify({ type: "log.append", epoch: "E1", seq: 3, message: "2" })); // 과거
-  assert.equal(events.length, 2, "이벤트를 클라이언트가 임의로 버렸다");
+  assert.deepEqual(
+    events.map((e) => (e as { message?: string }).message),
+    ["1"],
+    "되감긴 이벤트를 적용했다 — 같은 내용이 화면에 두 번 쌓인다",
+  );
+  c.close();
+});
+
+test("**순서가 앞선 seq** 는 **각각** 전달된다 — 필터가 흐름을 막으면 안 된다", () => {
+  const { c, sockets, events } = setup();
+  c.connect();
+  sockets[0].open();
+  for (const seq of [1, 2, 3]) {
+    sockets[0].emit(JSON.stringify({ type: "log.append", epoch: "E1", seq, message: `n${seq}` }));
+  }
+  assert.deepEqual(
+    events.map((e) => (e as { message?: string }).message),
+    ["n1", "n2", "n3"],
+    "새 이벤트를 버렸다 — 로그가 조용히 사라진다",
+  );
   c.close();
 });
 

@@ -17,7 +17,15 @@ export interface CoreLoad {
 
 export interface GpuInfo {
   name: string;
-  utilPct: number;
+  /**
+   * [N/A] 는 계측 불가 — **`null` 이지 0 이 아니다** (2026-10-01).
+   *
+   * 예전엔 `number` 였다. 아래 `tempC` 가 그 이유를 이미 적어 둔 것과 같은 규칙인데
+   * **이 하나만 예외**였고, 그래서 "GPU 를 안 쓰는 것" 과 "GPU 사용률을 못 잰 것" 이
+   * 화면에서 같아졌다. `nvidia-smi` 가 `[N/A]` 를 주면 0 이 찍혔다 — 사용자는
+   * "안 쓴다" 고 읽고, 실제로는 **몰랐다** 고 말해야 하는 자리를 **안다** 고 말했다.
+   */
+  utilPct: number | null;
   /** [N/A] 는 계측 불가 — null 이지 0 이 아니다. */
   tempC: number | null;
   powerW: number | null;

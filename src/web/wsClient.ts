@@ -26,6 +26,20 @@ export class WsClient {
 
   constructor(private opts: WsClientOptions) {}
 
+  /**
+   * **현재 소켓** — 테스트와 진단용 (2026-10-01).
+   *
+   * 왜 필요한가: `ws` 는 private 이라 소켓을 **떼어내서** 이벤트 중복을 재현할 수
+   * 없었다. 그럼 검사는 "창이 다시 붙으면 어떻게 되나" 를 **관찰**만 하다가 통과한다 —
+   * 실제 버그(같은 이벤트가 두 번 적용)를 **만들 수 없다** 는 뜻이다.
+   *
+   * **쓰지 않는다** — 프로덕션 경로가 아니라 관찰 창구다. 공개하되, 여기서
+   * 상태를 바꾸지 않는다(바꾸면 중복 판정 규칙과 어긋난다).
+   */
+  get socket(): WebSocket | null {
+    return this.ws;
+  }
+
   connect(): void {
     if (this.closed) return;
     const Impl = this.opts.WebSocketImpl ?? WebSocket;
@@ -54,7 +68,24 @@ export class WsClient {
         if (this.epoch && this.epoch !== msg.epoch) this.lastSeq = 0;
         this.epoch = msg.epoch;
       }
-      if (typeof msg.seq === "number" && msg.seq > this.lastSeq) this.lastSeq = msg.seq;
+      // **중복은 여기서 버린다** (2026-10-01).
+      //
+      // 예전엔 `lastSeq` 를 **기록만** 하고 무조건 `onEvent` 를 불렀다. 그 결과
+      // **같은 이벤트가 두 번 적용**됐다 — 사용자가 셸 명령 하나를 보냈는데
+      // 같은 블록이 두 개 떴다(실측).
+      //
+      // 왜 서버의 `seq > since` 필터로 안 막히나: 그 필터는 `sinceSeq` 를 **보낸 뒤**의
+      // 재생에만 걸린다. 재연결 중 **이미 도착한** 이벤트는 다시 흘러온다. 그리고
+      // `appendToBlock` 의 `tool` 은 `streamable` 이 아니라 **항상 새 블록**을 만들기
+      // 때문에, 두 번 적용되면 화면에는 **명령이 두 개**로 보인다.
+      //
+      // **되감긴 seq 도 버린다** — seq 는 순서표지니 뒤로 간 것은 이미 본 것이거나
+      // 오래된 것이다. 반대로 **`seq` 가 없는 이벤트는 버리지 않는다** — 계측·제어
+      // 메시지에 seq 가 없을 수 있고, 그것을 버리면 로그가 조용히 사라진다.
+      if (typeof msg.seq === "number") {
+        if (msg.seq <= this.lastSeq) return; // 이미 본 것 — 재생이지 새 이벤트가 아니다
+        this.lastSeq = msg.seq;
+      }
       this.opts.onEvent(msg);
     };
     this.ws.onclose = () => {

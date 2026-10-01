@@ -118,6 +118,24 @@ export interface GaugeProps {
    * 모양은 그대로 두고 **색 판정만** 뒤집는다(§5.5: 임계치는 색만 바꾼다).
    */
   higherIsWorse?: boolean;
+  /**
+   * **값이 없을 때 왜 없는지** (2026-10-01).
+   *
+   * 왜 필요한가: 값이 없으면 화면에는 `?` 와 "측정 불가" 만 남았다. 그런데 그건
+   * **세 가지 다른 상태를 한 문장으로 뭉갠다** —
+   *   1. 측정 도구가 **없다** (이 머신에 `nvidia-smi` 가 없다)
+   *   2. 아직 **첫 표본이 없다** (샘플러가 1초 뒤 채운다)
+   *   3. 읽기는 했는데 **값이 비었다** (권한 없음)
+   *
+   * 사용자는 셋 중 무엇을 해야 하는지 달라서 다르게 대응한다. "측정 불가" 만 보면
+   * **아무것도 할 수 없다** 고 읽고 — 실제로는 GPU 드라이버를 설치하면 된다.
+   *
+   * 그래서 **사유를 자리에서 넘긴다.** 이 컴포넌트가 계기를 아는 게 아니라
+   * **각 계기가 왜 없는지 말하는 것** 이다 — 앞의 `viewExtra` 와 같은 경계다.
+   * 주지 않으면 사유 없는 "측정 불가" 로 돌아간다(호출처를 고칠 수 없으므로
+   * **검사**가 이걸 막는다).
+   */
+  why?: string;
 }
 
 /**
@@ -128,7 +146,7 @@ export interface GaugeProps {
  * 를 배워야 하고, 그 차이를 배우는 대가가 작지 않다 — 그래서 형태는 같게 두고
  * **색 판정만** 뒤집는다.
  */
-export function Gauge({ label, pct, value, color, size = 72, higherIsWorse = true }: GaugeProps) {
+export function Gauge({ label, pct, value, color, size = 72, higherIsWorse = true, why }: GaugeProps) {
   const r = size / 2 - 7;
   const c = 2 * Math.PI * r;
   // **위험 판정은 값이 아니라 여유로 한다.** 디스크가 91% 차 있으면 초록(정상)이
@@ -149,14 +167,22 @@ export function Gauge({ label, pct, value, color, size = 72, higherIsWorse = tru
   if (pct === null) {
     return (
       <div style={{ width: size, textAlign: "center" }}>
-        <svg width={size} height={size} role="img" aria-label={`${label}: 측정 불가`}>
+        <svg width={size} height={size} role="img" aria-label={`${label}: 측정 불가${why ? ` — ${why}` : ""}`}>
           <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#21262d" strokeWidth={7} />
           <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" fill={DIM} fontSize={16}>
             ?
           </text>
         </svg>
         <div style={{ fontSize: 11, color: DIM, marginTop: 2 }}>{label}</div>
-        <div style={{ fontSize: 11, color: SEVERITY_COLOR.unknown }}>측정 불가</div>
+        {/* **사유를 말한다.** "측정 불가" 는 무엇을 해야 하는지 말하지 않으므로
+            사용자는 손을 놓는다. 사위가 없으면 그 사실을 그대로 쓴다. */}
+        <div
+          style={{ fontSize: 10, color: SEVERITY_COLOR.unknown, marginTop: 1, lineHeight: 1.3 }}
+          // 사유가 길어도 게이지가 **넘치지 않게** — 이 패널은 높이가 고정이다.
+          title={why}
+        >
+          {why ?? "측정 불가"}
+        </div>
       </div>
     );
   }
@@ -315,12 +341,20 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
               label="VRAM"
               pct={latest.gpu ? latest.gpu.memPct : null}
               value={latest.gpu ? `${latest.gpu.memPct.toFixed(0)}%` : "?"}
+              // **GPU 자체가 없을 때** — 드라이버가 없거나 `nvidia-smi` 를 못 찾았다.
+              // "측정 불가" 라면 무엇을 설치해야 하는지 알 수 없다.
+              why={latest.gpu ? undefined : "GPU 없음 — 드라이버 미설치"}
             />
             <Gauge
               label="컨텍스트"
               pct={latest.context?.pct ?? null}
               value={latest.context ? `${latest.context.pct.toFixed(0)}%` : "?"}
               color={latest.context && latest.context.pct > 80 ? SEVERITY_COLOR.crit : undefined}
+              // **작업 중이 아니면 컨텍스트를 잴 수 없다.** 계측은 턴 안에서만 되고,
+              // 대화가 멈춘 사이에 값은 오래된 것이거나 없다. 그래서 이유를 말한다 —
+              // 실측: 이 값이 계속 "?" 로만 보여 "측정 불가" 를 결함으로 오해했다.
+              // (0으로 두지 않는다 — 없는 것과 0 은 다르다.)
+              why={latest.context ? undefined : "작업 중이 아니면 측정되지 않습니다"}
             />
             {/* §5.5: 80% 초과에 "컴팩션 임박" — 게이지 색과 함께 이유를 말한다. */}
             {latest.context && latest.context.pct > 80 && (
@@ -353,7 +387,14 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
               higherIsWorse={false}
             />
             {latest.gpu && (
-              <Gauge label="GPU 사용률" pct={latest.gpu.utilPct} value={`${latest.gpu.utilPct.toFixed(0)}%`} />
+              <Gauge
+                label="GPU 사용률"
+                pct={latest.gpu.utilPct}
+                // **null 을 0 으로 그리지 않는다** — 모르는 값을 아는 것처럼 보이면
+                // 조용히 실패다. `?` 와 사유를 그대로 보여준다.
+                value={latest.gpu.utilPct === null ? "?" : `${latest.gpu.utilPct.toFixed(0)}%`}
+                why={latest.gpu.utilPct === null ? "nvidia-smi 가 값을 안 줬습니다" : undefined}
+              />
             )}
           </div>
 

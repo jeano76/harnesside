@@ -127,7 +127,13 @@ export async function readGpu(bin = "nvidia-smi"): Promise<Metrics["gpu"]> {
   const totalMiB = num(memTotal) ?? 0;
   return {
     name: name || "GPU",
-    utilPct: num(util) ?? 0,
+    // **`0` 으로 채우지 않는다** (2026-10-01) — 바로 아래 `tempC` 가 그 이유를
+    // 이미 적어 둔 것과 같은 규칙이다. `nvidia-smi` 가 `[N/A]` 를 주면(드라이버가
+    // 샘플러를 못 잡는 경우) 0 은 **"안 쓴다"** 라고 읽힌다 — 실제로 안 쓰는 것과
+    // **측정 못 한 것** 은 다르다. 0 로 두면 게이지가 "정상" 으로 보이므로
+    // **모르는 것이 알았다고 말하는 셈**이 되고, 그게 조용히 실패다.
+    // 미확인은 `null` 이고, 화면은 사유를 말한다(§`MonitorPanel` 의 `why`).
+    utilPct: num(util),
     // [N/A] 는 계측 불가다 — 0 도로 채우지 않는다(과열이 아니라 미확인).
     tempC: num(temp),
     powerW: num(power),

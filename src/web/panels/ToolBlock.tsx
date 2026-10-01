@@ -21,6 +21,7 @@ import React, { useEffect, useState } from "react";
 import type { ApiClient } from "../api.js";
 import { toolCommand, toolPath, type AgentBlock } from "../../session/blocks.js";
 import { FilePreview } from "./FilePreview.js";
+import { CodeBlock } from "./CodeBlock.js";
 
 const DIM = "#6e7681";
 const FG = "#c9d1d9";
@@ -218,9 +219,18 @@ function ShellBlock({ command, done, text, client }: { command: string; done: bo
       </div>
       {text && <div style={{ color: DIM, fontSize: 10, marginTop: "2px" }}>{text.slice(0, 200)}</div>}
       {output && (
-        <pre style={{ margin: "4px 0 0", maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap", font: "10px/1.5 ui-monospace, monospace", color: "#8b949e" }}>
-          {output}
-        </pre>
+        // **명령줄**은 셸 문법이라 하이라이트하고, **출력**은 그대로 둔다.
+        //
+        // `ls` 의 출력은 셸 문법이 **아니다** — 색을 칠하면 지어내는 것이 되고, 사용자는
+        // 화면을 믿지 않게 된다. 요구는 "IDE 처럼" 이지만, **틀린 색**은 IDE 보다 나쁘다.
+        <CodeBlock
+          // **출력은 하이라이트하지 않는다** — `ls` 의 결과는 셸 문법이 아니다.
+          lang={null}
+          command={command || undefined}
+          text={output}
+          collapsible
+          summary={`셸 출력 ${output.split("\n").length}줄`}
+        />
       )}
     </div>
   );
