@@ -28,6 +28,69 @@ export const THINK_STYLES: { id: ThinkStyle; label: string; hint: string }[] = [
 export type { AgentBlock };
 export { applyEvent, appendToBlock };
 
+/**
+ * 첫 실행 빈 상태 (§11.3: 빈 화면은 결함이다).
+ *
+ * 실측(2026-10-01): 이 자리가 화면에서 **가장 넓은 면**인데, 한 줄 글자로만 채워져 있었다
+ * (`아직 메시지가 없습니다. 입력창에 지시하십시오.`). `verify-window.mjs` 의 "빈 상태가
+ * 채워짐" 검사가 **실패**했다 — 요구(§11.3)를 어기는 것이었는데, "빈 화면" 이라는
+ * 표현이 "글자가 하나 있다" 면 충분하다고 착각해서 왔다.
+ *
+ * 첫 사용자가 **무엇을 할 수 있는지** 알 수 없으면 무엇이든 시도하지 않는다. 그래서:
+ *  - 무엇을 하는지 한 문장
+ *  - **누를 수 있는** 예시 3개 (복사하지 말고 버튼)
+ *  - 키보드 힌트 (Enter 전송 / Shift+Enter 줄바꿈 / Ctrl+K 명령)
+ *
+ * 예시를 **텍스트로만** 적지 않는 이유는 "읽고 직접 타이핑" 을 요구하기 때문이다 —
+ * 빈 화면의 목적은 "시작하기" 를 한 번의 클릭으로 줄이는 것이다.
+ */
+const EXAMPLES = [
+  "이 저장소의 구조를 한 문단으로 설명해 주세요",
+  "최근 변경 파일을 찾아 Likely 버그를 하나만 골라 주세요",
+  "테스트를 실행하고 실패한 것만 정리해 주세요",
+];
+
+function FirstRun({ onPick }: { onPick: (text: string) => void }) {
+  return (
+    <div style={{ display: "grid", gap: 10, padding: "12px 4px", maxWidth: 620 }}>
+      <div style={{ fontSize: 12, color: "#c9d1d9" }}>
+        여기서 지시를 입력하면 이 저장소에서 에이전트가 직접 일합니다.
+      </div>
+      <div style={{ fontSize: 11, color: "#6e7681" }}>
+        아래 예시 중 하나를 누르면 입력창에 채워집니다 — 바로 보낼 수도, 고쳐서 보낼 수도 있습니다.
+      </div>
+      <div style={{ display: "grid", gap: 4 }}>
+        {EXAMPLES.map((e) => (
+          <button
+            key={e}
+            type="button"
+            onClick={() => onPick(e)}
+            style={{
+              textAlign: "left",
+              background: "#161b22",
+              color: "#c9d1d9",
+              border: "1px solid #30363d",
+              borderRadius: 6,
+              padding: "6px 10px",
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 12,
+            }}
+          >
+            {e}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontSize: 10, color: "#6e7681", display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <span>Enter 전송</span>
+        <span>Shift+Enter 줄바꿈</span>
+        <span>Ctrl+K 명령</span>
+        <span>설정·변경검토는 위 아이콘</span>
+      </div>
+    </div>
+  );
+}
+
 function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle }) {
   const anim = animationFor(style);
   if (!state.enabled) return null;
@@ -93,6 +156,7 @@ export function AgentPanel({
   onThinking,
   onCancel,
   client,
+  onExample,
   /** `view` 블록이 그릴 내용. 설정 패널처럼 **무거운 것**은 셸이 주입한다 —
    *  이 컴포넌트가 그 화면을 아는 것이 아니라 **무엇을 그릴지 알기만 하면** 되므로. */
   viewExtra,
@@ -104,6 +168,8 @@ export function AgentPanel({
   onStyle: (s: ThinkStyle) => void;
   onThinking: (on: boolean) => void;
   onCancel: () => void;
+  /** 빈 상태의 예시를 **입력창에 채운다**(보내지는 않는다 — 사용자가 고쳐서 보낸다). */
+  onExample: (text: string) => void;
   /** 도구 블록이 에디터·셸을 **그 자리에서** 그리기 위해 필요. */
   client?: ApiClient;
   /** `view` 블록이 그릴 설정 패널 등. **셸이 대상을 알고** 있다. */
@@ -210,9 +276,7 @@ export function AgentPanel({
         onScroll={() => setPinned(nearBottom(scroller.current))}
         style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto", padding: "4px 6px" }}
       >
-        {blocks.length === 0 && !running && (
-          <div style={{ color: "#6e7681", fontSize: 11 }}>아직 메시지가 없습니다. 입력창에 지시하십시오.</div>
-        )}
+        {blocks.length === 0 && !running && <FirstRun onPick={onExample} />}
 
         {turns.map((turn, ti) => {
           const last = ti === turns.length - 1;

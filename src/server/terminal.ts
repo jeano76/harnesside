@@ -19,6 +19,7 @@ import { spawn as ptySpawn, type IPty } from "node-pty";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
+import { realpathSync, statSync } from "node:fs";
 
 /**
  * 셸 인자를 **하나의 인자**로 만든다.
@@ -29,6 +30,63 @@ import { stat } from "node:fs/promises";
  */
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * 셸 후보를 **우선순위대로** 만든다.
+ *
+ * 순서: 사용자가 명시한 값 → `$SHELL` → 흔히 있는 순서. **존재하지 않는 경로는
+ * 나중에 걸러진다** — 여기서 판정하려고 `access` 하지 않는다(TOCTOU: 확인한 뒤에
+ * 사라질 수 있다). 실제로 띄워보고 살아 있는 것을 쓴다.
+ */
+export function shellCandidates(explicit: string | undefined, env: NodeJS.ProcessEnv): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (p: string | undefined) => {
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
+  };
+  add(explicit);
+  add(env.SHELL);
+  // **가장 흔한 순서.** bash 는 마지막이다 — 없어도 되는 셸이라서(그리고 없는
+  // 머신에서 첫 후보가 되어 전부 실패하게 만든다).
+  for (const p of ["/bin/sh", "/usr/bin/sh", "/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh", "/bin/fish", "/usr/bin/fish"]) {
+    add(p);
+  }
+  return out;
+}
+
+/** PTY 를 env 로 만든다. **UTF-8 을 강제**한다 — 그래야 셸에서 한글이 깨지지 않는다. */
+export function ptyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    // **사용자 로캘을 그대로 쓰지 않는다.** LANG 이 `C` 또는 `POSIX` 면 로케일 인식이
+    // 꺼져서 **한글이 깨진다**(실측: LANG=C 인 컨테이너에서 PTY 출력의 UTF-8 이 깨진다).
+    // 사용자가 `ko_KR.UTF-8` 을 골랐다면 그것을 우선하되, **UTF-8 이 아니면 물려받은다.**
+    LANG: /UTF-?8$/i.test(env.LANG ?? "") ? env.LANG! : "ko_KR.UTF-8",
+    LC_ALL: "",
+  };
+}
+
+/** 후보 하나를 **실제로 띄워봐서** 살았는지 확인한다. */
+function trySpawn(shell: string, cwd: string, cols: number, rows: number): { pty: IPty } | null {
+  try {
+    const pty = ptySpawn(shell, [], { name: "xterm-256color", cols, rows, cwd, env: ptyEnv(process.env) });
+    // 즉시 죽으면 존재하지 않는 실행 파일이다. `node-pty` 는 없는 셸에 throw 하지 않고
+    // PTY 를 연 뒤 `execvp(3) failed.` 로 죽는다(실측).
+    const pid = pty.pid;
+    if (typeof pid === "number" && pid <= 0) {
+      pty.kill();
+      return null;
+    }
+    return { pty };
+  } catch {
+    return null;
+  }
 }
 
 export type SessionState = "running" | "exited";
@@ -213,10 +271,65 @@ export class TerminalManager {
     const root = resolve(this.opts.root);
     // **cwd 는 루트 안이어야 한다.** 밖이면 새지 않는다 — 에이전트 승인 없이
     // 임의 디렉터리에서 셸이 돌아간다면 승인 게이트가 무의미해진다.
-    const cwd = requested === root || requested.startsWith(`${root}/`) ? requested : root;
-    const shell = this.opts.shell ?? process.env.SHELL ?? "/bin/bash";
+    //
+    // **문자열 비교만으로는 안전하지 않다** (2026-10-01). macOS 는 `/tmp` 이 실제로
+    // `/private/tmp` 이고, Linux 도 `/var` → `/private/var` 처럼 심볼릭 링크가 있다.
+    // 경계가 링크를 **따라가지 않으면** 루트 안의 경로가 "밖" 으로 판정되거나(택한 쪽),
+    // 링크로 벗어난 경로가 "안" 으로 판정된다(**새어나가는 쪽** — 게이트가 뚫린다).
+    // **동기로** 한다 — `ptySpawn` 도 동기이므로, 경계 확인만 비동기면 셸이 뜨기 전에
+    // 판정이 뒤집힌다.
+    //
+    // **없는 경로는 그 문자열을 그대로 쓰면 안 된다**(2026-10-01 실측). 경계 판정은
+    // 통과하지만 `ptySpawn` 는 `chdir(2) failed.: No such file or directory` 를 찍고
+    // exit 1 한다 — 즉 **cwd 가 존재하지 않는 탭이 "성공" 으로 열린다.** 사용자는
+    // 잠깐 열린 탭을 본 뒤 셸이 사라지는 걸 겪고, 아무도 이유를 모른다.
+    // 그래서 링크를 따라간 뒤 **존재하고 디렉터리인지** 확인하고, 아니면 루트로 되돌린다.
+    const rp = (p: string): string => {
+      try {
+        return realpathSync(p);
+      } catch {
+        return p;
+      }
+    };
+    const realRoot = rp(root);
+    // **요청된 경로가 실제로 존재하는 디렉터리인지** 확인한다. 링크를 따라간 결과가
+    // 파일이거나 디렉터리가 아니면 PTY 의 `chdir(2) failed` 로 죽는다(실측).
+    const usable = (p: string): boolean => {
+      try {
+        return statSync(p).isDirectory();
+      } catch {
+        return false;
+      }
+    };
+    const realCwd = rp(requested);
+    const inside = realCwd === realRoot || realCwd.startsWith(`${realRoot}/`);
+    // 루트 밖이면 **밖으로 새지 않는다.** 존재하지 않으면 루트로 되돌린다 — 없는
+    // 경로로 셸을 여는 것은 "열렸다가 죽는 탭" 이다.
+    const cwd = inside && usable(realCwd) ? realCwd : realRoot;
     const cols = Math.max(20, Math.min(400, Math.floor(opts.cols ?? 80)));
     const rows = Math.max(5, Math.min(200, Math.floor(opts.rows ?? 24)));
+
+    // ── 셸을 고른다: **존재하는 것** 중에서 ────────────────────────────────
+    //
+    // 예전엔 `process.env.SHELL ?? "/bin/bash"` 였다. 두 가지가 잘못이었다:
+    //  1. `/bin/bash` 는 **없을 수 있다** — Alpine(busybox) 이미지, 최소 컨테이너,
+    //     NixOS 는 기본에 bash 가 없다. 그러면 **모든 셸이 열리지 않는다.**
+    //  2. `$SHELL` 이 **없을 수도 있는 경로**일 수 있다 — 사용자의 로그인 셸이
+    //     `/usr/local/bin/fish` 인데 그 경로가 사라진 경우.
+    //
+    // 그래서 **열어보고** 고른다. 후보를 순서대로 시도하고, 실제로 뜬 것을 쓴다.
+    // 실패를 **사용자에게 말하지 않으면** 안 되므로, 하나도 안 뜨면 첫 후보로 가고
+    // PTY 안의 `execvp failed` 문구를 그대로 보여준다(아래 onData).
+    const candidates = shellCandidates(this.opts.shell, process.env);
+    let shell = candidates[0]!;
+    for (const cand of candidates) {
+      const probe = trySpawn(cand, cwd, cols, rows);
+      if (probe) {
+        shell = cand;
+        probe.pty.kill();
+        break;
+      }
+    }
 
     const id = randomUUID();
     const session: TerminalSession = {
@@ -242,7 +355,8 @@ export class TerminalManager {
         cwd,
         // **사용자 셸 환경** 을 물려받되 로컬 변수는 뺀다 — PATH 에 개발용 junk 가 섞이면
         // 사용자가 터미널에서 못 찾는 명령이 나온다(measured: 로컬 PATH 에 phantomjs).
-        env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+        // 로캘은 `ptyEnv` 가 UTF-8 로 맞춘다.
+        env: ptyEnv(process.env),
       });
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
@@ -258,7 +372,9 @@ export class TerminalManager {
       // 않고 PTY 를 연 뒤 `execvp(3) failed.` 를 화면에 찍고 exit 1 한다(실측).
       // 그 문구를 사용자에게 그대로 보여주고 "애초에 실행되지 않았다" 고 표시한다 —
       // 안 하면 탭이 열렸다 사라지고 아무도 이유를 모른다.
-      const m = /execvp\(\d+\) failed[^\r\n]*/.exec(d);
+      // `chdir(2) failed` 도 **같은 종류의 실패** 다: PTY 가 떴지만 그 안의 셸은
+      // 시작할 수 없다. 둘 다 잡지 않으면 사용자는 "열렸다가 죽는" 탭을 붙잡는다.
+      const m = /(?:execvp\(\d+\) failed|chdir\(\d+\) failed[^\r\n]*)/.exec(d);
       if (m && !entry.session.openError) {
         entry.session = { ...entry.session, openError: m[0].trim(), title: "셸 열기 실패" };
         this.opts.events.onWarn(`셸을 열지 못했습니다: ${m[0].trim()}`);

@@ -36,6 +36,53 @@ export interface LaunchOptions {
   noSandbox?: boolean;
 }
 
+/**
+ * CDP `webSocketDebuggerUrl` 이 **우리가 띄운 창**인지 판정한다 (2026-10-01 실측).
+ *
+ * 왜 필요한가: CDP 포트(`9222`)는 **고정**이다. 이전 실행에서 남은 창이 그 포트를
+ * 붙잡고 있으면 **우리 창은 붙지 못하고**, GPU 검사는 **남의 창**을 읽는다. 그 결과가
+ * 부팅 로그에 `GPU budgeted 모드 (Disabled)` 로 찍혔다 — 실제로 그러았다. 우리가
+ * 띄운 프로세스가 아니라 **옛 창**(`--disable-gpu` 로 떠 있던 것)의 값이었다.
+ *
+ * 이런 오탐은 위험하다. 통과도 실패도 **거짓말**이 되기 때문이다:
+ *  - **남의 `off` 창**을 읽으면 → "GPU 비활성 확인" 이라고 **거짓 통과**.
+ *  - **남의 `full` 창**을 읽으면 → "비활성 미확인" 이라고 **거짓 실패**.
+ *
+ * 그래서 판정 불가하면 **모른다고** 말한다. `disabled_off` 같은 문자열을 보고
+ * "확인했다" 고 말하는 것이 여기서 하지 않는다.
+ *
+ * 디렉터리 경로가 드러나지 않는 빌드도 있다 — 그 경우에도 **포기하지 않는다**
+ * 확인 가능한 범위(경로 노출 여부)를 그대로 돌려주며, 호출부가 그 사실로
+ * "판정 불가" 를 남긴다.
+ */
+export type WindowIdentity =
+  /** 확인했고, 우리 창이다. */
+  | { ours: true }
+  /** 다른 프로필의 창이다 — **측정하면 안 된다.** */
+  | { ours: false; seenDir: string }
+  /** 프로필 경로가 노출되지 않아 **알 수 없다.** 측정하면 안 된다. */
+  | { ours: null };
+
+/**
+ * `wantDir` 은 우리가 띄울 때 넘긴 `userDataDir`, `wsUrl` 은 CDP 가 준
+ * `webSocketDebuggerUrl`. 둘 다 **비교 가능한 형태**로 만든다 — 경로 끝의
+ * 슬래시를 무시하고, 그렇지 않으면 `/tmp/p` 와 `/tmp/p/` 가 다른 창으로 보인다.
+ */
+export function windowIdentity(wsUrl: string | undefined, wantDir: string | undefined): WindowIdentity {
+  if (!wsUrl || !wantDir) return { ours: null };
+  const m = /devtools\/browser\/(.*)$/.exec(wsUrl);
+  if (!m?.[1]) return { ours: null };
+  let seen: string;
+  try {
+    seen = decodeURIComponent(m[1]);
+  } catch {
+    // 깨진 퍼센트 인코딩 — 경로로 쓸 수 없다. **추측하지 않는다.**
+    return { ours: null };
+  }
+  const norm = (p: string): string => p.replace(/\/+$/, "");
+  return norm(seen) === norm(wantDir) ? { ours: true } : { ours: false, seenDir: seen };
+}
+
 /** 항상 들어가는 기본 그룹 (§4.1). */
 export function baseFlags(o: LaunchOptions): string[] {
   const cdp = o.cdpPort ?? CDP_DEFAULT_PORT;

@@ -40,7 +40,7 @@ interface Run {
 }
 
 /** 셸 하나를 띄우고 **명령의 출력을 모아서** 돌려준다. PTY 라 개행이 뒤섞인다. */
-function runIn(shell: string, cwd: string, commands: string[], waitMs = 3500): Promise<Run> {
+async function runIn(shell: string, cwd: string, commands: string[], waitMs = 3500): Promise<Run> {
   return new Promise((resolve) => {
     let data = "";
     let exited = false;

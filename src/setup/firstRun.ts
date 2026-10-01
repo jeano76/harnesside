@@ -84,7 +84,23 @@ export interface FirstRunPlan {
   errors: string[];
 }
 
-const mkDir = process.platform === "win32" ? "nul" : "/dev/null";
+/**
+ * `llama-server` 를 찾는 **실제** 경로들 (`llamaCpp.ts` 의 검색 순서와 같은 것).
+ *
+ * 예전엔 이 자리에 `process.platform === "win32" ? "nul" : "/dev/null"` 이 있었다 —
+ * 그리고 `NO_SERVER_HINT` 에 **경로처럼** 들어가서 이렇게 말했다:
+ *
+ * > "llama-server 를 찾지 못했습니다. PATH 와 /dev/null 을 확인하십시오."
+ *
+ * 두 가지가 잘못이었다. `/dev/null` 은 **경로가 아니라 장치**라서 "확인"하라는
+ * 말이 되지 않는다(여기 없지 않나? 있다? 무엇을?). 그리고 이 프로그램이 실제로
+ * 보는 곳은 `~/llama.cpp` 아래 빌드 트리의 `bin` 과 `~/.harnesside/llama.cpp` 아래
+ * 빌드 트리의 `bin` 인데,
+ * 그 **어디를 봐야 하는지** 말하지 않았다.
+ *
+ * hint 는 **내가 실제로 확인한 경로**를 말해야 한다. 사용자가 고칠 수 있는 곳만.
+ */
+const SEARCH_DIRS_HINT = "PATH, ~/llama.cpp/build*/bin, ~/.harnesside/llama.cpp/build*/bin";
 
 async function isFile(p: string): Promise<boolean> {
   return (await stat(p).catch(() => null))?.isFile() ?? false;
@@ -431,4 +447,7 @@ export async function llamaStatus(opts: { env?: NodeJS.ProcessEnv; home: string 
 }
 
 /** `doctor` 가 쓰는 한 줄. 판단을 **여기서만** 한다. */
-export const NO_SERVER_HINT = `llama-server 를 찾지 못했습니다. PATH 와 ${mkDir} 을 확인하거나, 하드웨어에 맞춰 설치하십시오.`;
+export const NO_SERVER_HINT =
+  `llama-server 를 찾지 못했습니다. ` +
+  `설치되어 있다면 ${SEARCH_DIRS_HINT} 에 있는지 확인하십시오. ` +
+  `없다면 하드웨어(GPU·메모리)에 맞춰 설치합니다 — 차감 없이 CPU 로도 동작합니다.`;

@@ -214,6 +214,8 @@ export default function App() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [metricSeries, setMetricSeries] = useState<(number | null)[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const draftRef = useRef<HTMLTextAreaElement | null>(null);
+  const focusDraft = useCallback(() => draftRef.current?.focus(), []);
   const [draft, setDraft] = useState(() => loadDraft(typeof localStorage !== "undefined" ? localStorage : null)?.text ?? "");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
@@ -654,6 +656,12 @@ export default function App() {
           );
         }}
         onCancel={() => void client.post("/api/agent/cancel")}
+        // 예시는 **채우기만** 한다. 바로 보내면 사용자가 고칠 기회를 잃는다 —
+        // "누르는 즉시 실행" 은 되돌리기 어렵다(§5.10: 무엇을 했는지 말해야 한다).
+        onExample={(text) => {
+          setDraft(text);
+          focusDraft();
+        }}
       />
       </>
     ),
@@ -803,6 +811,7 @@ export default function App() {
           style={{ flex: 1, border: `1px solid ${BORDER}`, borderRadius: 6, display: "flex", flexDirection: "column", background: BG, overflow: "hidden" }}
         >
           <textarea
+            ref={draftRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {

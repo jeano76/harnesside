@@ -12,7 +12,7 @@ import { createInterface } from "node:readline";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { launchFlags, profileDir, CDP_DEFAULT_PORT, type LaunchOptions } from "./browserFlags.js";
+import { launchFlags, profileDir, windowIdentity, CDP_DEFAULT_PORT, type LaunchOptions } from "./browserFlags.js";
 import type { GpuMode } from "../setup/gpuPolicy.js";
 
 /** 브라우저 바이너리 탐지 순서 (§4.1). */
@@ -326,7 +326,13 @@ export class BrowserLauncher {
     for (let i = 0; i < attempts; i++) {
       const v = await this.readGpuOnce(port);
       if (!v) {
-        last = { ok: false, detail: "CDP 에 접속할 수 없습니다" };
+        // **"붙지 못했다" 와 "남의 창이다" 와 "아직 초기화 중" 은 다르다.** 셋을 같은
+        // 문장으로 뭉개면 무엇이 실제로 문제인지 사라진다(실측: 남의 창을 읽은 뒤에도
+        // 로그는 "Disabled" 라고 단정했다).
+        last = {
+          ok: false,
+          detail: "CPU 가 대신 그립니다 (GPU 확인 불가 — CDP 창이 우리 것이 아닙니다)",
+        };
       } else {
         const glRenderer = (v.auxAttributes as { glRenderer?: string } | undefined)?.glRenderer;
         const glVendor = (v.auxAttributes as { glVendor?: string } | undefined)?.glVendor;
@@ -367,12 +373,38 @@ export class BrowserLauncher {
     return last;
   }
 
-  /** CDP 로 GPU 정보 한 번 읽기. 소켓은 열었다 닫는다(장시간 유지하면 리소스를 붙잡는다). */  private async readGpuOnce(port: number): Promise<Record<string, unknown> | null> {
+  /**
+   * CDP 로 GPU 정보 한 번 읽기. 소켓은 열었다 닫는다(장시간 유지하면 리소스를 붙잡는다).
+   *
+   * **자기 창인지 먼저 확인한다**(2026-10-01 실측). CDP 포트(`9222`)는 **고정**이라,
+   * 이전 실행에서 남은 창이 붙잡고 있으면 **우리 창은 그 포트에 붙지 못하고**
+   * 여기서는 **남의 창**을 측정한다. 그 결과가 `budgeted` 인데 `Disabled` 라는
+   * 모순된 부팅 로그가 났고 — 실제로 그러였다(pid 763640 의 옛 창이 `--disable-gpu`
+   * 로 떠 있었고, 우리는 `budgeted` 플래그에는 `--disable-gpu` 가 **없음**을 확인했다).
+   *
+   * **`webSocketDebuggerUrl` 에 프로필 디렉터리(=`` 와 `--user-data-dir`)가 실린다.**
+   * 이것으로 "이 창이 우리 것인가" 를 확인할 수 있다. 확인하지 않으면 **남의 창을
+   * 우리 창으로 보고** GPU 가 꺼졌다고 결론짓는다 — 통과도 실패도 거짓말이 되는
+   * 방향이다. 그래서 모르면 **모른다고** 남긴다.
+   */
+  private async readGpuOnce(port: number): Promise<Record<string, unknown> | null> {
     const f = this.deps.fetchImpl ?? fetch;
     const v = await f(`http://127.0.0.1:${port}/json/version`).catch(() => null);
     if (!v || !v.ok) return null;
-    const info = (await v.json()) as { webSocketDebuggerUrl?: string };
+    const info = (await v.json()) as { webSocketDebuggerUrl?: string; Browser?: string };
     if (!info.webSocketDebuggerUrl) return null;
+
+    // **자기 창인가.** 남의 창을 측정하면 통과도 실패도 거짓말이 된다.
+    const who = windowIdentity(info.webSocketDebuggerUrl, this.opts.userDataDir);
+    if (who.ours !== true) {
+      this.log(
+        "warn",
+        who.ours === false
+          ? `CDP(${port}) 에 붙은 창이 우리 것이 아닙니다 (프로필 ${who.seenDir} ≠ ${this.opts.userDataDir}) — GPU 판정을 건너뜁니다`
+          : `CDP(${port}) 창이 우리 것인지 확인할 수 없습니다 (프로필 경로 미노출) — GPU 판정을 건너뜁니다`,
+      );
+      return null;
+    }
     return this.systemInfo(info.webSocketDebuggerUrl);
   }
 
