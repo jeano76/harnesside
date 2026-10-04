@@ -25,7 +25,7 @@ import { DiffPanel } from "./editor/DiffPanel.js";
 import { EditorView } from "./editor/EditorView.js";
 import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";
-import { webSlashCommands, parseSlash } from "../shared/slashCommands.js";
+import { webSlashCommands, parseSlash, slashMatches } from "../shared/slashCommands.js";
 import { CommitBox } from "./panels/CommitBox.js";
 import { ResumeBanner } from "./panels/ResumeBanner.js";
 import { CrashBanner } from "./panels/CrashBanner.js";
@@ -256,6 +256,21 @@ export default function App() {
     });
   }, []);
 
+  // ── 슬래시 자동완성 ─────────────────────────────────────────────────────────
+  // 입력이 `/` 로 시작하고 아직 명령명(첫 토큰)을 쓰는 중이면 후보를 띄운다.
+  // 공백 뒤(인자를 쓰는 중)에는 띄우지 않는다. 후보는 웹에서 실행되는 명령만이다.
+  const [slashIdx, setSlashIdx] = useState(0);
+  const [slashHidden, setSlashHidden] = useState(false);
+  const slashItems = useMemo(() => {
+    if (!draft.startsWith("/") || /\s/.test(draft.trimStart().slice(1)) || draft.includes("\n")) return [];
+    const web = new Set(webSlashCommands().map((c) => c.key));
+    return slashMatches(draft).filter((c) => web.has(c.key));
+  }, [draft]);
+  const slashOpen = slashItems.length > 0 && !slashHidden;
+  useEffect(() => { setSlashIdx(0); setSlashHidden(false); }, [draft]);
+  /** 후보를 입력창에 **완성**한다 — 실행은 하지 않는다(Enter 로 보낸다). */
+  const completeSlash = useCallback((key: string) => fillSlash(key), [fillSlash]);
+
   const quitArmedAt = useRef(0);
   const runSlash = useCallback(async (key: string, arg = "", fromButton = true) => {
     // `/quit` 는 두 번 눌러야 종료한다(llamacli 도 확인 없이 끝내지 않는다).
@@ -325,6 +340,19 @@ export default function App() {
           await new Promise((r) => setTimeout(r, 800));
           job = await client.get(`/api/slash/job/${encodeURIComponent(job.id)}`);
         }
+      } else if (key === "term") {
+        const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+        done([
+          `창          : 웹 브라우저 (콘솔 터미널이 아님)`,
+          `브라우저    : ${navigator.userAgent}`,
+          `플랫폼      : ${nav.userAgentData?.platform ?? navigator.platform}`,
+          `화면        : ${window.innerWidth}×${window.innerHeight}px · 배율 ${window.devicePixelRatio} · 색 ${screen.colorDepth}bit`,
+          `유니코드    : 켜짐 (브라우저 렌더링)`,
+          `마우스      : 항상 켜짐`,
+          `클립보드    : ${typeof navigator.clipboard?.writeText === "function" ? "사용 가능" : "사용 불가 (https/localhost 필요)"}`,
+          "",
+          "콘솔(TUI)의 제어문자·대체화면·동기화 출력 같은 항목은 웹 창에는 해당이 없습니다.",
+        ].join("\n"));
       } else {
         const path = { compact: "/api/agent/compact", "improve-apply": "/api/agent/improve/apply", "plan-clear": "/api/agent/plan/clear" }[key];
         if (!path) return done("웹에서 지원하지 않는 명령입니다", false);
@@ -608,7 +636,9 @@ export default function App() {
         // **빈 화면으로 덮지 않는다.** 지금 화면에 블록이 있으면(스트리밍 중) 붙인다.
         if (blocksRef.current.length > 0) return;
         setBlocks(
-          cur.blocks.map((b, i) => ({
+          // `view` 블록(설정·슬래시 결과)은 저장 형식에 모양이 없어 복원할 수 없다 —
+          // 복원하면 "이 화면을 열 수 없습니다" 만 남는다.
+          cur.blocks.filter((b) => b.kind !== "view").map((b, i) => ({
             id: b.id || `restored-${i}`,
             kind: (b.kind as AgentBlock["kind"]) ?? "text",
             text: typeof b.content === "string" ? b.content : (b.title ?? ""),
@@ -982,6 +1012,27 @@ export default function App() {
         <div className="elev-1" style={{ flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", padding: 6 }}>
           {BODY.agent}
         </div>
+        {slashOpen && (
+          <div style={{ position: "relative", height: 0, flex: "0 0 auto", zIndex: 5 }}>
+            <div role="listbox" aria-label="슬래시 명령 추천" style={{ position: "absolute", left: 8, bottom: 4, minWidth: 380, maxWidth: "calc(100% - 16px)", maxHeight: 240, overflowY: "auto", background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, boxShadow: "0 4px 16px rgba(0,0,0,.5)" }}>
+              {slashItems.map((c, i) => (
+                <div
+                  key={c.key}
+                  role="option"
+                  aria-selected={i === slashIdx}
+                  title={SLASH_TIPS[c.key] ?? c.description}
+                  onMouseEnter={() => setSlashIdx(i)}
+                  onMouseDown={(e) => { e.preventDefault(); completeSlash(c.key); }}
+                  style={{ display: "flex", gap: 10, padding: "4px 10px", cursor: "pointer", background: i === slashIdx ? "#1f6feb33" : "transparent", fontSize: 12 }}
+                >
+                  <span style={{ color: FG, fontWeight: 700, minWidth: 110 }}>{c.label}</span>
+                  <span style={{ color: DIM, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.description}</span>
+                </div>
+              ))}
+              <div style={{ padding: "2px 10px", fontSize: 10, color: DIM, borderTop: `1px solid ${BORDER}` }}>↑↓ 선택 · Tab/Enter 완성 · Esc 닫기</div>
+            </div>
+          </div>
+        )}
         <div
           role="separator"
           aria-orientation="horizontal"
@@ -997,7 +1048,19 @@ export default function App() {
         />
         <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: 0, borderTop: `1px solid ${BORDER}`, borderRadius: 0, margin: 0, background: "#161b22" }}>
           <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-          <textarea ref={draftRef} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (draft.trim()) void sendTurn(); } }} placeholder="무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)" aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
+          <textarea ref={draftRef} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
+            if (slashOpen) {
+              if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashItems.length); return; }
+              if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashItems.length) % slashItems.length); return; }
+              if (e.key === "Escape") { e.preventDefault(); setSlashHidden(true); return; }
+              const pick = slashItems[Math.min(slashIdx, slashItems.length - 1)];
+              if (e.key === "Tab") { e.preventDefault(); completeSlash(pick.key); return; }
+              // Enter: 이미 명령명을 정확히 썼으면 실행, 아니면 선택한 후보로 **완성**한다.
+              if (e.key === "Enter" && !e.shiftKey && draft.trim().slice(1).toLowerCase() !== pick.key) { e.preventDefault(); completeSlash(pick.key); return; }
+            }
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (draft.trim()) void sendTurn(); }
+          }} placeholder="무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)" aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
           <button type="button" disabled={!draft.trim()} onClick={() => void sendTurn()} style={{ flex: "0 0 auto", alignSelf: "stretch", margin: 6, padding: "0 16px", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
             {turnRunning ? "대기열에 추가" : "보내기"}
           </button>
