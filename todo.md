@@ -152,6 +152,7 @@
 | 6 | Q-5 부팅 실패 설명 | ✅ 로그·창 배너 · 실패 유닛 | CI 의 'llama 없는 부팅' 스텝은 러너 결과 미측정 |
 | 7 | Q-6 검사를 CI 게이트로 | ✅ schedule+nightly 잡 · firstrun→boot-smoke · scripts 테스트 gate | nightly 실제 실행·signals 로컬 미실행 = 미측정 |
 | 8 | Q-7 업데이트 경로 1개 | ✅ 슬롯 교체 정본 · selfUpdate·update-bin 삭제 · 버전 정본 package.json | 실제 릴리스 자산 롤백 미측정(릴리스 없음) |
-| 9~ | Q-9·Q-10 → Q-11·Q-12·Q-13 | ☐ | — |
+| 9 | Q-9 실행환경 매트릭스 | ✅ README 매트릭스 · Node 20 실측(동작 안 함) → engines >=22 | OS·Node 24 미측정 |
+| 10~ | Q-10 → Q-11·Q-12·Q-13 | ☐ | — |
 
 미측정: 라운드 전 커버리지 수치(라운드 후 82.8% · 파일 124개만 측정) · CLI 대상 화면에서 헤더 일부가 붉게 칠해지는 현상(미조사).

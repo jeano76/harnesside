@@ -774,3 +774,18 @@ MoE/speculative 항목 포함). `slashService.ts` import 17개를 새 경로로.
 롤백: `updateService.apply.test.ts` 10/10 — 임시 설치본에서 "새 버전이 기동하지 못하면 되돌리고 옛 내용이 돌아온다" · "rollback() 은 가장 최근 슬롯으로" 를
 **실제 파일 교체**로 확인(가짜 업데이트로 시도한 뒤 되돌린 기록). 이 머신의 실제 설치본으로는 시도하지 않았다.
 **§9 미측정 표**: #15 "슬롯 교체 후 롤백이 실제로 된다" → 임시 설치본에서 **검증**, 실제 릴리스 자산으로는 **미측정**(릴리스 없음).
+
+## 2026-10-04 — Q-9 (실행환경 매트릭스 1장)
+
+- README `### Runtime matrix` — 칸 값은 **`검증됨` · `로컬 실행 가능` · `미측정` 셋뿐**, `검증됨` 칸마다 명령·날짜·결과. 합성 행렬·가짜 llama 는 증거가 아니라고 명시.
+  기존 "What this does not cover" 절은 그대로 두고 그 위에 쌓았다.
+- **한 축을 실제로 돌렸다 — Node 20** (`npx node@20` + 별도 worktree 에서 Node 20 으로 `npm ci`, 2026-10-04):
+  `npm test` **1984 pass / 6 fail**. ① `node-pty` 를 로드한 프로세스가 **종료 시 SIGSEGV**(`terminal*.test.ts` · `tmux.test.ts`,
+  `node dist/server/index.js --version` 도 exit 139) ② 브라우저 도구가 `WebSocket is not defined`(전역 WebSocket 은 Node 22 부터).
+  → **Node 20 은 동작하지 않는다는 것을 검증**했고, `engines` 를 `>=18` → **`>=22`** 로 좁혔다(CI 는 이미 22 하나 — 기획서 §8 "engines 를 좁히고 CI 도 함께" 에 해당).
+  그래서 기획서가 권한 `matrix: node: [20, 22]` 는 넣지 않았다(실패가 확정된 축을 매일 빨간불로 두는 대신 지원 범위를 사실에 맞췄다).
+- 그 과정에서 찾은 호환성 결함: `npm test` 가 글롭(`"src/**/*.test.ts"`)을 Node 21+ 테스트 러너에 맡겨 **Node 20 에선 테스트가 하나도 안 돌았다** →
+  `scripts/run-tests.mjs` 가 파일 목록을 직접 만든다(셸 글롭은 Windows 에서 안 되므로 Node 로).
+- Node 24 는 Node 20 으로 빌드한 모듈로 시도해 종료 시 abort — 공정한 실행이 아니라 **미측정**으로 남김. OS 축(macOS/Windows)은 러너를 시도하지 않아 **미측정**.
+- `docs/multienv-acceptance-report.md` 미검증 **13 + 부분 5 — 변화 없음**(기획서의 "25" 는 보고서 자체 집계와 다르다).
+**§9 미측정 표**: #3 "Node 18/20/24" → Node 20 **검증됨(동작 안 함)**, 18·24 미측정. #1·#2·#4·#5·#16 은 그대로 미측정.

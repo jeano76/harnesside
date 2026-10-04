@@ -20,7 +20,7 @@
     "prepublishOnly": "npm run build",
     "dev": "concurrently \"tsx watch src/server/index.ts\" \"vite\"",
     "start": "node dist/server/index.js",
-    "test": "tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "test": "node scripts/run-tests.mjs",
     "test:e2e": "node scripts/verify-window.mjs && node scripts/verify-terminal.mjs",
     "typecheck": "tsc --noEmit",
     "rename:check": "node scripts/rename-identifiers.mjs --dry",
@@ -59,6 +59,6 @@
     "monaco-editor": "^0.52.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }

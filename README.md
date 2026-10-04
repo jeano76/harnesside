@@ -310,6 +310,30 @@ unit suite now, and each was verified by **reverting the fix and requiring the
 new tests to fail** — a regression test that passes with its own fix reverted is
 asserting nothing, and one of these did exactly that before it was caught.
 
+### Runtime matrix (2026-10-04 · Q-9)
+
+One table, three values only. **`검증됨`** = a command in this repo ran it and the run is cited ·
+**`로컬 실행 가능`** = a script exists but no cited run on that axis · **`미측정`** = never run.
+Synthetic sweeps (the 6,720-combination matrix above) are **not** evidence here — they exercise
+branches, not machines. `scripts/fake-llama-server.mjs` proves the **boot path**, not model or
+server compatibility.
+
+| Axis | Value | State | Evidence (command · date · result) |
+|---|---|---|---|
+| Node | 22 | `검증됨` | CI `gate` (`node-version: "22"`) · local `npm test` 2026-10-04 → 1985 pass / 0 fail |
+| Node | 20 | `검증됨` — **does not work** | 2026-10-04, fresh `npm ci` under Node 20.20.2 in a separate worktree: `npm test` 1984 pass / **6 fail** — every process that loads `node-pty` dies with **SIGSEGV on exit** (`terminal*.test.ts`, `tmux.test.ts`; `node dist/server/index.js --version` exits 139), and the browser tools fail with `WebSocket is not defined` (no global `WebSocket` before Node 22). → `engines` narrowed from `>=18` to **`>=22`** |
+| Node | 18 · 24 | `미측정` | Node 24 was tried with modules built under Node 20 (aborted on exit) — not a fair run, so not counted |
+| OS | Linux x64 (Ubuntu) | `검증됨` | CI runners `ubuntu-latest` · this machine (Linux 7.0, x64) |
+| OS | macOS · Windows · musl | `미측정` | no runner tried; `node-pty` build and Chrome boot are the expected blockers |
+| Display | Wayland | `미측정` | the Chrome window opens on this Wayland session, but no check targets Wayland-specific behaviour (OSC 52, clipboard) |
+| Browser | Chrome (headless, one pinned version) | `검증됨` | CI `window` job: `verify-window.mjs` · local 2026-10-04 22/22 ×3 |
+| Browser | Chromium / other versions | `미측정` | — |
+| GPU | real VRAM pressure (8 GB card, 35B MoE) | `미측정` | synthetic VRAM only |
+| Terminal identities (100 personas) | — | `로컬 실행 가능` | `npx tsx scripts/persona_usability_check.ts` (not in CI, no cited run this round) |
+
+Acceptance TCs in `docs/multienv-acceptance-report.md`: **13 unverified + 5 partial**, unchanged this round
+(0 reduced, 0 added). (The quality plan quoted "25"; the report's own tally is 13 + 5.)
+
 ### What this does not cover
 
 Stated plainly, because a validation section that only lists passes is not
