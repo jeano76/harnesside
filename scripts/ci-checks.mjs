@@ -245,9 +245,18 @@ else pass("커밋 금지 경로 0건 (state/ · .env · id_rsa · bin/)");
 // 이유가 빈 예외와 **더 이상 쓰이지 않는 예외**는 실패다(예외가 조용히 쌓이면 검사가 무효가 된다).
 // 이 검사가 거짓말할 수 있는 경우: 백틱 없이 쓴 경로·`src/` 로 시작하지 않는 경로는 보지 않는다(의도된 범위).
 const DOC_NAMES = ["README.md", "PROGRESS.md", "todo.md", "IMPROVEMENTS.md", "MIGRATION_CHECKLIST.md"];
+// `docs/` 아래 문서도 **같은 검사 대상**이다 (2026-10-04 · Q-12).
+// README 를 3개로 나눈 뒤 이 목록을 안 고치면, 가장 많이 읽게 되는 문서
+// (검증 결과 · 아키텍처 · 구현 기록)가 유독 검사를 통과하는 영역이 된다.
+// 나뉜 문서가 원본보다 안전해지는 것은 반대다.
+const docsDir = join(ROOT, "docs");
+const DOC_SUBDIR = existsSync(docsDir)
+  ? (await readdir(docsDir)).filter((n) => n.endsWith(".md")).map((n) => join("docs", n)).sort()
+  : [];
 const docList = [
   ...(await readdir(ROOT)).filter((n) => /^PROMPT.*\.md$/.test(n)).sort(),
   ...DOC_NAMES,
+  ...DOC_SUBDIR,
 ].filter((n) => existsSync(join(ROOT, n)));
 
 export function extractSrcPaths(text) {

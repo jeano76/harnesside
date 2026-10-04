@@ -25,7 +25,7 @@ import { DiffPanel } from "./editor/DiffPanel.js";
 import { EditorView } from "./editor/EditorView.js";
 import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";
-import { webSlashCommands, parseSlash, slashMatches } from "../shared/slashCommands.js";
+import { parseSlash, renderHelpText, slashMatches, webSlashCommands } from "../shared/slashCommands.js";
 import { CLI_PROVIDERS, CLI_SUBCOMMANDS } from "../shared/cliProviders.js";
 import { describeBootFailure } from "../shared/bootFailure.js";
 import { CommitBox } from "./panels/CommitBox.js";
@@ -565,6 +565,19 @@ export default function App() {
           await new Promise((r) => setTimeout(r, 800));
           job = await client.get(`/api/slash/job/${encodeURIComponent(job.id)}`);
         }
+      } else if (key === "help") {
+        // `/help` — 이 프로그램의 명령 목록. **그리는 규칙은 `renderHelpText`(순수 함수)에 있다.**
+        //
+        // 왜 이게 필요했나: `/help` 와 `/keys` 는 `where: "tui"` 였다. TUI 가
+        // 삭제된 뒤(Q-2) **실행되는 곳이 하나도 남지 않은 명령**이 되었고, 더 나쁘게도
+        // `/help` 를 친 사용자에게는 "웹에서 지원하지 않는 명령입니다" 가 떴다 —
+        // 사용자가 이미 웹 창에 있는데 웹이 명령을 모른다고 말하는 셈이었다.
+        //
+        // 왜 여기서 목록을 그리지 않나: 여기에도 한번 적으면 **두 벌**이 되고,
+        // 새 명령이 조용히 한쪽만 빠진다. 이 저장소에서 가장 많이 기록된 실패 유형이다.
+        // (브라우저 실측이 필요해서라고 여기서 그렸던 버전을 2026-10-04 에 되돌렸다 —
+        //  출력물을 검사할 수 없다는 이유로 규칙을 복제하는 건 순서가 반대다.)
+        done(renderHelpText());
       } else if (key === "term") {
         const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
         done([

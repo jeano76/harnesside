@@ -308,7 +308,15 @@ export async function detectPortOwner(
   return { kind: "foreign", pid };
 }
 
-async function pidOnPort(
+/** Which pid is LISTENING on `port`, and — crucially — whether the lookup itself
+ *  worked (`known: false` means the platform tool was missing or unparseable,
+ *  which is NOT "the port is free"; see `detectPortOwner`'s comment).
+ *
+ *  Exported for `server/doctorChecks.ts` (Q-13), which reports the same three
+ *  states for the **web** and **CDP** ports, not just llama's. Copying this
+ *  parser to do that would give two parsers of `ss`/`netstat` output — the exact
+ *  duplication class this module's neighbours were merged to remove (Q-3). */
+export async function pidOnPort(
   port: number,
   run: (file: string, args: string[], timeoutMs: number) => Promise<string>,
   platform: HostPlatform = process.platform
@@ -385,7 +393,14 @@ async function systemdUnitForPort(
  *  null must be read as UNKNOWN, not as empty. An empty string would fail the
  *  `/llama-server/i` test below and classify a real server as `foreign`, which
  *  makes the switch refuse to act on the very server it was asked to replace. */
-async function readCmdline(pid: number, platform: HostPlatform = process.platform): Promise<string | null> {
+/** The full command line of `pid`, or **null when it could not be read** —
+ *  which is a different answer from "a command line that does not mention
+ *  llama-server" (see `detectPortOwner`).
+ *
+ *  Exported for `server/doctorChecks.ts` (Q-13) for the same reason as
+ *  `pidOnPort`: one reader of `/proc/<pid>/cmdline` (and of `wmic` on Windows,
+ *  where its absence is the normal case and must stay `null`, not "foreign"). */
+export async function readCmdline(pid: number, platform: HostPlatform = process.platform): Promise<string | null> {
   if (platform === "win32") {
     try {
       const { execFile } = await import("node:child_process");

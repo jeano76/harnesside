@@ -60,6 +60,36 @@
       "doc": "PROMPT_QUALITY_PRODUCT.md",
       "path": "src/selfUpdate.ts",
       "reason": "§2.2·Q-7 요구 본문 — 지울 대상(업데이트 2벌 중 하나)을 이름으로 가리킨다"
+    },
+    {
+      "doc": "docs/IMPLEMENTATION-HISTORY.md",
+      "prefix": "src/legacy-tui",
+      "reason": "Q-12 로 README 에서 분리한 문서. 머리말이 '이 대부분은 삭제된 코드의 기록' 이라고 명시적으로 밝히고 있으며, 없는 경로를 이름으로 불러야 읽는 사람이 무엇이 사라졌는지 안다"
+    },
+    {
+      "doc": "docs/multienv-acceptance-report.md",
+      "prefix": "src/tui/",
+      "reason": "2026-10-01 접수 보고서 — Q-2(구 Ink TUI 삭제) 이전에 작성되어 당시 실행 위치를 그대로 적었다. 결과를 고치는 것이 아니라 그 시점의 사실을 남기는 보고서"
+    },
+    {
+      "doc": "docs/multienv-acceptance-report.md",
+      "prefix": "src/agent/gate",
+      "reason": "같은 보고서의 당시 파일명. 실제 후속 파일은 src/tools/irreversible.ts (파괴적 조작 4갈래 판정)"
+    },
+    {
+      "doc": "docs/multienv-acceptance-report.md",
+      "path": "src/setup/reset.test.ts",
+      "reason": "같은 보고서의 당시 파일명. Q-1 로 src/setup/resetDiff.test.ts 와 resetPreview.test.ts 로 나뉘었다"
+    },
+    {
+      "doc": "docs/multienv-acceptance-prompt.md",
+      "prefix": "src/tui/",
+      "reason": "2026-10-01 접수 프롬프트 — Q-2 이전에 쓰여 구 TUI 경로를 그대로 인용한다. 요구 원문은 지우지 않는다"
+    },
+    {
+      "doc": "docs/soak-2026-10-01.md",
+      "path": "src/src",
+      "reason": "경로가 아니라 **문장 속 문자열**이다 — S05 는 '이미 src 에 있으면 cd src 를 하면 src/src 이 된다' 는 상대경로 오사용 시나리오의 결과값을 그대로 적었다"
     }
   ]
 }

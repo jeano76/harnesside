@@ -14,10 +14,10 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-04)
 
 ```yaml
-phase: Q-13          # PROMPT_QUALITY_PRODUCT.md 13개 요구 중 Q-10 완료 · Q-11 다음
-status: in_progress
-last_commit: "d0825bd docs(Q-9): 실행환경 매트릭스 1장 · Node 20 실측 → engines >=22"
-next_action: "Q-10 커밋 후 Q-11(설치 경로 1개) → Q-12(README 3문서) → Q-13(harnesside doctor)"
+phase: Q-13 완료     # PROMPT_QUALITY_PRODUCT.md 13개 요구 전부 처리됨 (2026-10-04)
+status: done         # 남은 것은 **다른 축** — 브라우저 눈 실측(todo.md ③-1)과 미측정 목록
+last_commit: "(이 커밋) feat(Q-13): doctor 를 '뭐가 틀렸는지' 한 명령으로 — 읽기 전용을 실제로 재서 확인"
+next_action: "todo.md ③-1 브라우저 눈 실측(800px·긴 경로·상한 재현) — Q-* 축은 끝났음"
 blocking: 없음
 ```
 
@@ -38,9 +38,32 @@ blocking: 없음
 | Q-8 문서↔코드 드리프트 게이트 | 완료 | `e6d0932` | 문서 10개 · 경로 참조 234개를 CI가 검증 |
 | Q-9 실행환경 매트릭스 1장 | 완료 | `d0825bd` | Node 20 **측정 결과 동작 안 함** → `engines >=22` |
 | Q-10 OpenAI 호환 범위 고정 | 완료 | *(이 커밋)* | 원격 `baseUrl` **미지원으로 확정** · `/tokenize`·`/props` 실측 |
-| Q-11 설치 경로 1개 | 남음 | — | 다음 |
-| Q-12 README 3문서로 | 남음 | — | |
-| Q-13 `harnesside doctor` 확장 | 남음 | — | |
+| Q-11 설치 경로 1개 | 완료 | `801dd9d` | **`npm i -g` 하나**로 · 검증에서 실제 버그 1건 발견 |
+| Q-12 README 3문서로 | 완료 | *(이 커밋)* | README 3,070 → 320줄 · 드리프트 검사 10 → 17개 문서 |
+| Q-13 `harnesside doctor` 확장 | 완료 | *(이 커밋)* | 판정 7축 + **읽기 전용을 프로세스로 실측** · 결함 1건 발견 |
+
+**Q-13 에서 남긴 사실 세 가지** (추측으로 덮지 않는다):
+
+1. **`doctor` 가 "우리가 띄운 웹 서버"를 "다른 프로그램" 이라고 말했다 — 실제로.**
+   판정이 설치 경로 이름(`/harnesside/i`)에 매칭되는 구조였고, 이 저장소의 경로는
+   `harnessCli` 다. 사용자가 그 문장을 믿으면 자기 서버를 죽이려 한다. 두 가지를
+   함께 고쳤다: 서버 **진입점 경로**(`dist/server/index.js`)도 근거로 인정하고,
+   **인스턴스 기록의 pid** 를 명령줄보다 강한 근거로 먼저 본다. 재현 조건을 유닛에
+   남겼다(`doctorChecks.test.ts` — 정규식을 되돌리면 실제로 실패한다).
+2. **읽기 전용은 소스 grep 으로 증명되지 않는다.** 쓰지 않는 라이브러리를 추가해도
+   grep 은 통과한다. 그래서 `doctorChecks.readonly.test.ts` 가 **진짜 `doctor` 를
+   띄워** 가짜 프로젝트·가짜 HOME 의 전후를 비교한다(파일 경로+mtime+크기, 포트 집합).
+   **검사를 속이려 doctor 에 파일 하나 쓰게 하면 실제로 4개가 전부 실패한다** —
+   되돌려 보며 확인했다.
+3. **`google-chrome --version` 하나가 `~/.local/share/applications/mimeapps.list` 를
+   만든다**(실측 — HOME 이 비면 GLib 이 mime 캐시를 새로 적는다). harnesside 의
+   쓰기가 아니라 **검사 대상 프로세스의** 부수효과다. 그래서 읽기 전용 검사는
+   `$HOME` 전체가 아니라 **프로젝트 + `~/.harnesside`** 를 비교한다 — 이유를 코드에
+   적어 두지 않으면 다음 사람이 이 테스트가 흔들리는 걸 원인으로만 본다.
+
+**doctor 가 못 하는 것**(기능이 아니라 설계): 웹 창을 그리는 **브라우저의** capability,
+GPU 를 얼마나 실제로 먹나, macOS·Windows 의 포트 해석. 미측정 목록은
+`docs/VERIFICATION.md` 에 있다.
 
 **Q-10 에서 남긴 사실 두 가지** (추측으로 덮지 않는다):
 

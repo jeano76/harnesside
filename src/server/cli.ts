@@ -35,12 +35,18 @@ export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이
   harnesside status          상태 (JSON 은 --json)
   harnesside logs [-f]       로그 보기 (데몬이어도 가능)
   harnesside down            우아한 종료 (체크포인트 기록 후)
-  harnesside doctor          환경 진단 (읽기 전용)
+  harnesside doctor          환경 진단 (읽기 전용 · 아래 판정을 그대로 보여준다)
   harnesside version         버전 (= --version, package.json 의 version)
   harnesside doctor --install  없으면 설치 · 모델이 없으면 받는다 [포트]
 
+doctor 가 보는 것 (모르는 것은 "미확인" 으로 적는다 — 0 이나 false 로 채우지 않는다):
+  Node 버전(major.minor · engines 대조) · 단말 capability 5종과 단말 이름
+  포트 3상태(비어 있음 / 우리가 씀 / 다른 프로그램) — 웹 7317 · llama 8080 · CDP 9222
+  dist 가 src 보다 오래됐는가 · 설정(스키마 버전 · 비밀은 이름만) · 모델 파일
+doctor 는 **아무것도 고치지 않는다.** 손대려면 doctor --install 뿐이다.
+
 옵션:
-  --install      doctor 와 함께 판정에 이어 설치·수령한다
+  --install      doctor 와 함께 판정에 이어 설치·수령한다 (이것만 손댄다)
   --no-browser    창을 띄우지 않고 서버만 (디버깅용)
   --daemon        = up -d
   --version       버전만 출력
@@ -190,13 +196,21 @@ export async function cmdDoctor(
   emit(`  서버: ${s.running ? C.green("실행 중") : C.dim("정지")}`);
   emit(`  로그 상한: ${s.logLimits.maxChars.toLocaleString()}자 / ${s.logLimits.maxLines.toLocaleString()}줄`);
   emit(`  로그 파일: ${s.logFile}`);
-  const { execFile } = await import("node:child_process");
-  const probe = (cmd: string, args: string[]) =>
-    new Promise<{ ok: boolean; out: string }>((resolve) => {
-      execFile(cmd, args, { timeout: 8000 }, (err, stdout) =>
-        resolve({ ok: !err, out: String(stdout).trim() })
-      );
-    });
+
+  // 판정 규칙은 `doctorChecks.ts` 에 있다(2026-10-04 · Q-13). 여기 있는 건 출력뿐이다.
+  // **판정을 이 함수 안에 박아두면** 브라우저·포트·설정을 실제로 만지지 않고
+  // 결과를 조작해 검사할 방법이 사라진다(그래서 순수 판정 + 주입 가능한 I/O 로 나눴다).
+  const { collectDoctorChecks, formatCheck, nextActions, countUnknown } = await import("./doctorChecks.js");
+  const checks = await collectDoctorChecks({
+    projectRoot: paths.projectRoot,
+    home: homedir(),
+    configPath: paths.configPath,
+    // 포트 판정의 최우선 근거: **인스턴스 파일에 적힌 우리 pid**. 명령줄 매칭은
+    // 설치 경로에 따라 틀릴 수 있지만 이건 우리가 직접 쓴 값이다.
+    serverPid: s.running ? s.pid : undefined,
+  });
+  emit(C.bold("판정"));
+  for (const c of checks) emit(formatCheck(c));
 
   // llama-server 상태는 **판정 정본**(`firstRun.inspectLlama`) 을 쓴다. 여기서
   // `findLlamaServer` 만 부르면 **세 경우 중 하나가 사라진다** — "떠 있는 서버" 를
@@ -235,12 +249,39 @@ export async function cmdDoctor(
     for (const line of plan.errors) return 1;
   }
 
+  const { execFile } = await import("node:child_process");
+  const probe = (cmd: string, args: string[]) =>
+    new Promise<{ ok: boolean; out: string }>((resolve) => {
+      execFile(cmd, args, { timeout: 8000 }, (err, stdout) =>
+        resolve({ ok: !err, out: String(stdout).trim() })
+      );
+    });
+
   for (const [label, cmd, args] of [["chrome", "google-chrome", ["--version"]]] as const) {
     const r = await probe(cmd, [...args]);
     emit(`  ${label}: ${r.ok ? C.green(r.out.split("\n")[0]) : C.red("찾을 수 없음")}`);
   }
   const gpu = await probe("nvidia-smi", ["--query-gpu=memory.free", "--format=csv,noheader,nounits"]);
-  emit(`  VRAM 여유: ${gpu.ok ? `${gpu.out} MiB` : C.dim("GPU 없음")}`);
+  // GPU 조회가 실패하면 "없음" 이 아니라 **미확인**이라고 말한다. 구 명령은
+  // 실패를 "GPU 없음" 으로 바꿔 적었다 — 그건 다른 사실이다(조회 실패 ≠ GPU 없음).
+  emit(
+    `  VRAM 여유: ${gpu.ok ? `${gpu.out} MiB` : C.dim("미확인 — GPU 없음인지 조회 실패인지 이 출력만으로는 구분되지 않음")}`,
+  );
+
+  // 요구(Q-13): 출력에 **사용자가 다음에 할 수 있는 행동**이 1개 이상 있어야 한다.
+  // "모든 것이 정상" 이어도 아무것도 안 말하는 게 아니라, 남은 행동만 말한다.
+  const actions = nextActions(checks);
+  emit("");
+  emit(C.bold("다음에 할 수 있는 것"));
+  if (actions.length === 0) {
+    emit(`  ${C.green("없음 — 이 항목에서 고칠 것이 없습니다")}`);
+  } else {
+    for (const a of actions) emit(`  ${a}`);
+  }
+  const unknown = countUnknown(checks);
+  if (unknown > 0) {
+    emit(`  ${C.dim(`미확인 ${unknown}건 — 위 목록에서 "미확인" 으로 적힌 항목은 측정하지 못했다는 뜻입니다 (0 이나 false 가 아닙니다)`)}`);
+  }
   return 0;
 }
 

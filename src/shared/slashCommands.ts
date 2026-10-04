@@ -26,7 +26,16 @@ export interface SlashCommandDef {
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = [
-  { key: "help", label: "/help", description: "도움말 + 키보드 단축키 전체", where: "tui" },
+  // `/help` 는 `tui` 였다가 **2026-10-04 에 `both` 로 바꿨다.** TUI 가 삭제되면서
+  // (Q-2) 이 명령을 실행할 곳이 하나도 남지 않았고, 사용자가 친 뒤에는
+  // "웹에서 지원하지 않는 명령입니다" 가 답이었다 — 이미 웹에 있는 사람이
+  // 웹이 명령을 모른다고 들었다. 이제 웹 프롬프트에서 **이 프로그램의 명령 목록**을
+  // 보여준다(`web/main.tsx` 의 `runSlash` 의 `help` 분기).
+  { key: "help", label: "/help", description: "이 프로그램의 명령 목록", where: "both" },
+  // `/keys` 는 **의도적으로 `tui` 로 남긴다.** 이 명령이 읽는 키바인딩 정본
+  // (`keybindings.ts`)이 구 TUI와 함께 삭제됐고(2026-10-04), 웹 쪽 키바인딩 정본은
+  // 아직 없다. 목록을 지어내지 않는다 — 없는 데이터를 보여주는 도움말은
+  // 도움말이 아니라 거짓말이다. 웹에 키바인딩 정본이 생기면 그때 `both` 로 올린다.
   { key: "keys", label: "/keys", description: "키보드 단축키만 보기", where: "tui" },
   { key: "quit", label: "/quit", description: "정상종료 (창을 닫으면 함께 종료)", where: "both" },
   { key: "queue", label: "/queue", description: "대기열 보기", where: "both" },
@@ -92,4 +101,64 @@ export function slashMatches(input: string): SlashCommandDef[] {
 /** 웹에서 실행 가능한 명령만 — 웹 매니페스트를 그릴 때 쓴다. */
 export function webSlashCommands(): SlashCommandDef[] {
   return SLASH_COMMANDS.filter((c) => c.where !== "tui");
+}
+
+/**
+ * `/help` 가 그리는 본문 — **순수 함수**. (2026-10-04)
+ *
+ * 왜 React 콜백 안이 아니라 여기 있는가: UI 안에 두면 브라우저 없이는 출력물을
+ * 확인할 수 없다. 이 저장소 규칙("사람이 보는 것은 실제 브라우저로 확인한다")을
+ * 지키면서도 **회귀 검사**를 하려면, 그리는 규칙이 순수 함수여야 한다.
+ * 로직은 `.ts` 에 두고 `.tsx` 는 렌더만 한다 — 이 저장소의 관례.
+ *
+ * 목록을 여기에 다시 적지 않는다. `SLASH_COMMANDS` 가 정본이며, 여기서는
+ * **읽기만** 한다(같은 일을 두 곳에 두지 않는다).
+ */
+const HELP_GROUPS: Array<[string, string[]]> = [
+  ["대화 · 컨텍스트", ["compact", "queue", "plan-clear"]],
+  ["규칙 · 스킬 · 자기개선", ["skills", "rules", "improve", "improve-apply"]],
+  ["모델 · 서버", ["models", "server", "reset"]],
+  ["터미널 · AI CLI", ["term", "cli"]],
+  ["안내 · 종료", ["help", "quit"]],
+];
+
+/** 라벨 폭. `padEnd` 으로 이름을 맞추면 목록을 훑을 때 어느 줄에 무엇이 있는지 눈에 들어온다. */
+const LABEL_W = 16;
+
+export function renderHelpText(
+  all: SlashCommandDef[] = SLASH_COMMANDS,
+  web: SlashCommandDef[] = all.filter((c) => c.where !== "tui")
+): string {
+  const lines: string[] = [
+    "harnesside 명령 — 입력창에 `/` 를 치면 자동완성됩니다. 인자가 필요하면 뒤에 공백을 두세요.",
+    "",
+  ];
+  const placed = new Set<string>();
+  for (const [title, keys] of HELP_GROUPS) {
+    const rows = web.filter((c) => keys.includes(c.key));
+    if (!rows.length) continue;
+    for (const r of rows) placed.add(r.key);
+    lines.push(`${title}`);
+    // 화면에 보이는 이름을 쓴다. 사용자는 키가 아니라 `/models` 를 타이핑한다.
+    for (const c of rows) lines.push(`  ${c.label.padEnd(LABEL_W)}${c.description}`);
+    lines.push("");
+  }
+  // 그룹에 못 넣은 명령이 새로 생겨도 **사라지지 않게** 한다 — 새 명령이 조용히
+  // 목록에서 빠지면 사용자는 없는 줄 찾게 되고(원인이 없다), 있는 줄을 못 찾게
+  // 되면(원인이 있다) 둘 다 나쁘다. 최소 한 줄로는 반드시 보인다.
+  const rest = web.filter((c) => !placed.has(c.key));
+  if (rest.length) {
+    lines.push("기타");
+    for (const c of rest) lines.push(`  ${c.label.padEnd(LABEL_W)}${c.description}`);
+    lines.push("");
+  }
+  // 조용히 없는 척 하지 않는다: 빠진 명령이 있으면 **몇 개와 무엇인지** 말한다.
+  const tuiOnly = all.filter((c) => c.where === "tui");
+  if (tuiOnly.length) {
+    lines.push(
+      `이 창에서는 쓸 수 없는 명령 ${tuiOnly.length}개: ${tuiOnly.map((c) => c.label).join(" ")}`,
+      "  — 콘솔(TUI) 전용이며 그 UI는 2026-10-04 에 삭제되었습니다.",
+    );
+  }
+  return lines.join("\n").trimEnd();
 }
