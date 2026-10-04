@@ -41,7 +41,7 @@ test("detectRunningServer finds a real /v1/models responder and returns its base
     },
     async (port) => {
       const result = await detectRunningServer("127.0.0.1", [...unusedPorts(2), port]);
-      assert.deepEqual(result, { baseUrl: `http://127.0.0.1:${port}`, model: "ornith-1.5-35b" });
+      assert.deepEqual(result, { baseUrl: `http://127.0.0.1:${port}`, model: "ornith-1.5-35b", verified: "other" });
     }
   ));
 

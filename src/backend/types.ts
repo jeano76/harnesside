@@ -34,13 +34,11 @@ export interface ChatCompletionRequest {
   temperature?: number;
   max_tokens?: number;
   /** llama.cpp-server / chat-template passthrough. Used to turn the
-   *  model's chain-of-thought off (`{ enable_thinking: false }`) — sent
-   *  only when `enableThinking` is explicitly false (default is ON per
-   *  panel improvement 2026-10-01). See config.ts's `enableThinking` for
-   *  the measurements behind the old OFF default: with thinking on, an
-   *  entire max_tokens budget was consumed by invisible `reasoning_content`
-   *  before the tool call even started. A backend that doesn't recognize
-   *  the field ignores it. */
+   *  model's chain-of-thought off (`{ enable_thinking: false }`) — see
+   *  config.ts's `enableThinking` for the measurements behind why that's
+   *  the default: with thinking on, an entire max_tokens budget was
+   *  consumed by invisible `reasoning_content` before the tool call even
+   *  started. A backend that doesn't recognize the field ignores it. */
   chat_template_kwargs?: Record<string, unknown>;
   /** llama.cpp-server sampling passthrough, ignored by backends that don't
    *  recognize it. Sent explicitly because a bare launch of llama-server
@@ -63,13 +61,38 @@ export interface ChatCompletionResponse {
     finish_reason: string;
   }>;
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  /**
+   * True when THIS client ended the response by aborting at a `deadlineMs`
+   * it was given, as opposed to the model stopping on its own or the request
+   * hitting `max_tokens`.
+   *
+   * Necessary because all three endings are indistinguishable on the wire —
+   * every one of them is `finish_reason: "length"`. A caller that has to react
+   * differently to "we ran out of clock" than to "the model finished what we
+   * budgeted for it to write" cannot use `finish_reason` alone to tell them
+   * apart. Not part of the OpenAI wire format: set locally by the client that
+   * imposed the deadline, absent otherwise (so callers must treat undefined as
+   * "not deadline-truncated").
+   */
+  deadlineHit?: boolean;
 }
 
 export interface ModelBackend {
   /** Streams assistant deltas; resolves with the final assembled message. */
   chat(
     req: ChatCompletionRequest,
-    onDelta?: (chunk: ChatCompletionChunk) => void
+    onDelta?: (chunk: ChatCompletionChunk) => void,
+    /**
+     * `deadlineMs` bounds the whole request in wall-clock time and, on hit,
+     * resolves with whatever text arrived instead of throwing. Requires
+     * streaming (`stream: true` AND an `onDelta`); a non-streaming response is
+     * one JSON document that only exists after generation ends, so there is
+     * nothing partial to return. Optional and ignored by backends that don't
+     * implement it — but see the OpenAICompatibleClient doc comment: it
+     * deliberately THROWS rather than ignoring it, so a caller can never
+     * believe it set a ceiling that silently wasn't applied.
+     */
+    opts?: { deadlineMs?: number }
   ): Promise<ChatCompletionResponse>;
 
   listModels(): Promise<string[]>;
@@ -113,7 +136,7 @@ export interface ModelBackend {
 
   /** Aborts whichever chat() call is currently in flight on this backend,
    *  if any (a no-op otherwise). Lets the caller stop a turn the user
-   *  cancelled (e.g. via the TUI's Esc-to-cancel) instead of waiting for
+   *  cancelled (e.g. via the web IDE's cancel button) instead of waiting for
    *  the model to finish generating on its own — the single inference slot
    *  (`-np 1`) would otherwise stay pinned by a turn nobody wants anymore
    *  for as long as it takes to finish. Optional so a backend that can't

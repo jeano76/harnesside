@@ -1,4 +1,5 @@
 import fetch from "node-fetch";
+import { Agent } from "node:http";
 import type {
   ChatCompletionChunk,
   ChatCompletionRequest,
@@ -7,6 +8,34 @@ import type {
   ModelBackend,
   ToolDef,
 } from "./types.js";
+
+/** Every request this client makes opts out of HTTP keep-alive.
+ *
+ *  Node's global agent has `keepAlive: true` (Node >= 19), and it does NOT
+ *  honor the server's advertised keep-alive window — there is no code path
+ *  that reads `Keep-Alive: timeout=N` back out of the response. llama-server
+ *  advertises `Keep-Alive: timeout=5, max=100` and really does close an idle
+ *  connection after 5s, but Node keeps that socket in its free pool and
+ *  happily hands it back out. The next request writes onto a socket the
+ *  server has already torn down, and the client sees a RST before a single
+ *  response byte arrives.
+ *
+ *  Measured against the real backend, 8 sequential streaming requests:
+ *  implicit global agent → 4 ok / 4 failed ("socket hang up"); the same
+ *  requests with keep-alive off → 8 ok / 0 failed. The failures are pure
+ *  connection-reuse races: they surface in 0.0s, and llama-server's own log
+ *  shows no task ever launched for them, so the request never reached
+ *  inference at all.
+ *
+ *  This reached the user as the old TUI randomly failing a turn with an
+ *  unexplained network error, and — worse — the agent loop treats a chat
+ *  failure as end-of-turn, so a failed retry looked like the model had simply
+ *  stopped working.
+ *
+ *  Disabling keep-alive costs one TCP handshake per request, which is free on
+ *  the loopback backend this is built for; the server was closing the
+ *  connection anyway, so there is no reuse left to lose. */
+const HTTP_AGENT = new Agent({ keepAlive: false });
 
 // Found auditing for the same class of bug already fixed three times
 // (run_shell's missing timeout, browser.ts's missing CDP timeout, the
@@ -80,7 +109,7 @@ export class OpenAICompatibleClient implements ModelBackend {
   ) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(url, { ...options, signal: controller.signal as any });
+      return await fetch(url, { ...options, signal: controller.signal as any, agent: HTTP_AGENT });
     } catch (err: any) {
       if (err?.name === "AbortError") {
         if (controller.signal.reason === CANCELLED_REASON) throw new Error("cancelled by user");
@@ -133,21 +162,83 @@ export class OpenAICompatibleClient implements ModelBackend {
   }
 
   /** llama.cpp-server-specific endpoint — callers must be ready for this to
-   *  throw and fall back to the configured value. */
+   *  throw and fall back to the configured value.
+
+   *  Tries `/config` first (`model_info.n_ctx`), then `/props`
+   *  (`default_generation_settings.n_ctx`). Neither endpoint is present in every
+   *  build: one llama.cpp variant answers `/props` but 404s `/config`, and the
+   *  build here registers `/props` with no `/config` route at all.
+   *
+   *  Getting this wrong is not cosmetic. When both lookups fail, callers fall
+   *  back to `config.llama.contextSize ?? 8192`, so a server actually launched
+   *  with `-c 32768` gets budgeted as 8192. Compaction then fires ~4x too early
+   *  and its own summary request overruns the real limit — the compact/resume
+   *  loop this fallback exists to prevent (see index.tsx on compaction firing
+   *  "8x too eagerly"). */
   async getContextSize(): Promise<number> {
-    const res = await this.fetchWithTimeout(`${this.baseUrl}/props`, { headers: this.headers() }, LIGHTWEIGHT_FETCH_TIMEOUT_MS, "getContextSize");
-    if (!res.ok) throw new Error(`getContextSize failed: ${res.status} ${await res.text()}`);
-    const json = (await res.json()) as { default_generation_settings?: { n_ctx?: number }; n_ctx?: number };
-    const n_ctx = json.default_generation_settings?.n_ctx ?? json.n_ctx;
-    if (!n_ctx) throw new Error("getContextSize: /props response had no n_ctx field");
+    // Every failure mode here means "this endpoint did not tell us", never "stop".
+    // A reverse proxy that answers `/config` with an HTML login page, a build
+    // that 404s it, a variant that serves a different shape — all are answers, and
+    // the other endpoint is still worth asking. Letting any of them escape threw
+    // out of the `??` chain before the fallback ran, so a server whose `/props`
+    // would have reported 40960 instead raised a JSON parse error and the caller
+    // fell back to a hard-coded 8192.
+    const read = async (path: string, pick: (j: any) => number | undefined): Promise<number | null> => {
+      try {
+        const res = await this.fetchWithTimeout(`${this.baseUrl}${path}`, { headers: this.headers() }, LIGHTWEIGHT_FETCH_TIMEOUT_MS, "getContextSize");
+        if (!res.ok) return null;
+        return pick(await res.json()) ?? null;
+      } catch (err: any) {
+        // A malformed body is a shape mismatch, so keep looking on the other
+        // endpoint. A transport failure is not: if the server is unreachable or
+        // timing out, the second request will fail identically, and re-raising
+        // preserves the diagnosis ("timed out") that the catch would otherwise
+        // flatten into a generic "neither endpoint answered".
+        if (/timed out|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|fetch failed/i.test(err?.message ?? "")) {
+          throw err;
+        }
+        return null;
+      }
+    };
+
+    const n_ctx =
+      (await read("/config", (j) => j.model_info?.n_ctx)) ??
+      (await read("/props", (j) => j.default_generation_settings?.n_ctx));
+    if (!n_ctx) throw new Error("getContextSize: neither /config nor /props reported an n_ctx");
     return n_ctx;
   }
 
   async chat(
     req: ChatCompletionRequest,
-    onDelta?: (chunk: ChatCompletionChunk) => void
+    onDelta?: (chunk: ChatCompletionChunk) => void,
+    // An ABSOLUTE wall-clock budget for the whole request — connection,
+    // prefill, and every generated token — as opposed to the two timers
+    // below it, which bound "time since the last thing happened" and so a
+    // chatty-but-slow stream can run unbounded under both.
+    //
+    // Exists for the compaction summary (compactor.ts). Its latency is 100%
+    // decode — prefill is served from the prompt cache — so the only way to
+    // bound "how long does the user stare at [compaction]" is to bound the
+    // generation itself. A token budget can't do that job: `max_tokens` is a
+    // duration only once you know the machine's tok/s, and that varies ~8x
+    // across the hardware this supports. Hitting the deadline returns
+    // whatever text arrived (NOT an error) — see streamChat's deadlineHit
+    // handling for why a partial answer is the right answer here, and why
+    // that is safe only because the caller opted in by passing this.
+    opts?: { deadlineMs?: number }
   ): Promise<ChatCompletionResponse> {
     if (!req.stream || !onDelta) {
+      // A deadline cannot be honored on the non-streaming path the way it is
+      // below: the whole point is keeping the partial body, and a
+      // `stream: false` response is one JSON document that only exists once
+      // generation has finished. Refusing rather than silently ignoring it,
+      // because a caller that believes it set a ceiling and silently didn't
+      // gets exactly the unbounded wait it was trying to avoid.
+      if (opts?.deadlineMs) {
+        throw new Error(
+          `chat: deadlineMs is not supported without streaming (stream: ${req.stream}, onDelta: ${Boolean(onDelta)})`
+        );
+      }
       const controller = new AbortController();
       this.currentChatController = controller;
       try {
@@ -165,7 +256,7 @@ export class OpenAICompatibleClient implements ModelBackend {
       }
     }
 
-    return this.streamChat(req, onDelta);
+    return this.streamChat(req, onDelta, opts?.deadlineMs);
   }
 
   /** Consumes an SSE stream and reassembles it into a single final response,
@@ -186,7 +277,8 @@ export class OpenAICompatibleClient implements ModelBackend {
    *  respecting it. */
   private async streamChat(
     req: ChatCompletionRequest,
-    onDelta: (chunk: ChatCompletionChunk) => void
+    onDelta: (chunk: ChatCompletionChunk) => void,
+    deadlineMs?: number
   ): Promise<ChatCompletionResponse> {
     const controller = new AbortController();
     // Set immediately (before the connection even completes) so cancel()
@@ -208,6 +300,7 @@ export class OpenAICompatibleClient implements ModelBackend {
         headers: this.headers(),
         body: JSON.stringify({ ...req, stream: true }),
         signal: controller.signal as any, // node-fetch's AbortSignal type predates the global one
+        agent: HTTP_AGENT, // see HTTP_AGENT — keep-alive reuse fails against llama-server
       });
     } catch (err: any) {
       if (err?.name === "AbortError") {
@@ -249,6 +342,26 @@ export class OpenAICompatibleClient implements ModelBackend {
       }, CHAT_FETCH_TIMEOUT_MS);
     };
     armIdleTimer();
+
+    // The absolute ceiling. Started AFTER the connection is established, so it
+    // measures generation time rather than including however long the request
+    // spent queued behind other work on a busy single-slot server — queueing is
+    // the caller's business (CHAT_FETCH_TIMEOUT_MS / the retry loop in
+    // loop.ts), and folding it in here would make the deadline fire on a
+    // request that never even started generating, which is not what a caller
+    // asking to bound "how long the answer takes" means.
+    //
+    // Deliberately NOT re-armed per chunk, unlike armIdleTimer above: this one
+    // is a total budget, and re-arming it would silently turn it back into a
+    // second copy of the idle timer.
+    let deadlineHit = false;
+    const deadlineTimer: ReturnType<typeof setTimeout> | undefined =
+      deadlineMs && deadlineMs > 0
+        ? setTimeout(() => {
+            deadlineHit = true;
+            controller.abort();
+          }, deadlineMs)
+        : undefined;
 
     try {
       for await (const chunk of res.body as unknown as AsyncIterable<Buffer>) {
@@ -318,7 +431,7 @@ export class OpenAICompatibleClient implements ModelBackend {
           // Measured directly against the real backend: a request whose
           // whole 420-token budget went to reasoning produced 420 of
           // these deltas and zero `content`/`tool_calls` deltas — and
-          // because nothing here looked at this field, harnesside rendered
+          // because nothing here looked at this field, the old TUI rendered
           // absolutely nothing for the entire time, which is what the
           // repeated "it looks stuck / 멈춘 것 같다" reports actually
           // were. It also has to count toward deltaCount: these tokens
@@ -363,9 +476,18 @@ export class OpenAICompatibleClient implements ModelBackend {
       if (err?.name === "AbortError" && idleTimedOut) {
         throw new Error(`chat stream went idle (no new data) for over ${CHAT_FETCH_TIMEOUT_MS}ms`);
       }
-      if (!(clientCapped && err?.name === "AbortError")) throw err;
+      // The deadline, like the max_tokens cap, is an intended ending rather
+      // than a failure: fall through to returning the partial text assembled
+      // so far. The caller asked for a ceiling and opted into truncation by
+      // passing deadlineMs, and for the compaction summary a shorter answer is
+      // a strictly better outcome than no compaction at all.
+      if (!(clientCapped && err?.name === "AbortError") && !(deadlineHit && err?.name === "AbortError")) {
+        throw err;
+      }
+      if (deadlineHit) finishReason = "length";
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       this.currentChatController = null;
     }
 
@@ -423,6 +545,12 @@ export class OpenAICompatibleClient implements ModelBackend {
           finish_reason: finishReason,
         },
       ],
+      // Set only when WE ended it via the deadline. `finish_reason` is
+      // "length" for the deadline, the client-side max_tokens cap, and the
+      // server honoring max_tokens alike, so this is the only thing that
+      // separates "out of clock" from "the model wrote what it was going to".
+      // Callers that don't care about the distinction never read it.
+      ...(deadlineHit ? { deadlineHit: true } : {}),
     };
   }
 }

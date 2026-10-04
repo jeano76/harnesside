@@ -30,8 +30,18 @@ export const IDE_PORT = 7317;
 /** Ports harnesside will probe for an already-running OpenAI-compatible server
  *  when a project has no config yet. The candidates are ORDERED and the first
  *  responder wins, so our own port leads: if harnesside is already serving, that
- *  is unambiguously the right answer. */
-export const COMMON_PORTS = [LLAMA_PORT, 11434];
+ *  is unambiguously the right answer.
+ *
+ *  8081 is here for a specific reason. It was the spawn default for a long
+ *  time, so it is the single most likely port for a user's existing llama-server
+ *  to be on — and `backend/detect.ts` used to include it while this list omitted
+ *  it. That divergence meant a server on 8081 was adopted by config loading and
+ *  then NOT adopted by the bootstrap, which went on to plan a different port and
+ *  spawn a second llama-server beside it. Two lists with the same name and
+ *  different contents is exactly the class of bug this file's own header
+ *  comment claims to have eliminated; there is now one list, and
+ *  `backend/detect.ts` re-exports it. */
+export const COMMON_PORTS = [LLAMA_PORT, 8081, 11434];
 
 export type PortState = "free" | "in-use" | "unknown";
 
@@ -111,10 +121,19 @@ export async function planPorts(opts: {
   idePort?: number;
   /** 이미 떠 있는 서버를 채택했다면 그 포트. 있으면 **옮기지 않는다.** */
   adoptedLlama?: AdoptedLlama;
+  /**
+   * 포트 탐색이 이미 살펴본 포트들. 하드 예외가 아니라 **배제**다 —
+   * 탐색이 살펴본 포트는 "무언가가 동작하는 것을 봤다"는 뜻이므로, 거기에
+   * 우리 서버를 bind 하면 두 서버가 한 GPU를 나눠 갖게 된다.
+   *
+   * `bootstrap.ts` 가 서버 탐색을 먼저 하고 이 함수를 부를 때 넘긴다.
+   */
+  avoid?: number[];
 }): Promise<PortPlan> {
   const { probe } = opts;
   const moved: PortPlan["moved"] = [];
   const notes: string[] = [];
+  const avoid = new Set(opts.avoid ?? []);
 
   let llamaPort = opts.llamaPort ?? LLAMA_PORT;
   if (opts.adoptedLlama) {
@@ -124,6 +143,10 @@ export async function planPorts(opts: {
     // 답은 이미 알고 있다.
     llamaPort = opts.adoptedLlama.port;
     notes.push(`llama 포트 ${llamaPort}: 이미 떠 있는 서버를 채택(${opts.adoptedLlama.model}) — 포트를 옮기지 않습니다.`);
+  } else if (avoid.has(opts.llamaPort ?? LLAMA_PORT)) {
+    // 탐색이 이미 살펴봤는데 응답이 없었던 포트. "사용 중이라서가 아니라"
+    // 그래도 bind 를 시도한다 — 그래야 사용자에게 실제로 된 사실이 보인다.
+    notes.push(`llama 포트 ${llamaPort} 은(는) 서버 탐색 대상이었으나 응답하지 않았습니다 — 그대로 bind 를 시도합니다.`);
   } else {
     const llamaState = await probe(llamaPort);
     if (llamaState === "free" || llamaState === "unknown") {
@@ -140,7 +163,7 @@ export async function planPorts(opts: {
         moved.push({ what: "llama", from: llamaPort, to: LLAMA_PORT, because: "기록된 포트가 사용 중이고 기본 포트가 비어 있음" });
         llamaPort = LLAMA_PORT;
       } else {
-        const next = await firstFree(probe, llamaPort + 1, llamaPort + 20);
+        const next = await firstFree(probe, llamaPort + 1, llamaPort + 20, undefined, avoid);
         moved.push({ what: "llama", from: llamaPort, to: next, because: "이미 사용 중" });
         llamaPort = next;
       }
@@ -177,11 +200,20 @@ export async function planPorts(opts: {
 }
 
 /** First free port in [from, to], skipping `reserved` (the other service's
- *  port). Returns `to` when the range is exhausted — the caller reports that as
- *  a collision rather than pretending the port is free. */
-async function firstFree(probe: PortProbe, from: number, to: number, reserved?: number): Promise<number> {
+ *  port) and every port in `avoid`. Returns `to` when the range is exhausted —
+ *  the caller reports that as a collision rather than pretending the port is
+ *  free. */
+async function firstFree(
+  probe: PortProbe,
+  from: number,
+  to: number,
+  reserved?: number,
+  avoid: Set<number> = new Set()
+): Promise<number> {
   for (let p = from; p <= to; p++) {
-    if (p === reserved) continue;
+    // 하드 예외가 아니라 배제다 — 탐색이 살펴본 포트는 이미 다른 서버의
+    // 흔적이 있는 곳이라, 거기에 bind 하면 두 서버가 한 GPU를 나눠 갖는다.
+    if (p === reserved || avoid.has(p)) continue;
     if ((await probe(p)) === "free") return p;
   }
   return to;

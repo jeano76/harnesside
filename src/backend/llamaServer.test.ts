@@ -1,8 +1,9 @@
 /**
- * `LlamaServerManager` 테스트 — **레거시 TUI 가 실제로 쓰는** 스포너.
+ * `LlamaServerManager` 테스트 — **더 이상 사용되지 않는** 스포너(구 TUI 경로).
  *
- * 이 클래스는 새 `LlamaLauncher` 로 대체됐지만 `src/legacy-tui/` 가 아직 쓴다. 그래서
- * "옛 코드" 라고 테스트를 빼면 **실제로 돌아가는 경로** 가 검사 밖에 남는다.
+ * 이 클래스는 새 `LlamaLauncher`(`src/server/llamaLauncher.ts`)로 대체됐다.
+ * 구 Ink TUI 가 2026-10-04 에 삭제되면서 이 코드도 배포 경로에서 완전히 제외됐다.
+ * 테스트는 회귀 방지용으로만 유지한다.
  *
  * 커버리지 표가 35% 라고 지적한 대로, 테스트가 없던 동안 실제로 버그가 있었다:
  * `'error'` 리스너가 없어서 **바이너리 경로가 틀리면 프로세스 전체가 죽었다**(실측).
@@ -45,13 +46,14 @@ test("**바이너리가 없으면 예외가 아니라 원인** — 그리고 사
     (e: unknown) => {
       assert.ok(e instanceof Error);
       // **내부 영어 문자열이 아니라 원인이 보이는 문장** 이어야 한다(§11.3).
-      assert.match(e.message, /llama-server 실행에 실패했습니다/);
+      assert.match(e.message, /llama-server 를 실행할 수 없습니다/);
       assert.match(e.message, /ENOENT/, `원인이 남지 않았다: ${e.message}`);
       return true;
     }
   );
-  assert.ok(m.error, "원인을 보존하지 않았다");
-  assert.equal(m.error!.message.includes("ENOENT"), true);
+  // 원인이 보존되어야 한다 (spawnError 필드)
+  assert.ok((m as any).spawnError, "원인을 보존하지 않았다");
+  assert.equal((m as any).spawnError!.message.includes("ENOENT"), true);
 });
 
 test("**프로세스가 죽지 않는다** — uncaughtException 이 나면 TUI 가 함께 사라진다", async () => {
@@ -79,16 +81,25 @@ test("준비되면 **그대로 지나간다** — 살아 있는 서버를 세지
   });
   const port = 19000 + Math.floor(Math.random() * 500);
   await new Promise<void>((r) => srv.listen(port, "127.0.0.1", r));
-  const m = new LlamaServerManager(cfg({ port }));
+  // **자식은 살아 있어야 한다**(Q-3, 2026-10-04). 이 테스트는 약한 사본 시절 `/bin/true`(즉시 종료)를
+  // 썼는데, 강한 판본은 "우리가 띄운 자식이 죽었는데 포트가 응답한다" 를 **실패**로 본다 — 그 응답은
+  // 남의 서버이고, 성공으로 두면 남의 서버를 조용히 채택한다. 부하가 걸리면 `/bin/true` 가 첫 헬스체크
+  // 전에 끝나서 전체 실행에서만 깨졌다(단독 실행은 통과). 그래서 인자를 무시하고 살아 있는 가짜를 쓴다.
+  const dir = await mkdtemp(join(tmpdir(), "hs-llama-alive-"));
+  const alive = join(dir, "llama-server");
+  await writeFile(alive, "#!/bin/sh\nexec sleep 30\n");
+  await chmod(alive, 0o755);
+  const m = new LlamaServerManager(cfg({ port, binPath: alive }));
   try {
-    // binPath 는 진짜 서버를 쓰지 않는다(헬스체크는 HTTP 이므로).
+    // 헬스체크는 HTTP 다 — 위의 가짜 HTTP 서버가 응답한다.
     await m.start();
-    assert.equal(m.error, null, "성공했는데 실패 원인이 남았다");
+    assert.equal((m as any).spawnError, null, "성공했는데 실패 원인이 남았다");
     // client() 가 같은 주소를 쓴다 — 별도 클라이언트를 만들지 않는다.
     assert.ok(m.client());
   } finally {
     m.stop();
     await new Promise<void>((r) => srv.close(() => r()));
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
