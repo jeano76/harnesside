@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { getCapabilities, borderStyleFor } from "./terminal.js";
+import { SLASH_COMMANDS } from "../shared/slashCommands.js";
 
 export interface SlashMenuItem {
   key: string;
@@ -12,30 +13,16 @@ export interface SlashMenuItem {
 // implementations — there is no model re-derivation left to trigger and no gate
 // left to toggle. They are not hidden behind a flag: the code that answered them
 // is deleted, so a stale config key or a keybinding document cannot revive them.
-export const SLASH_MENU_ITEMS: SlashMenuItem[] = [
-  { key: "help", label: "/help", description: "도움말 + 키보드 단축키 전체" },
-  { key: "keys", label: "/keys", description: "키보드 단축키만 보기" },
-  { key: "quit", label: "/quit", description: "Quit" },
-  { key: "queue", label: "/queue", description: "Add a message to the queue" },
-  { key: "compact", label: "/compact", description: "Run context compaction now" },
-  { key: "term", label: "/term", description: "감지된 터미널과 지원 기능 상태" },
-  { key: "mouse", label: "/mouse", description: "마우스 스크롤/클릭 켜기·끄기" },
-  // /copy is the keyboard route to the same clipboard a mouse drag writes to.
-  // It has to be a registered item, not just a case in index.tsx: the menu
-  // filters typed input against this list, so an unregistered command shows
-  // "0 matching commands" and Enter never dispatches it — which is exactly
-  // what happened the first time this was added.
-  { key: "copy", label: "/copy", description: "화면 로그 복사 (드래그 선택과 같은 클립보드)" },
-  { key: "skills", label: "/skills", description: "List loaded skills" },
-  { key: "rules", label: "/rules", description: "List loaded rules" },
-  { key: "improve", label: "/improve", description: "Analyze repeated failures → propose a rule" },
-  { key: "improve-apply", label: "/improve-apply", description: "Save the last proposal as a rule file" },
-  // Label and key must agree. This one didn't: the key is "plan-clear"
-  // (what index.tsx dispatches) while the label read "/plan clear", so
-  // typing exactly what the menu advertised matched no item and the user got
-  // "No matching commands" from the very menu that suggested it.
-  { key: "plan-clear", label: "/plan-clear", description: "Clear a stuck plan-progress indicator" },
-];
+//
+// **목록의 정본은 `shared/slashCommands.ts` 다** (사용자 요구: 웹 프롬프트에서도
+// 슬래시로 같은 명령을 쓰게). 예전엔 이 배열만 TUI 에 있었고 웹엔 아무것도
+// 없었는데, **화면에 보이는 목록**이라 두 곳에 두면 반드시 하나가 뒤처진다.
+// 여기서는 TUI 모양(`key/label/description`)으로 바꿔 **읽기만** 한다.
+export const SLASH_MENU_ITEMS: SlashMenuItem[] = SLASH_COMMANDS.map((c) => ({
+  key: c.key,
+  label: c.label,
+  description: c.description,
+}));
 
 export interface SlashMenuProps {
   /** The items left after typing-to-filter (a subset of SLASH_MENU_ITEMS,

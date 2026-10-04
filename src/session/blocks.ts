@@ -39,6 +39,15 @@ export interface AgentBlock {
     what: "settings" | "diff" | "file" | "dirs";
     /** `file` 일 때 경로. 나머지는 무시. */
     path?: string;
+    /**
+     * 사람이 이 뷰를 **접었다**. 다시 같은 뷰를 열면 펼쳐진다(사용자 요구: "설정
+     * 버튼을 다시 누르면 닫힘").
+     *
+     * **삭제가 아니라 접기다.** 메시지를 지우면 되돌릴 수 없다 — 닫았다가 다시
+     * 열었을 때 **같은 자리에** 돌아와야 하고, 스크롤로 되돌아가 볼 수도 있어야
+     * 한다. 세션 저장에도 그대로 남는다.
+     */
+    viewCollapsed?: boolean;
   };
   /**
    * 도구 호출.
@@ -82,6 +91,60 @@ export function openView(
     return blocks;
   }
   return [...blocks, { id: `view-${at}-${blocks.length}`, kind: "view", text: "", view, at }];
+}
+
+/**
+ * 같은 뷰를 열면 **닫고**, 아니면 연다 (사용자 요구: "설정 버튼을 다시 누르면 닫힘").
+ *
+ * 왜 `openView` 안에서 처리하지 않나: `openView` 는 **두 번 열면 하나로 합친다**가
+ * 그 행동을 바꿔야 하는 순간이 온다. "같은 뷰를 누를 때 닫는다" 를 별도 함수로
+ * 두는 이유:
+ *  - **여는 경로는 여럿이다**(헤더 아이콘·팔레트·모델에서 연 링크). 어느 경로로
+ *    눌러도 **같은 규칙**이어야 "아이콘에서는 닫히는데 팔레트에서는 쌓인다" 가
+ *    되지 않는다(이 저장소가 가장 많이 기록한 실패 유형).
+ *  - "닫는 것" 은 되돌릴 수 있어야 한다. 메시지를 **삭제**(pop)하면 되돌릴 수 없고,
+ *    `openView` 는 항목이 사라진 자리에 **다시 넣을 수 있는 id** 를 계산할 수
+ *    없다. 그래서 **닫았다고 표시만 하고 항목은 남긴다**(아래).
+ *
+ * 닫힌 뷰 블록은 화면에 "접힘" 으로 남고, 같은 뷰를 다시 열면 그 자리에 펼쳐진다.
+ * 기록이 사라지지 않으므로 스크롤로 되돌아갈 수 있다 — 세션 저장도 그대로다.
+ */
+/** 맨 뒤 뷰 블록이 요청한 뷰인가(닫혔는지와 무관하게 같은 뷰로 본다). */
+function isTargetView(b: AgentBlock | undefined, view: NonNullable<AgentBlock["view"]>): boolean {
+  return !!b && b.kind === "view" && b.view?.what === view.what && b.view?.path === view.path;
+}
+
+/**
+ * 열기/닫기 토글 — 여는 경로가 여러 개여도 **항상 이 하나**를 쓴다.
+ *
+ * 엣지 케이스 두 개를 **명시적으로** 정한다:
+ *  - 마지막 블록이 **다른** 뷰면: 그대로 연다(앞의 설정 화면은 남긴다 — 사용자가
+ *    보던 것을 지우지 않는다).
+ *  - 마지막 뷰 블록이 **같은** 뷰면: 닫았다/펼쳤다만 뒤집는다.
+ */
+export function toggleView(
+  blocks: AgentBlock[],
+  view: NonNullable<AgentBlock["view"]>,
+  at: number
+): AgentBlock[] {
+  const last = blocks[blocks.length - 1];
+  if (!isTargetView(last, view)) return openView(blocks, view, at);
+  const next = [...blocks];
+  const target = next[next.length - 1];
+  // `viewCollapsed` 는 `view` 안에 산다 — 접힘은 "어떤 뷰인가" 의 일부지,
+  // 블록 전체의 상태가 아니다(다른 뷰를 열면 이 블록은 원래대로 열린다).
+  const v = { ...target.view!, viewCollapsed: !target.view!.viewCollapsed };
+  next[next.length - 1] = { ...target, view: v };
+  return next;
+}
+
+/** 특정 뷰 블록을 접는다 — 블록 안의 ✕ 버튼이 부른다. */
+export function collapseView(blocks: AgentBlock[], id: string): AgentBlock[] {
+  return blocks.map((b) =>
+    b.id === id && b.kind === "view" && b.view
+      ? { ...b, view: { ...b.view, viewCollapsed: true } }
+      : b
+  );
 }
 
 /**

@@ -32,9 +32,20 @@ describe("설정만 남긴 뷰 배선", () => {
     assert.doesNotMatch(main, /view\.openDiff/, "변경 검토 팔레트 명령이 남아 있다");
     assert.doesNotMatch(main, /what: "diff"/, "diff 블록을 여는 경로가 남아 있다");
   });
-  it("상단 우측 ⚙ 아이콘이 설정을 연다", () => {
+  it("상단 우측 ⚙ 아이콘이 설정을 **토글**한다 — 같은 뷰를 누르면 닫힘", () => {
     assert.match(main, /aria-label="설정 열기"/, "헤더에 설정 아이콘이 없다");
-    assert.match(main, /openView\(prev, \{ what: "settings" \}/, "설정 아이콘이 설정 블록을 열지 않는다");
+    // 헤더·팔레트·블록 안 ▸ 가 **하나의 함수**(`toggleView`)를 탄다. 경로마다 따로
+    // 만들면 "아이콘에서는 닫히는데 팔레트에서는 쌓인다" 가 된다.
+    const toggles = (main.match(/toggleView\(prev, \{ what: "settings" \}/g) ?? []).length;
+    assert.ok(toggles >= 2, `토글 경로가 ${toggles}개뿐이다 — 헤더·팔레트·블록이 같은 규칙을 타야 한다`);
+    assert.match(main, /onToggleView=\{onToggleView\}/, "블록에 토글 경로가 전달되지 않는다");
+    assert.match(main, /onCloseView=\{onCloseView\}/, "블록에 접기 경로가 전달되지 않는다");
+    assert.match(panel, /onToggleView=\{onToggleView\}/, "AgentPanel 이 토글 경로를 블록에 넘기지 않는다");
+  });
+  it("설정 블록은 **접힌 상태**를 그리고 ✕ 로 접는다 — 삭제가 아니다", () => {
+    assert.match(tool, /view\.viewCollapsed === true/, "접힘 표시가 없다");
+    assert.match(tool, /aria-expanded=\{!collapsed\}/, "펼침 상태를 보조기술에 말하지 않는다");
+    assert.match(tool, /!collapsed &&/, "접힌 상태에서도 설정 내용이 그려진다");
   });
   it("저장된 옛 dirs/diff 블록은 제거됐다고 말한다", () => {
     assert.match(tool, /이 화면은 제거되었습니다/, "제거 안내가 없다 — 옛 블록이 거짓말을 한다");

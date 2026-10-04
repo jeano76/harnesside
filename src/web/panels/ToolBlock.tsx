@@ -64,9 +64,16 @@ export function ToolBlock({
   block,
   client,
   extra,
+  onToggleView,
+  onCloseView,
 }: {
   block: AgentBlock;
   client?: ApiClient;
+  /** 뷰를 접었다/펼쳤다 — 헤더 ⚙ 아이콘과 **같은 규칙**(`toggleView`)을 탄다.
+   *  경로마다 따로 만들면 "아이콘에서는 닫히는데 블록에서는 쌓인다" 가 된다. */
+  onToggleView?: () => void;
+  /** 이 블록만 접는다(블록 안의 ✕). */
+  onCloseView?: () => void;
   /** `view` 블록이 그릴 내용. 설정 패널처럼 **무거운 것**은 여기서 주입한다 —
    *  이 컴포넌트가 그 화면을 아는 것이 아니라, **셸이 그릴 대상을 아는** 편이 낫다. */
   /** `view` 블록이 그릴 것들. **셸이 대상을 알고** 있다.
@@ -92,12 +99,40 @@ export function ToolBlock({
     // 설정 · 변경 검토 · 디렉터리는 **사람이 연 블록**이다. 이 자리에서 그린다 —
     // 별도 패널로 빼면 "왜 이걸 봤나" 를 스크롤로 되돌아가야 한다(2026-10-01).
     if (block.view?.what === "settings" && client) {
+      // **접힌 상태는 한 줄로 남는다**(사용자 요구: "설정 버튼을 다시 누르면 닫힘").
+      // 지우지 않는 이유: 닫았다 다시 열었을 때 **같은 자리**로 돌아와야 하고,
+      // 스크롤로 되돌아가 볼 수도 있어야 한다(삭제는 되돌릴 수 없다).
+      const collapsed = block.view.viewCollapsed === true;
       return (
         <div style={{ margin: "2px 0" }}>
-          <div style={{ fontSize: 10, color: DIM, marginBottom: 2 }}>설정</div>
-          <div className="elev-1" style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: "hidden" }}>
-            {extra?.settings}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, fontSize: 10, color: DIM, marginBottom: collapsed ? 0 : 2 }}>
+            <button
+              type="button"
+              onClick={onToggleView}
+              aria-expanded={!collapsed}
+              title={collapsed ? "설정 펼치기" : "설정 접기"}
+              style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 10, padding: 0 }}
+            >
+              <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span> 설정
+              {collapsed && <span style={{ marginLeft: 6 }}>(접힘 — 다시 누르면 펼침)</span>}
+            </button>
+            {!collapsed && onCloseView && (
+              <button
+                type="button"
+                onClick={onCloseView}
+                aria-label="설정 접기"
+                title="설정 접기"
+                style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 10, padding: "0 2px", marginLeft: "auto" }}
+              >
+                ✕
+              </button>
+            )}
           </div>
+          {!collapsed && (
+            <div className="elev-1" style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: "hidden" }}>
+              {extra?.settings}
+            </div>
+          )}
         </div>
       );
     }

@@ -531,6 +531,58 @@ export class AgentService {
     this.emit({ type: "agent.status", text: "취소 요청됨", at: (this.opts.now ?? Date.now)() });
     return { ok: true, detail: dropped > 0 ? `취소했습니다 (대기열 ${dropped}개도 비웠습니다)` : "취소했습니다" };
   }
+
+  // ── 슬래시 명령용 경로 (사용자 요구: 웹 프롬프트에서도 콘솔의 쉘 기능) ────────
+  //
+  // TUI(`legacy-tui`)는 이 작업을 `AgentLoop` 에 **직접** 있었다. 웹 창에는 루프가
+  // 없고 라우트만 있다 — 그래서 라우트가 부를 수 있는 **이름 있는 진입점** 이
+  // 필요하다. 여기서 루프를 **처음부터** 만들면 안 된다: 턴이 아직 없는 세션에서
+  // `/compact` 를 눌렀다고 백엔드가 붙는 것은 부수효과다. 그래서 루프가 이미 있을
+  // 때만 되고, 없으면 **그 사실**을 말한다(조용히 성공시키지 않는다).
+
+  /** `/compact` — 지금 컨텍스트를 압축한다. 루프가 없으면 왜 못 했는지 말한다. */
+  async forceCompact(): Promise<{ ok: boolean; detail: string }> {
+    const loop = this.loop;
+    if (!loop) return { ok: false, detail: "아직 대화가 없어 압축할 것이 없습니다" };
+    await loop.forceCompact();
+    return { ok: true, detail: "압축을 실행했습니다" };
+  }
+
+  /**
+   * `/improve` — 반복 실패를 분석해 룰 제안을 만든다. **아무것도 쓰지 않는다.**
+   * 저장은 `/improve-apply` 만 한다(사용자가 확인하기 전엔 디스크를 못 건드린다).
+   */
+  async proposeImprovement(): Promise<{ ok: boolean; detail: string; proposal: { summary: string; ruleMarkdown: string } | null }> {
+    const loop = this.loop;
+    if (!loop) return { ok: false, detail: "아직 대화가 없어 분석할 실패 기록이 없습니다", proposal: null };
+    const proposal = await loop.proposeSelfImprovement();
+    return proposal
+      ? { ok: true, detail: proposal.summary, proposal: { summary: proposal.summary, ruleMarkdown: proposal.ruleMarkdown } }
+      : { ok: true, detail: "반복된 실패 패턴이 없습니다. 제안할 것이 없습니다", proposal: null };
+  }
+
+  /** `/improve-apply` — 마지막 제안을 룰 파일로 저장한다. 경로를 돌려준다. */
+  async applyImprovement(): Promise<{ ok: boolean; detail: string; path: string | null }> {
+    const loop = this.loop;
+    if (!loop) return { ok: false, detail: "저장할 제안이 없습니다. 먼저 /improve 를 실행하십시오", path: null };
+    const path = await loop.applyPendingImprovement();
+    return path
+      ? { ok: true, detail: `${path} 에 저장했습니다 (다음 세션부터 시스템 프롬프트에 반영)`, path }
+      : { ok: false, detail: "저장할 제안이 없습니다. 먼저 /improve 를 실행하십시오", path: null };
+  }
+
+  /** `/plan-clear` — 멈춘 계획 표시와 체크포인트를 지운다. */
+  async clearPlan(): Promise<{ ok: boolean; detail: string }> {
+    const loop = this.loop;
+    if (!loop) return { ok: false, detail: "대화가 없어 지울 계획도 없습니다" };
+    await loop.clearPlan();
+    return { ok: true, detail: "계획 표시를 초기화했습니다" };
+  }
+
+  /** 현재 루프를 **만들지 않고** 본다 — 위 진입점들이 "없다" 고 말할 근거. */
+  get hasConversation(): boolean {
+    return this.loop !== null;
+  }
 }
 
 function msgOf(e: unknown): string {

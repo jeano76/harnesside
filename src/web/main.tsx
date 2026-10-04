@@ -16,7 +16,7 @@ import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
 import { WorkspaceBar } from "./panels/WorkspaceBar.js";
 import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js";
-import { openView } from "../session/blocks.js";
+import { openView, toggleView, collapseView } from "../session/blocks.js";
 import { ModelPanel } from "./panels/ModelPanel.js";
 import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
@@ -549,9 +549,9 @@ export default function App() {
   const commands: Command[] = useMemo(
     () => [
       { id: "view.toggleLog", title: "서버 로그 접기/펼치기", category: "보기", keys: [], run: () => setLogOpen((v) => !v) },
-      { id: "view.biggerShell", title: "셸 영역 키우기", category: "보기", keys: [], run: () => setBottomH((h) => Math.max(100, h - 80)) },
-      { id: "view.smallerShell", title: "셸 영역 줄이기", category: "보기", keys: [], run: () => setBottomH((h) => Math.min(window.innerHeight * 0.5, h + 80)) },
-      { id: "view.resetShell", title: "셸 영역 크기 초기화", category: "보기", keys: [], run: () => setBottomH(160) },
+      { id: "view.biggerShell", title: "셸 영역 키우기", category: "보기", keys: [], run: () => setBottomH((h) => Math.max(64, h - 80)) },
+      { id: "view.smallerShell", title: "셸 영역 줄이기", category: "보기", keys: [], run: () => setBottomH((h) => Math.min(window.innerHeight * 0.35, h + 80)) },
+      { id: "view.resetShell", title: "셸 영역 크기 초기화", category: "보기", keys: [], run: () => setBottomH(DEFAULT_BOTTOM_H) },
       {
         id: "view.openSettings",
         title: "설정 열기",
@@ -559,7 +559,8 @@ export default function App() {
         keys: [],
         // **별도 패널이 아니라 대화 안의 블록**으로 연다(2026-10-01 요구).
         // 상단 우측 ⚙ 아이콘과 같은 동작이다 — 팔레트는 키보드 경로다.
-        run: () => setBlocks((prev) => openView(prev, { what: "settings" }, Date.now())),
+        // **같은 규칙**(`toggleView`) — 아이콘으로 눌러도 팔레트로 눌러도 똑같이 닫힌다.
+        run: () => setBlocks((prev) => toggleView(prev, { what: "settings" }, Date.now())),
       },
 
       { id: "palette.open", title: "명령 팔레트", category: "기타", keys: ["Ctrl+K"], run: () => setPaletteOpen((v) => !v) },
@@ -606,6 +607,20 @@ export default function App() {
   ) : null;
 
   /**
+   * 설정 열기/닫기 — **헤더 ⚙ 아이콘과 블록 안 ▸/✕ 가 같은 함수**를 쓴다.
+   *
+   * 경로마다 따로 만들면 "아이콘에서는 닫히는데 블록에서는 쌓인다" 가 된다 —
+   * 이 저장소가 가장 많이 기록한 실패 유형("같은 일을 두 곳에 두지 않는다").
+   * `collapseView` 는 블록 하나만 접고 **지우지 않는다** — 지우면 되돌릴 수 없다.
+   */
+  const onToggleView = useCallback(() => {
+    setBlocks((prev) => toggleView(prev, { what: "settings" }, Date.now()));
+  }, []);
+  const onCloseView = useCallback((b: AgentBlock) => {
+    setBlocks((prev) => collapseView(prev, b.id));
+  }, []);
+
+  /**
    * 패널 본문. **존과 무관하게** 같은 내용 — 패널이 옮겨가면 내용까지 바뀌면
    * 사용자는 "어디로 옮긴 거지?" 하고 헤더만 찾게 된다.
    */
@@ -631,6 +646,8 @@ export default function App() {
         compaction={compaction}
         onDismissCompaction={() => setCompaction(null)}
         viewExtra={viewExtra}
+        onToggleView={onToggleView}
+        onCloseView={onCloseView}
         overlay={approvalOverlay}
         running={turnRunning}
         // 상태바 — 이미 **앱 전체가 하나씩** 붙들고 있는 값을 **읽기만** 넘긴다.
@@ -674,7 +691,7 @@ export default function App() {
   //   ├──────────────────────────────────────────────┤
   //   │  프롬프트 영역 (대화 바로 아래)                │  ← 고정
   //   ├──────────────────────────────────────────────┤
-  //   │  셸 윈도우 (짧게 — 길 필요 없음)              │  ← 기본 160
+  //   │  셸 윈도우 (짧게 — 길 필요 없음)              │  ← DEFAULT_BOTTOM_H
   //   ├──────────────────────────────────────────────┤
   //   │  서버 로그 (접힘 기본)                        │
   //   └──────────────────────────────────────────────┘
@@ -682,16 +699,22 @@ export default function App() {
   // **왜 좌우 존을 없앴나**: 좌우에 260px 과 380px 을 두면 1600px 창에서 **46%** 가
   // 대화가 아니다. 이 프로그램의 첫 화면은 대화다.
   // **왜 셸을 짧게 두나**: 셸은 명령을 확인하는 자리지 읽는 자리가 아니다.
-  // 길면 메시지창을 밀어낸다 — 기본 160, 필요하면 드래그·키보드로 늘린다.
-  // 초기 비율: 대화가 주인공이다. 저장된 값이 화면을 넘기면(예전 드래그 잔재)
-  // 첫 화면부터 대화가 짓눌리므로 읽을 때 클램프로 되돌린다.
+  // 길면 메시지창을 밀어낸다.
+  //
+  // **높이는 기본값과 동일시한다** (사용자 요구). 저장된 값이 기본보다 크면 **옛 기본값
+  // (260) 이 남은 것** 이라서 버린다 — 예전 기본은 260 이었고 저장본이 그 값이라
+  // "짧게 해달라" 고 바꿔도 첫 화면이 그대로 길게 보인다. **조용히 남겨두면 사용자는
+  // "바뀌지 않았다" 고 읽는다.** 이번 실행에서 드래그로 키운 값도 다음 기동엔
+  // 기본으로 돌아간다 — 그게 "기본 높이와 동일" 이라는 요구다.
+  const DEFAULT_BOTTOM_H = 104; // 셸 4줄 + 정보줄 + 모니터 스트립
   const [bottomH, setBottomH] = useState(() => {
     try {
-      const v = Number(localStorage.getItem("harnesside.bottomH")) || 160;
-      if (typeof window !== "undefined") return Math.max(100, Math.min(window.innerHeight * 0.4, v));
-      return Math.max(100, Math.min(400, v));
+      const stored = Number(localStorage.getItem("harnesside.bottomH"));
+      const v = Number.isFinite(stored) && stored > 0 ? Math.min(stored, DEFAULT_BOTTOM_H) : DEFAULT_BOTTOM_H;
+      if (typeof window !== "undefined") return Math.max(64, Math.min(window.innerHeight * 0.35, v));
+      return Math.max(64, Math.min(300, v));
     } catch {
-      return 160;
+      return DEFAULT_BOTTOM_H;
     }
   });
   useEffect(() => {
@@ -719,8 +742,9 @@ export default function App() {
   }, [logOpen]);
 
   // ── 입력창·하단 쉘 높이 (2026-10-04: 좌측 밴드 삭제 — 10-01 확정 구조로 복귀) ──
-  // 입력 창 높이(세로 가변) — localStorage 저장.
-  const [inputH, setInputH] = useState(() => { try { const v = Number(localStorage.getItem("harnesside.inputH")) || 96; return Math.max(48, Math.min(400, v)); } catch { return 96; } });
+  // 입력 창 높이(세로 가변) — localStorage 저장. 기본 104 = 3줄(12px·1.5 → 54)
+  // + 위아래 패딩 16 + 하단 바 약 34. "3줄 정도" 가 기본으로 보인다.
+  const [inputH, setInputH] = useState(() => { try { const v = Number(localStorage.getItem("harnesside.inputH")) || 104; return Math.max(48, Math.min(400, v)); } catch { return 104; } });
 
   useEffect(() => {
     try {
@@ -748,7 +772,7 @@ export default function App() {
     const startY = e.clientY;
     const startH = bottomH;
     // 마우스가 내려가면(shrink above) 쉘이 낮아진다. 기본 160 — 길 필요 없다.
-    const move = (ev: MouseEvent) => setBottomH(Math.max(100, Math.min(window.innerHeight * 0.5, startH - (ev.clientY - startY))));
+    const move = (ev: MouseEvent) => setBottomH(Math.max(64, Math.min(window.innerHeight * 0.35, startH - (ev.clientY - startY))));
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -765,7 +789,7 @@ export default function App() {
         // 열은 **하나**다(중앙 열: 대화→입력, 하단 행: 셸+계측). 행은 상단 바 ·
         // 중앙 열(flex) · 하단 쉘(bottomH)만 — 로그 footer 는 쉘 아래 별도 행.
         gridTemplateColumns: "1fr",
-        gridTemplateRows: `28px 1fr ${bottomH}px auto`,
+        gridTemplateRows: `28px minmax(0, 1fr) 0px ${bottomH}px auto`,
         height: "100vh",
         background: BG,
         color: FG,
@@ -810,8 +834,8 @@ export default function App() {
         <button
           type="button"
           aria-label="설정 열기"
-          title="설정 열기"
-          onClick={() => setBlocks((prev) => openView(prev, { what: "settings" }, Date.now()))}
+          title="설정 열기/닫기"
+          onClick={() => setBlocks((prev) => toggleView(prev, { what: "settings" }, Date.now()))}
           style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 14, padding: "0 4px" }}
         >
           <span aria-hidden="true">⚙</span>
@@ -840,7 +864,7 @@ export default function App() {
           }}
           style={{ flex: "0 0 auto", height: 6, cursor: "row-resize", background: "transparent" }}
         />
-        <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: `1px solid ${BORDER}`, borderRadius: 6, margin: "0 6px 6px", background: "#161b22" }}>
+        <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: 0, borderTop: `1px solid ${BORDER}`, borderRadius: 0, margin: 0, background: "#161b22" }}>
           <textarea ref={draftRef} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (draft.trim()) void sendTurn(); } }} placeholder="무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)" aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
           {/* O4 대기열 — 실행 중 들어온 입력과 순서 변경. 칩의 ↑↓로 순서를 바꾼다. */}
           {queueItems.length > 0 && (
@@ -877,11 +901,13 @@ export default function App() {
         onPointerDown={onBottomSepDown}
         onKeyDown={(e) => {
           if (e.key === "ArrowUp") { e.preventDefault(); setBottomH((h) => Math.min(window.innerHeight * 0.5, h + 24)); }
-          if (e.key === "ArrowDown") { e.preventDefault(); setBottomH((h) => Math.max(100, h - 24)); }
+          if (e.key === "ArrowDown") { e.preventDefault(); setBottomH((h) => Math.max(64, h - 24)); }
         }}
-        style={{ flex: "0 0 auto", height: 6, cursor: "row-resize", background: "transparent" }}
-      />
-      <div className="elev-1" style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+        style={{ position: "relative", zIndex: 2, height: 0, cursor: "row-resize", overflow: "visible" }}
+      >
+        <div style={{ position: "absolute", left: 0, right: 0, top: -3, height: 6 }} />
+      </div>
+      <div className="elev-1" style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden", borderTop: `1px solid ${BORDER}` }}>
         <div style={{ flex: "1 1 auto", minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {BODY.terminal}
         </div>

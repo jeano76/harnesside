@@ -274,6 +274,9 @@ export function AgentPanel({
   /** `view` 블록이 그릴 내용. 설정 패널처럼 **무거운 것**은 셸이 주입한다 —
    *  이 컴포넌트가 그 화면을 아는 것이 아니라 **무엇을 그릴지 알기만 하면** 되므로. */
   viewExtra,
+  // 뷰 열기/닫기 — 헤더 ⚙ 아이콘과 **같은 규칙**(`toggleView`)을 블록 안에서도 쓴다.
+  onToggleView,
+  onCloseView,
   // 설정은 상단 우측 ⚙ 아이콘(셸 헤더)으로 연다 — 측면 아이콘은 두지 않는다.
   // 열 곳이 하나뿐이므로 "어느 쪽이 진짜인가" 가 생기지 않는다.
   // 승인 게이트처럼대화 위에 떠야 하는 것(§8.2) — 별도 패널이 아니라 대화 본문 위에서만 그린다.
@@ -303,6 +306,14 @@ export function AgentPanel({
   client?: ApiClient;
   /** `view` 블록이 그릴 설정. **셸이 대상을 알고** 있다. 설정만 남긴다. */
   viewExtra?: { settings?: React.ReactNode };
+  /**
+   * 뷰를 **토글**한다 — 헤더 ⚙ 아이콘과 **같은 규칙**(`toggleView`)이다.
+   * 경로마다 따로 만들면 "아이콘에서는 닫히는데 블록에서는 쌓인다" 가 된다.
+   * 웹 창은 헤더 아이콘 하나뿐이라 블록 안에서도 그一项을 쓴다.
+   */
+  onToggleView?: () => void;
+  /** 특정 뷰 블록을 접는다(블록 안의 ✕). 메시지를 지우지 않는다 — 되돌릴 수 있어야 한다. */
+  onCloseView?: (block: AgentBlock) => void;
   // 승인 게이트처럼대화 위에 떠야 하는 것 (§8.2). 별도 패널이 아니라 대화 본문 위에서만 그린다.
   // Ide 로 그대로 넘긴다 — 흐름을 가리되 스크롤로 이어지게.
   overlay?: React.ReactNode;
@@ -429,6 +440,73 @@ export function AgentPanel({
         <CompactionBanner info={compaction} onClose={onDismissCompaction} />
       )}
 
+      {/* ── 묶음 요약 · 전체 접기/펼치기 — **스크롤 밖**에 둔다 (사용자 요구) ──────
+          요구: "1개 대화 묶음 · 1개 항목 / 전체 접기 / 전체 펼치기 이 영역은 화면
+          이동안되게 고정해주고 스크롤은 이 영역 아래부터 진행".
+
+          왜 스크롤 **안**에 두면 안 되나: 대화가 길어지면 이 줄이 화면 위로 사라지고
+          "전체 접기" 로 한 번에 정리하는 유일한 자리가 사라진다 — 가장 필요할 때
+          가장 먼저 안 보인다. 스크롤 밖(형제)이면 **항상** 보인다.
+
+          요구 원문(벽 대응, 2026-10-01): 복원된 대화(211블록)가 끝없이 이어지는 벽으로
+          보였다. 묶음별로 하나씩 접어야 하고 무엇을 접어야 하는지도 모른다. 그래서:
+          - **몇 묶음 · 몇 항목**인지 — 벽의 크기를 알아야 방향이 잡힌다.
+          - **전체 접기 / 펼치기** — 하나씩이 아니라 한 번에.
+          - 접어도 **마지막 묶음은 항상 펼친다**(진행 중인데 접으면 안 된다).
+          컨트롤은 **항상 보인다**(VS 처럼) — 있다가 없어지면 기능을 잃었다고 읽힌다. */}
+      {turns.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flex: "0 0 auto",
+            padding: turns.length > COLLAPSE_AT ? "3px 6px" : "2px 6px",
+            background: "#0d1117",
+            borderBottom: "1px solid #21262d",
+            color: "#8b949e",
+            fontSize: 11,
+          }}
+        >
+          <span>
+            {turns.length}개 대화 묶음 · {blocks.length}개 항목
+          </span>
+          <span style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={() => setAllCollapsed(true)}
+            style={{
+              background: "#21262d",
+              color: "#c9d1d9",
+              border: "1px solid #30363d",
+              borderRadius: 4,
+              font: "inherit",
+              fontSize: 11,
+              padding: "1px 7px",
+              cursor: "pointer",
+            }}
+          >
+            전체 접기
+          </button>
+          <button
+            type="button"
+            onClick={() => setAllCollapsed(false)}
+            style={{
+              background: "#21262d",
+              color: "#c9d1d9",
+              border: "1px solid #30363d",
+              borderRadius: 4,
+              font: "inherit",
+              fontSize: 11,
+              padding: "1px 7px",
+              cursor: "pointer",
+            }}
+          >
+            전체 펼치기
+          </button>
+        </div>
+      )}
+
       {/* ── 대화 묶음 (2026-10-01) ─────────────────────────────────────────────
           요구: "프롬프트 입력의 출력창은 마치 메신저 대화창 처럼 동작이 되는거야
           답변은 하나의 묶음인거고 파일을 여는것, DIFF 해주는거, 쉘을 구동하거나
@@ -449,72 +527,6 @@ export function AgentPanel({
       >
         {blocks.length === 0 && !running && <FirstRun onPick={onExample} />}
 
-        {/* ── 많은 묶음 요약 (2026-10-01) ───────────────────────────────────────────
-            실측: 복원된 대화(211블록)가 **끝없이 이어지는 벽**으로 보였다. 묶음별로
-            접을 수는 있지만 그것을 하나씩 해야 하고, 사용자는 **무엇을 하나씩 접어야
-            하는지조차 모른다.** 211블록이면 몇 묶음인지도 화면에 말돼 있지 않다.
-
-            그래서 묶음이 **많을 때만** 요약을 맨 위에 둔다:
-            - **몇 묶음 · 몇 블록**인지 — 벽의 크기를 알 수 있어야 방향이 잡힌다.
-            - **전체 접기 / 펼치기** — 하나씩이 아니라 한 번에.
-            - 접어도 **마지막 묶음은 항상 펼친다** — 진행 중인데 접으면 안 된다는
-              기존 규칙과 같다. 여기서도 어기지 않는다.
-
-            2026-10-04 변경: 컨트롤(전체 접기/펼치기)은 **항상 보인다**(VS 처럼).
-            묶음이 적으면 요약줄을 슬림하게만 둔다 — 컨트롤이 있다가 없어지면
-            사용자는 기능을 잃었다고 읽는다. 숨김과 비활성은 다르다. */}
-        {turns.length > 0 && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: turns.length > COLLAPSE_AT ? "3px 6px" : "2px 6px",
-              marginBottom: 6,
-              border: "1px solid #21262d",
-              borderRadius: 6,
-              color: "#8b949e",
-              fontSize: 11,
-            }}
-          >
-            <span>
-              {turns.length}개 대화 묶음 · {blocks.length}개 항목
-            </span>
-            <span style={{ flex: 1 }} />
-            <button
-              type="button"
-              onClick={() => setAllCollapsed(true)}
-              style={{
-                background: "#21262d",
-                color: "#c9d1d9",
-                border: "1px solid #30363d",
-                borderRadius: 4,
-                font: "inherit",
-                fontSize: 11,
-                padding: "1px 7px",
-                cursor: "pointer",
-              }}
-            >
-              전체 접기
-            </button>
-            <button
-              type="button"
-              onClick={() => setAllCollapsed(false)}
-              style={{
-                background: "#21262d",
-                color: "#c9d1d9",
-                border: "1px solid #30363d",
-                borderRadius: 4,
-                font: "inherit",
-                fontSize: 11,
-                padding: "1px 7px",
-                cursor: "pointer",
-              }}
-            >
-              전체 펼치기
-            </button>
-          </div>
-        )}
         {turns.map((turn, ti) => {
           const last = ti === turns.length - 1;
           // **초기값이 `undefined` 인데 `=== false` 로 "펼침" 을 검사하고 있었다**
@@ -592,7 +604,13 @@ export function AgentPanel({
                 <div style={{ padding: "6px 8px" }}>
                   {turn.blocks.map((b) => (
                     <div key={b.id} style={{ marginBottom: 6 }}>
-                      <BlockBody block={b} client={client} viewExtra={viewExtra} />
+                      <BlockBody
+                        block={b}
+                        client={client}
+                        viewExtra={viewExtra}
+                        onToggleView={onToggleView}
+                        onCloseView={onCloseView ? () => onCloseView(b) : undefined}
+                      />
                     </div>
                   ))}
                 </div>
@@ -634,10 +652,14 @@ function BlockBody({
   block: b,
   client,
   viewExtra,
+  onToggleView,
+  onCloseView,
 }: {
   block: AgentBlock;
   client?: ApiClient;
   viewExtra?: { settings?: React.ReactNode };
+  onToggleView?: () => void;
+  onCloseView?: () => void;
 }) {
   if (b.kind === "user") {
     return (
@@ -677,7 +699,15 @@ function BlockBody({
   }
   if (b.kind === "status") return <div style={{ color: "#6e7681", fontSize: 11 }}>· {b.text}</div>;
   if (b.kind === "error") return <div style={{ color: "#f85149", fontSize: 11 }}>오류: {b.text}</div>;
-  return <ToolBlock block={b} client={client} extra={viewExtra} />;
+  return (
+    <ToolBlock
+      block={b}
+      client={client}
+      extra={viewExtra}
+      onToggleView={onToggleView}
+      onCloseView={onCloseView}
+    />
+  );
 }
 
 /** 스크롤이 바닥에 얼마나 가까운가. 40px 안이면 "붙어 있다" 고 본다. */

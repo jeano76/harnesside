@@ -925,6 +925,22 @@ async function main(): Promise<number> {
             return agent.setThinking(body.enabled === true);
           })
           .route("POST", "/api/agent/cancel", async () => agent.cancel())
+          // ── 슬래시 명령의 서버 경로 (사용자 요구) ────────────────────────────
+          // TUI(`legacy-tui`)는 이 작업을 루프에 직접 있었다. 웹 창에는 루프가 없고
+          // 라우트만 있다 — 없으면 명령이 **조용히 아무것도 안 하고** 끝난다.
+          // 라우트가 부를 **이름 있는 진입점** 을 만들고, 못 하면 그 사실을 돌려준다.
+          .route("POST", "/api/agent/compact", async () => agent.forceCompact())
+          .route("POST", "/api/agent/improve", async () => agent.proposeImprovement())
+          .route("POST", "/api/agent/improve/apply", async () => agent.applyImprovement())
+          .route("POST", "/api/agent/plan/clear", async () => agent.clearPlan())
+          // `/skills` · `/rules` — **뭐가 들어갔는지** 말한다. 비어 있으면 비었다고
+          // 말한다(조용히 비면 "규칙이 적용됐다" 고 오해한다).
+          .route("GET", "/api/agent/context-files", async () => {
+            const root = workspace.root();
+            const { loadSkillIndex } = await import("../skills/loader.js");
+            const skills = await loadSkillIndex(root);
+            return { root, skills, rules: workspace.rules() };
+          })
           // O4 메시지 큐 — 실행 중에 들어온 입력은 거절하지 않고 순서대로 돈다.
           .route("GET", "/api/agent/queue", () => ({ items: agent.queueView() }))
           .route("POST", "/api/agent/queue/clear", () => agent.clearQueue())

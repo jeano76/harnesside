@@ -11,7 +11,7 @@
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { applyEvent, groupTurns, normalizeTool, openView, summarizeTurn, toolCommand, toolPath, type AgentBlock } from "./blocks.js";
+import { applyEvent, collapseView, groupTurns, normalizeTool, openView, summarizeTurn, toggleView, toolCommand, toolPath, type AgentBlock } from "./blocks.js";
 
 const b = (kind: AgentBlock["kind"], text: string, at: number, extra: Partial<AgentBlock> = {}): AgentBlock => ({
   id: `${kind}-${at}`,
@@ -98,4 +98,40 @@ test("`agent.user` 이벤트가 **사람 말 블록**을 만든다 — 묶음의
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].kind, "user", `kind 가 ${blocks[0].kind} — 묶음의 경계가 없다`);
   assert.equal(blocks[0].text, "뭐해");
+});
+
+// ── 뷰 열기/닫기 (사용자 요구: "설정 버튼을 다시 누르면 해당 설정 펼침이 닫힘") ──
+
+test("**같은 뷰를 다시 누르면 닫힌다** — 그리고 같은 자리에서 다시 열린다", () => {
+  const opened = toggleView([b("user", "q", 1)], { what: "settings" }, 2);
+  assert.equal(opened.length, 2, "설정이 열리지 않았다");
+  const closed = toggleView(opened, { what: "settings" }, 3);
+  // **지우지 않는다.** 지우면 되돌릴 수 없다 — 닫았다 다시 열었을 때 같은 자리로
+  // 돌아와야 하고, 스크롤로 되돌아가 볼 수도 있어야 한다.
+  assert.equal(closed.length, 2, "닫을 때 메시지를 지웠다 — 되돌릴 수 없다");
+  assert.equal(closed[1]!.view?.viewCollapsed, true, "닫힌 표시가 없다");
+  const reopened = toggleView(closed, { what: "settings" }, 4);
+  assert.equal(reopened.length, 2, "다시 열 때 새 블록이 쌓였다");
+  assert.equal(reopened[1]!.view?.viewCollapsed, false, "다시 눌렀는데 접힌 채로 남았다");
+  assert.equal(reopened[1]!.id, opened[1]!.id, "열었다 닫았다가 자리까지 바뀌었다");
+});
+
+test("다른 뷰가 열려 있으면 설정은 **그대로 추가로** 열린다 — 보는 것을 지우지 않는다", () => {
+  const diffOpen = openView([b("user", "q", 1)], { what: "diff" }, 2);
+  const both = toggleView(diffOpen, { what: "settings" }, 3);
+  assert.equal(both.length, 3, "설정이 열리지 않았다");
+  assert.equal(both[1]!.view?.what, "diff", "앞의 변경 검토가 사라졌다");
+  const after = toggleView(both, { what: "settings" }, 4);
+  assert.equal(after[after.length - 1]!.view?.viewCollapsed, true, "설정이 닫히지 않았다");
+  assert.equal(after[1]!.view?.what, "diff", "닫는 중 다른 뷰가 지워졌다");
+});
+
+test("`collapseView` 는 **그 블록만** 접고, 없는 id 면 아무 일도 하지 않는다", () => {
+  const opened = toggleView([b("user", "q", 1)], { what: "settings" }, 2);
+  const id = opened[opened.length - 1]!.id;
+  const closed = collapseView(opened, id);
+  assert.equal(closed[closed.length - 1]!.view?.viewCollapsed, true, "접히지 않았다");
+  assert.equal(closed[0]!.kind, "user", "앞의 사용자 발화가 사라졌다");
+  const noop = collapseView(opened, "no-such-id");
+  assert.deepEqual(noop.map((x) => x.id), opened.map((x) => x.id));
 });
