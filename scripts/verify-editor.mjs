@@ -290,7 +290,7 @@ async function main() {
 
   check("인덴트 가이드가 **그려졌다**", (guides?.guideCount ?? 0) > 0, `${guides?.guideCount ?? 0}개`);
   if (guides && guides.guideCount > 0) {
-    // `ch` 단위主張의 실측: 100글자 폭 / 100 이 1ch 여야 한다(오차 1px 이내).
+    // `ch` 단위주장을 실측한다: 100글자 폭 / 100 이 1ch 여야 한다(오차 1px 이내).
     const measuredCh = guides.hundred / 100;
     check(
       "`1ch` 가 **실제 한 칸 폭**과 같다 (측정 없이 맞다는 주장이 사실인가)",
