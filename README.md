@@ -186,56 +186,95 @@ src/
 
 ## Getting started
 
+**One install path. There is no second one.**
+
 ```bash
+npm install -g harnesside
+harnesside
+```
+
+That is the whole thing. On first launch `harnesside` provisions whatever is
+missing — llama.cpp, a model, the ports — and says which step it is on. When it
+cannot do something it says **which step, what failed, why, and what to do next**
+rather than opening a blank window. `harnesside doctor` runs the same checks
+read-only, before anything is changed.
+
+Requires **Node 22+** (`engines`). Node 20 was measured and does not work:
+`node-pty` dies with SIGSEGV on exit and there is no global `WebSocket` before
+Node 22. See the runtime matrix below.
+
+Per-project state follows your working directory: each project gets its own
+`.harnesside/config.yaml`, `rules/` and `skills/`. The global command is only the
+entry point — per-project state stays in that project. Verified from this repo
+and from an unrelated directory (the status bar's `cwd` reflects wherever you
+launched it, and a project with no rule/skill convention gets a default rule
+generated in place).
+
+To uninstall: `npm rm -g harnesside` (from anywhere).
+
+<details>
+<summary>Working on harnesside itself, or running from a checkout</summary>
+
+```bash
+git clone https://github.com/jeano76/harnesside && cd harnesside
 npm install
-# set llama.modelPath in .harnesside/config.yaml to a real .gguf path
-npm run dev
-npm test        # unit tests (node:test via tsx, no extra dependency)
+npm run dev          # server on :7317 + Vite on :5317, both watch
+npm test             # unit tests (node:test via tsx)
 npm run typecheck
+npm run build        # required before `harnesside` can run from dist/
+node dist/server/index.js     # same binary the global install runs
 ```
 
-### Installing the `harnesside` command globally
+`npm link` also works and is what local testing uses, but it is **not** the
+documented install — it leaves a symlink into your checkout, so a later
+`git checkout` can silently change what the global `harnesside` runs.
 
-```bash
-npm run build   # compiles to dist/ (bin points here, so build before linking)
-npm link        # symlinks `harnesside` into your global npm bin (npm prefix)
-harnesside         # now runs from any directory
-```
-
-Each project gets its own `.harnesside/config.yaml`/`rules/`/`skills/` based on
-its current working directory — the global command is just the entry point;
-per-project state still lives in that project. Verified running both inside
-this repo and from an unrelated directory (`cwd` in the status bar reflects
-wherever you launched it from, and it auto-generates its own default rule
-file there if the project has no rule/skill convention yet — see the
-Skill/Rule section above). To undo: `npm unlink -g harnesside` (from anywhere)
-or `npm rm --global harnesside`.
+</details>
 
 > ## 시작하기
 >
+> **설치 경로는 하나입니다. 두 번째 경로는 없습니다.**
+>
 > ```bash
+> npm install -g harnesside
+> harnesside
+> ```
+>
+> 이것이 전부입니다. 첫 실행에 없는 것(llama.cpp · 모델 · 포트)을 자동으로 준비하고
+> **어느 단계인지**를 말합니다. 준비할 수 없는 것은 빈 창으로 두지 않고
+> **어느 단계에서 · 무엇이 · 왜 · 다음 무엇을** 말합니다.
+> `harnesside doctor` 는 같은 판정을 **아무것도 바꾸지 않고** 먼저 돌려본다.
+>
+> **Node 22+** 가 필요합니다 (`engines`). Node 20 은 측정 결과 **동작하지 않습니다** —
+> `node-pty` 가 종료 시 SIGSEGV 로 죽고 Node 22 전에는 전역 `WebSocket` 가 없습니다.
+> (아래 실행환경 매트릭스 참조)
+>
+> 프로젝트별 상태는 **작업 디렉토리**를 따라갑니다 — 각 프로젝트가 각자의
+> `.harnesside/config.yaml` · `rules/` · `skills/` 를 갖습니다. 전역 명령은 진입점일
+> 뿐이고 상태는 해당 프로젝트에 남습니다. 이 저장소 내부와 무관한 디렉토리 양쪽에서
+> 실행해 검증했습니다(상태바의 `cwd` 가 실행한 위치를 반영하고, rule/skill 컨벤션이
+> 없는 프로젝트에는 그 자리에 기본 rule 을 생성합니다).
+>
+> 제거: 아무 위치에서나 `npm rm -g harnesside`.
+>
+> <details>
+> <summary>harnesside 자체를 개발하거나 체크아웃에서 직접 실행할 때</summary>
+>
+> ```bash
+> git clone https://github.com/jeano76/harnesside && cd harnesside
 > npm install
-> # .harnesside/config.yaml 의 llama.modelPath 를 실제 .gguf 경로로 설정
-> npm run dev
-> npm test        # 유닛테스트 (node:test, tsx로 구동, 별도 의존성 없음)
+> npm run dev          # 서버 :7317 + Vite :5317, 둘 다 watch
+> npm test             # 유닛테스트 (node:test, tsx로 구동)
 > npm run typecheck
+> npm run build        # harnesside 가 dist/ 를 실행하려면 빌드가 먼저다
+> node dist/server/index.js     # 전역 설치가 실행하는 것과 같은 바이너리
 > ```
 >
-> ### `harnesside` 명령을 전역으로 설치하기
+> `npm link` 도 동작하고 로컬 시험에서 쓰지만 **문서화된 설치 경로가 아닙니다** —
+> 체크아웃을 가리키는 심볼릭 링크로 남으므로 나중에 `git checkout` 을 하면 전역
+> `harnesside` 가 조용히 다른 코드를 실행하게 됩니다.
 >
-> ```bash
-> npm run build   # dist/로 컴파일 (bin이 dist를 가리키므로 link 전에 반드시 빌드)
-> npm link        # 전역 npm bin(prefix)에 `harnesside`를 심볼릭 링크로 등록
-> harnesside         # 이제 어느 디렉토리에서든 실행 가능
-> ```
->
-> 프로젝트마다 실행 시점의 작업 디렉토리를 기준으로 각자의
-> `.harnesside/config.yaml`/`rules`/`skills`를 갖는다 — 전역 명령은 진입점일 뿐,
-> 프로젝트별 상태는 그대로 해당 프로젝트에 남는다. 이 저장소 내부와 무관한 디렉토리
-> (`/tmp`) 양쪽에서 실행해 검증함(상태바의 cwd가 실행한 위치를 정확히 반영하고,
-> 프로젝트에 rule/skill 컨벤션이 없으면 그 자리에 자체 기본 rule을 자동 생성함 —
-> 위 Skill/Rule 섹션 참고). 되돌리려면: 아무 위치에서나 `npm unlink -g harnesside`
-> 또는 `npm rm --global harnesside`.
+> </details>
 
 ## Built-in skills
 
@@ -309,6 +348,35 @@ The four sections below each cover one axis. Every bug they found is in the
 unit suite now, and each was verified by **reverting the fix and requiring the
 new tests to fail** — a regression test that passes with its own fix reverted is
 asserting nothing, and one of these did exactly that before it was caught.
+
+### Packaged install (2026-10-04 · Q-11)
+
+`npm pack` → install the tarball into a clean prefix → run it from an unrelated
+directory. Not `npm link`, which would have hidden the failure below.
+
+| Step | Result |
+|---|---|
+| `npm pack --dry-run` | **121 files · 733 kB** (2.3 MB unpacked) — no test files, no `src/` |
+| `npm install -g --prefix <clean> harnesside-0.1.0.tgz` | 39 packages, 6 s |
+| `harnesside --version` | `0.1.0` |
+| `harnesside --help` | full usage |
+| `harnesside status` | `실행 중이 아님` + log paths, exit 0 |
+| `harnesside doctor` | read-only: server stopped · llama-server up on 8080 · Chrome 153 · VRAM 820 MiB free |
+| `harnesside --dry` | all **12** boot steps listed, no side effects |
+
+**This found a real bug, which is the reason the table exists.** The first run of
+exactly this sequence died with `Cannot find package 'chalk'`. `chalk` was
+imported by `src/setup/terminal.ts` but was never in `dependencies` — it was
+reachable only as a transitive dependency of `ink`, which is itself a
+devDependency. Since the Ink TUI was deleted (Q-2) the function that used it
+(`applyColorDepth`) had **zero callers**, so the import was dead weight that
+only a real install could expose: `npm run dev` and `npm test` both worked,
+because the dev tree has `ink`.
+
+Fixed by deleting the dead import and recording *why* in the function's doc
+comment, rather than by promoting `chalk` to a runtime dependency. A package
+that only ever ran from a checkout should be installable from its tarball; the
+way to find out is to install the tarball.
 
 ### Runtime matrix (2026-10-04 · Q-9)
 

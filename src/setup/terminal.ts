@@ -49,7 +49,6 @@
  * detection is by nature wrong sometimes and the user is the only authority
  * on what their own terminal does. See `ENV_OVERRIDES` below.
  */
-import chalk from "chalk";
 
 /** 0 = no color at all, 4 = the 16 ANSI colors, 8 = 256, 24 = truecolor. */
 export type ColorDepth = 0 | 4 | 8 | 24;
@@ -569,24 +568,28 @@ export function borderStyleFor(caps: TerminalCapabilities): "round" | "classic" 
 }
 
 /**
- * Applies the detected color depth to chalk, which is what Ink colors its own
- * output through.
+ * ~~Applies the detected color depth to chalk, which is what Ink colors its own
+ * output through.~~ — **removed 2026-10-04 (Q-11), deliberately.**
  *
- * This is the piece that makes `NO_COLOR` (and a 16-color terminal) actually
- * work end to end. The rest of this module covers the escape sequences *we*
- * write, but the great majority of the colored text on screen is Ink's —
- * `<Text color="cyan">`, `dimColor`, the borders, the context gauge. Setting
- * chalk's level is the only way to degrade those, and chalk's levels line up
- * exactly with ColorDepth: 0 none, 1 = 16 colors, 2 = 256, 3 = truecolor.
+ * This used to set `chalk.level` so that Ink's own colours (`<Text color="cyan">`,
+ * `dimColor`, the borders, the context gauge) would degrade on a 16-colour
+ * terminal or under `NO_COLOR`. It had **zero callers**, and Ink itself is gone —
+ * `src/legacy-tui/` was deleted (Q-2) and no module imports `ink` any more.
  *
- * Must be called before `render()`. Safe to call more than once.
+ * It is recorded here rather than deleted silently because the *reason* it
+ * existed is still true and still worth knowing: this module governs the escape
+ * sequences **we** write (`buildSequences`), and that is the whole of colour
+ * handling now. If a terminal renderer is ever added back it will need its own
+ * equivalent — and `NO_COLOR` will not work end to end until it has one.
+ *
+ * Kept as a note instead of a dependency: declaring `chalk` in `dependencies` to
+ * satisfy a function nobody calls would be a runtime cost for a dead mechanism.
+ *
+ * Found by installing the packed tarball into a clean prefix — `harnesside
+ * --version` crashed with `Cannot find package 'chalk'`. See Q-11.
  */
-export function applyColorDepth(caps: TerminalCapabilities): void {
-  const level = caps.colorDepth === 0 ? 0 : caps.colorDepth === 4 ? 1 : caps.colorDepth === 8 ? 2 : 3;
-  // chalk is Ink's own coloring dependency (a transitive dep, so it is always
-  // present and always the SAME instance Ink renders through — which is what
-  // makes setting the level here affect Ink's output at all).
-  chalk.level = level;
+export function applyColorDepth(_caps: TerminalCapabilities): void {
+  // Intentionally empty. See the note above.
 }
 
 /** Strips CSI/OSC sequences. Used before measuring width and before handing
