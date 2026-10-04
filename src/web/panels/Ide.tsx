@@ -32,15 +32,16 @@
  */
 
 import React from "react";
+import { COLOR, LAYOUT, toneColor } from "../theme/tokens.js";
 
-const HAIRLINE = "#30363d";
-const SURFACE_2 = "#161b22";
-const SURFACE_3 = "#21262d";
-const SURFACE_1 = "#0d1117";
-const FG = "#c9d1d9";
-const DIM = "#8b949e";
-const ACTIVE_BLUE = "#0078d4";
-const INACTIVE = "#4d4d4c";
+const HAIRLINE = COLOR.BORDER;
+const SURFACE_2 = COLOR.SURFACE_2;
+const SURFACE_3 = COLOR.SURFACE_3;
+const SURFACE_1 = COLOR.SURFACE_1;
+const FG = COLOR.FG;
+const DIM = COLOR.DIM;
+const ACTIVE_BLUE = COLOR.ACTIVE_BLUE;
+const INACTIVE = COLOR.INACTIVE;
 
 export interface ActivityItem {
   id: string;
@@ -51,25 +52,74 @@ export interface ActivityItem {
   onClick: () => void;
 }
 
-export interface IdeTab {
-  id: string;
-  label: string;
-  active?: boolean;
-  onClick: () => void;
-  /** 닫기 버튼 — 없으면 안 그린다. 있는 것처럼만. */
-  onClose?: () => void;
+
+/**
+ * 상태바 항목 — 오른쪽 정렬되는 것은 뒤에 둔다.
+ *
+ * `ellipsis` 는 **길어질 수 있는 항목에만** 켠다. 켠 항목만 줄여지고 말줄임표로
+ * 접힌다. 켜지 않은 항목(연결 상태·컨텍스트 같은 **몇 자 안 되는 값**)은 크기를
+ * 지킨다 — 좁은 창에서 "연결" 이 "연" 으로 줄어드는 것은 말줄임이 아니라 **손실**이다.
+ */
+export interface IdeStatusItem {
+  text: string;
+  tone?: "normal" | "warn" | "error" | "good";
+  /** 마우스를 올렸을 때 원문. 말줄임이 있으면 **거기 전체가** 있어야 한다. */
+  title?: string;
+  /** 줄바꿈 대신 말줄임표로 접어도 되는가. 긴 경로·긴 파일명만. */
+  ellipsis?: boolean;
 }
 
 export interface IdeProps {
-  title: string;
   activity: ActivityItem[];
-  tabs: IdeTab[];
   /** 상태바 항목 — 오른쪽 정렬되는 것은 뒤에 둔다. */
-  status?: { text: string; tone?: "normal" | "warn" | "error" | "good"; title?: string }[];
+  status?: IdeStatusItem[];
   /** 탭 스트립과 본문 사이의 얇은 줄. VS 는 탭마다 연한 선이 있다. */
   children: React.ReactNode;
-  /** 액티비티바 폭(고정). VS Community 는 좁다. */
+  /** 본문 فوق **오버레이**로 띄울 것 — 승인 게이트처럼 대화 흐름을 가리지만
+   *   별도 패널이어서는 안 되는 무거운 UI 에서만 그린다. */
+  overlay?: React.ReactNode;
+  /** 액티비티바 폭(고정). VS Community 는 좁다. 좁은 창에서도 밀리면 안 된다. */
   activityWidth?: number;
+}
+
+/**
+ * 액티비티바에서 **방향키가 옮겨갈 다음 인덱스** (S-2: "`role="tablist"` 를 선언해
+ * **방향키로 이동**할 수 있어야 한다").
+ *
+ * 규칙은 **WAI-ARIA 탭 패턴(세로)** 이다:
+ *   - `ArrowDown`/`ArrowRight` → 다음, `ArrowUp`/`ArrowLeft` → 이전
+ *   - `Home` → 처음, `End` → 끝
+ *   - 경계에서 ** 멈춘다. 넘어가면 "몇 개나 있는지" 를 모르게 된다.
+ *
+ * **순환시키지 않는 이유**: 감기면 마지막 항목에서 처음 항목으로 **값의 개수만큼**
+ * 눌러야 한다. 화면에 몇 개인지 보이지 않는 곳에서 사용자가 몇 번을 눌러야 하는지
+ * 계산하게 하는 것은 **발견 불가능한 함정**이다(부록 B 8: 화면이 말해야 한다).
+ *
+ * **포커스를 옮기면서 열기도 한다**(자동 활성화). 이 항목들은 탭이 아니라
+ * "무엇을 열 것인가" 를 고르는 명령이라, 포커스만 옮기고 열지 않으면
+ * "옮겼는데 아무 일도 없다" 는 한 번의 탭이 더 생긴다.
+ *
+ * @param key 누른 키. 관계없으면 `null`(옮기지 않는다).
+ * @param count 항목 수. 0 이면 `-1`(옮길 곳이 없다).
+ * @param current 지금 고른 인덱스. 없으면 0.
+ */
+export function nextActivityIndex(key: string | null, count: number, current: number): number {
+  if (!key || count <= 0) return -1;
+  const at = current >= 0 && current < count ? current : 0;
+  switch (key) {
+    case "ArrowDown":
+    case "ArrowRight":
+      return Math.min(count - 1, at + 1);
+    case "ArrowUp":
+    case "ArrowLeft":
+      return Math.max(0, at - 1);
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return -1;
+  }
 }
 
 /**
@@ -81,10 +131,30 @@ export interface IdeProps {
  * 정보라 세로 폭 안에 들어가고, 나머지는 `aria-label` 로 이름이 남는다.
  */
 function ActivityBar({ items, width }: { items: ActivityItem[]; width: number }) {
+  const current = Math.max(0, items.findIndex((i) => i.active === true));
+  const [focus, setFocus] = React.useState(current);
+  // **선택이 바뀌면 포커스도 따라간다** — 키보드 사용자가 화면 밖으로 버려지는
+  // 일이 없어야 한다(별도 상태를 들면 둘이 어긋난다).
+  React.useEffect(() => setFocus(current), [current]);
+  /** 실제로 **DOM 포커스**를 옮기기 위한 참조. `tabIndex` 만 바꾸면 포커스는 안 간다 —
+   *  스크린 판독기는 "여기로 가세요" 와 "여기가 있다" 를 다르게 읽는다. */
+  const refs = React.useRef<(HTMLButtonElement | null)[]>([]);
   return (
     <div
       role="tablist"
       aria-label="주요 보기"
+      aria-orientation="vertical"
+      onKeyDown={(e) => {
+        const to = nextActivityIndex(e.key, items.length, focus);
+        if (to < 0) return;
+        // **페이지 전체가 방향키로 스크롤되지 않게** 먼저 막는다. 막지 않으면
+        // 대화가 아니라 **창** 이 이동한다 — 포커스는 액티비티바 안에서 끝나야 한다.
+        e.preventDefault();
+        e.stopPropagation();
+        setFocus(to);
+        items[to]?.onClick();
+        refs.current[to]?.focus();
+      }}
       style={{
         flex: `0 0 ${width}px`,
         width,
@@ -95,17 +165,27 @@ function ActivityBar({ items, width }: { items: ActivityItem[]; width: number })
         borderRight: `1px solid ${HAIRLINE}`,
       }}
     >
-      {items.map((it) => {
+      {items.map((it, i) => {
         const on = it.active === true;
         return (
           <button
             key={it.id}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
             type="button"
             role="tab"
             aria-selected={on}
+            // **rove tabindex** — Tab 은 선택된 한 곳으로만 들어간다. 전부 `0` 이면
+            // 사용자는 세 아이콘을 하나씩 눌러야 하는데, 지금 어디가 선택됐는지
+            // 모른 채로 세 번을 누르게 되는 셈이다(WAI-ARIA 탭 패턴).
+            tabIndex={i === focus ? 0 : -1}
             aria-label={it.label}
             title={it.label}
-            onClick={it.onClick}
+            onClick={() => {
+              setFocus(i);
+              it.onClick();
+            }}
             style={{
               // **세로 띠** — 아이콘 위에 이름이 붙으면 여기서 2줄이 된다.
               height: on ? 44 : 40,
@@ -141,91 +221,13 @@ function ActivityBar({ items, width }: { items: ActivityItem[]; width: number })
 }
 
 /**
- * 탭 스트립 — **지금 열려 있는 것**.
- *
- * VS Community 는 열려 있는 탭만 보여준다. 닫힌 것을 **회색으로 나열하지 않는다** —
- * 그러면 무엇이 열려 있는지 모른다. 여기서도 같게 한다: **열린 것만** 띠를 만든다.
- *
- * **탭 스트립에 항상 하나 이상** 있어야 한다. 비면 "여기가 어디지" 가 된다 —
- * 그래서 `tabs` 가 비었을 때 **제목 하나**로 채운다(무언가 없는 것처럼 보이지 않게).
- */
-function TabStrip({ title, tabs }: { title: string; tabs: IdeTab[] }) {
-  const shown = tabs.length > 0 ? tabs : [{ id: "_", label: title, active: true, onClick: () => {} }];
-  return (
-    <div
-      style={{
-        flex: "0 0 auto",
-        display: "flex",
-        alignItems: "stretch",
-        background: "#010409",
-        borderBottom: `1px solid ${HAIRLINE}`,
-        minHeight: 30,
-        overflow: "hidden",
-      }}
-    >
-      {shown.map((t) => {
-        const on = t.active === true;
-        return (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={on}
-            onClick={t.onClick}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "0 10px",
-              background: on ? SURFACE_1 : "transparent",
-              // **활성 탭 위쪽에 선** — VS Community 의 그 선. 아래는 열려 있으므로
-              // 테두리가 이어져야 탭이 "몸체"처럼 보인다.
-              borderTop: on ? `1px solid ${ACTIVE_BLUE}` : "1px solid transparent",
-              borderLeft: `1px solid ${on ? HAIRLINE : "transparent"}`,
-              borderRight: `1px solid ${on ? HAIRLINE : "transparent"}`,
-              color: on ? FG : DIM,
-              font: "inherit",
-              fontSize: 11,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-              maxWidth: 240,
-            }}
-          >
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{t.label}</span>
-            {t.onClose && (
-              <span
-                role="button"
-                aria-label={`${t.label} 닫기`}
-                onClick={(e) => {
-                  // **탭 자체와 닫기를 구분한다** — 안 하면 탭이 열려 있다가 닫힌다.
-                  e.stopPropagation();
-                  t.onClose?.();
-                }}
-                style={{ color: DIM, fontSize: 12, lineHeight: 1, padding: "0 2px" }}
-              >
-                ✕
-              </span>
-            )}
-          </button>
-        );
-      })}
-      <span style={{ flex: 1 }} />
-    </div>
-  );
-}
-
-/**
  * 상태바 — **맨 아래 한 줄**.
  *
- * VS Community 의 상태바는 **높이가 얇고** 항상 보인다. 여기서도 얇게 두되
- * **항상 보이게** 한다 — 서버 상태와 컨텍스트를 한눈에 보는 자리다.
- *
- * **오른쪽 항목**은 뒤에 온다(`tone` 에 따라 색을 주되 **색만이 아니다** —
- * 값을 함께 쓴다).
+ * 길어질 수 있는 항목만 줄이고(`ellipsis`), **원문은 `title` 에 남긴다.**
+ * 잘린 걸 숨기면 "화면이 깨졌다" 고 읽힌다. 짧은 상태값(연결·컨텍스트)은
+ * 줄이지 않는다 — "연결" 이 "연" 으로 줄어드는 것은 말줄임이 아니라 손실이다.
  */
-function StatusBar({ items }: { items: { text: string; tone?: string; title?: string }[] }) {
-  const tone = (t: string | undefined): string =>
-    t === "error" ? "#f85149" : t === "warn" ? "#d29922" : t === "good" ? "#3fb950" : DIM;
+function StatusBar({ items }: { items: IdeStatusItem[] }) {
   return (
     <div
       style={{
@@ -244,7 +246,22 @@ function StatusBar({ items }: { items: { text: string; tone?: string; title?: st
       }}
     >
       {items.map((s, i) => (
-        <span key={i} title={s.title} style={{ color: tone(s.tone), flexShrink: 0 }}>
+        <span
+          key={i}
+          title={s.title ?? (s.ellipsis ? s.text : undefined)}
+          style={
+            s.ellipsis
+              ? {
+                  color: toneColor(s.tone),
+                  minWidth: 0,
+                  flexShrink: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }
+              : { color: toneColor(s.tone), flexShrink: 0 }
+          }
+        >
           {s.text}
         </span>
       ))}
@@ -252,15 +269,20 @@ function StatusBar({ items }: { items: { text: string; tone?: string; title?: st
   );
 }
 
-/** IDE 프레임 — 액티비티바 · 탭 스트립 · 본문 · 상태바. */
-export function Ide({ title, activity, tabs, status, children, activityWidth = 40 }: IdeProps) {
+/** IDE 프레임 — 액티비티바 · 본문 · 상태바 (탭 스트립 삭제 2026-10-04: 제목 불필요). */
+export function Ide({ activity, status, children, overlay, activityWidth = LAYOUT.ACTIVITY_WIDTH }: IdeProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", background: SURFACE_1 }}>
       <div style={{ flex: "1 1 auto", display: "flex", minHeight: 0 }}>
-        <ActivityBar items={activity} width={activityWidth} />
+        {/* 항목이 없으면 띠를 그리지 않는다 — 빈 띠는 48px 자리만 차지한다.
+            (사용자 지정: 설정은 상단 우측 아이콘으로 열고, 측면 아이콘은 두지 않는다) */}
+        {activity.length > 0 && <ActivityBar items={activity} width={activityWidth} />}
         <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
-          <TabStrip title={title} tabs={tabs} />
-          <div style={{ flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column" }}>{children}</div>
+          <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {/* **대화 위에 떠야 한다**(승인 게이트) — 자식 버튼이 클릭되도록 이벤트도 연다. */}
+        {overlay && <div style={{ position: "absolute", inset: 0, zIndex: 20 }}>{overlay}</div>}
+          {children}
+        </div>
         </div>
       </div>
       {status && status.length > 0 && <StatusBar items={status} />}

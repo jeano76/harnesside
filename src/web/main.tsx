@@ -20,19 +20,22 @@ import { openView } from "../session/blocks.js";
 import { ModelPanel } from "./panels/ModelPanel.js";
 import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
-import { MonitorPanel } from "./panels/MonitorPanel.js";
+import { MonitorStrip } from "./panels/MonitorPanel.js";
 import { DiffPanel } from "./editor/DiffPanel.js";
 import { EditorView } from "./editor/EditorView.js";
 import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";
 import { CommitBox } from "./panels/CommitBox.js";
 import { ResumeBanner } from "./panels/ResumeBanner.js";
+import { CrashBanner } from "./panels/CrashBanner.js";
 import "@xterm/xterm/css/xterm.css";
 import { WsClient } from "./wsClient.js";
-import { DEFAULT_LAYOUT, movePanel, toggleCollapse, keyboardMove, panelOf, zoneLabel, type PanelId, type Zone } from "./layout/engine.js";
-import { loadDraft, saveDraft, clearDraft, searchCommands, type Command, type Toast } from "./panels/notify.js";
+import { DEFAULT_LAYOUT, movePanel, keyboardMove, type PanelId, type Zone } from "./layout/engine.js";
+import { loadDraft, saveDraft, clearDraft, searchCommands, toastView, type Command, type Toast } from "./panels/notify.js";
 import { filterEntries, defaultFilter, visibleTail, bufferFullLabel, filterLabel, type Filter, type LogLevel } from "./panels/logFilter.js";
 import { useI18n } from "./i18n/index.js";
+import { ApprovalCard } from "./panels/ApprovalCard.js";
+import type { ApprovalRequest } from "./panels/ApprovalCard.js";
 // 이 import 가 카탈로그를 **등록한다**. 훅만 쓰고 여기 안 쓰면 사전이 비어 있고,
 // `t()` 는 키 문자열을 그대로 돌려준다(2026-09-30 까지 실제로 그랬다).
 import "./i18n/install.js";
@@ -78,127 +81,7 @@ const TITLE_KEY: Record<string, string> = {
   settings: "panel.settings",
 };
 
-function Empty({ title, hint, actions }: { title: string; hint: string; actions?: { label: string; onClick: () => void }[] }) {
-  return (
-    <div style={{ padding: 16, color: DIM, display: "grid", gap: 8, justifyItems: "start" }}>
-      <div style={{ color: FG, fontSize: 13 }}>{title}</div>
-      <div style={{ fontSize: 12 }}>{hint}</div>
-      {actions && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {actions.map((a) => (
-            <button
-              key={a.label}
-              type="button"
-              onClick={a.onClick}
-              style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 8px", cursor: "pointer", font: "inherit", fontSize: 11 }}
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * 패널을 **존에 따라** 배치한다.
- *
- * 엔진이 판정한 존을 **그대로 렌더**해야 한다. 고정 3열 그리드로 그렸다가 존 라벨만
- * 붙이면, 라벨이 실제 위치와 어긋난다 — 사용자는 "오른쪽 도크" 라고 적혀 있는데
- * 화면에서는 중앙에 있다. **라벨이 거짓말을 하는 배치가 도킹 엔진보다 나쁘다.**
- * 그래서 열 배열을 존에서 **계산**한다.
- */
-/**
- * 존별로 묶는다.
- *
- * `top` 과 `bottom` 도 **자기 자리를 갖는다.** 중앙 열에 끼워 넣으면서 머리에는
- * "상단 도크" 라고 적으면 라벨이 거짓말이 된다(실제로 났다). 그래서 행을 따로 잡는다.
- */
-function groupByZone(panels: { id: PanelId; zone: Zone }[]) {
-  const out: Record<Zone, PanelId[]> = { left: [], center: [], right: [], top: [], bottom: [] };
-  for (const p of panels) out[p.zone].push(p.id);
-  return out;
-}
-
-function Panel({
-  title,
-  zone,
-  collapsed,
-  onToggle,
-  onMove,
-  children,
-  dockable = true,
-}: {
-  title: string;
-  zone: Zone;
-  collapsed?: boolean;
-  onToggle?: () => void;
-  onMove?: (z: Zone) => void;
-  children: React.ReactNode;
-  dockable?: boolean;
-}) {
-  return (
-    <div
-      className="elev-1 elev-lift"
-      style={{
-        border: `1px solid ${BORDER}`,
-        borderRadius: 6,
-        display: "flex",
-        flexDirection: "column",
-        minHeight: 0,
-        overflow: "hidden",
-        background: BG,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", background: "#161b22", borderBottom: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
-        {/* 패널 머리 — 본체보다 **한 단계 높은 면**(§elevation). 어두운 테마에서
-            어두운 머리는 아래 본체에 **파묻혀** 계단처럼 보인다. 한 단계 밝아야
-            "이건 바깥 덮개" 라 읽힌다. */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "3px 8px",
-            background: "#161b22",
-            borderBottom: `1px solid ${BORDER}`,
-            borderTopLeftRadius: 5,
-            borderTopRightRadius: 5,
-            flex: "0 0 auto",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.045)",
-          }}
-        >
-        <strong style={{ fontSize: 11, color: FG }}>{title}</strong>
-        {/* 위치는 사람이 이해할 수 있는 말로 (§5.8) — 내부 식별자 노출 금지 */}
-        <span style={{ fontSize: 10, color: DIM }}>{zoneLabel(zone)}</span>
-        <span style={{ flex: 1 }} />
-        {dockable && onMove && (
-          <span style={{ display: "flex", gap: 2 }}>
-            {(["left", "right", "top", "bottom"] as Zone[]).map((z) => (
-              <button
-                key={z}
-                type="button"
-                onClick={() => onMove(z)}
-                title={`${zoneLabel(z)}로 이동`}
-                style={{ background: "none", border: 0, color: DIM, cursor: "pointer", fontSize: 10 }}
-              >
-                {z === "left" ? "◧" : z === "right" ? "◨" : z === "top" ? "▭" : "▁"}
-              </button>
-            ))}
-          </span>
-        )}
-        {onToggle && (
-          <button type="button" onClick={onToggle} title="접기/펼치기" style={{ background: "none", border: 0, color: DIM, cursor: "pointer", fontSize: 10 }}>
-            {collapsed ? "▸" : "▾"}
-          </button>
-        )}
-      </div>
-      </div>
-      {!collapsed && <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>{children}</div>}
-    </div>
-  );
-}
+/** 2026-10-04: dead panel shells removed. See layout comment below. */
 
 export default function App() {
   // M9: 문자열은 여기서 키로 바꾼다. 훅이 **함수** 를 돌려주는 이유는 로케일이
@@ -214,11 +97,29 @@ export default function App() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [metricSeries, setMetricSeries] = useState<(number | null)[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  /** 만료된 토스트를 치우는 시계 — TTL이 있으니 시간이 가야 사라진다. */
+  const [toastNow, setToastNow] = useState(() => Date.now());
+  const toastLive = useMemo(() => toastView(toasts, toastNow).live, [toasts, toastNow]);
+  // 알림 센터용 — 만료된 오류는 남긴다. 팝업은 사라져도 "왜 실패했지" 를 볼 수 있어야
+  // 한다(M4: 오류는 수동 닫기 + 센터에 잔류). info/warn 은 팝업과 함께 사라진다.
+  const bellItems = useMemo(() => {
+    const liveIds = new Set(toastLive.map((t) => t.id));
+    return [...toastLive, ...toasts.filter((t) => !liveIds.has(t.id) && t.kind === "error")];
+  }, [toasts, toastLive]);
+  useEffect(() => {
+    const next = toastView(toasts, Date.now()).nextExpiry;
+    if (next === null) return;
+    const t = setTimeout(() => setToastNow(Date.now()), Math.max(0, next - Date.now()) + 50);
+    return () => clearTimeout(t);
+  }, [toasts, toastNow]);
   const draftRef = useRef<HTMLTextAreaElement | null>(null);
   const focusDraft = useCallback(() => draftRef.current?.focus(), []);
   const [draft, setDraft] = useState(() => loadDraft(typeof localStorage !== "undefined" ? localStorage : null)?.text ?? "");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
+  // 승인 대기 — 서버가 보낸 요청을 **대화 위에 떠 있는 카드**로 표시한다.
+  // `id` 마다 하나 (`Map` 이 아니라 배열): 두 요청이 동시에 떠야 사용자도 그렇다.
+  const [approvals, setApprovals] = useState<Map<string, ApprovalRequest>>(() => new Map());
   const [modelName, setModelName] = useState<string | null>(null);
   const [diff, setDiff] = useState<{ path: string; oldText: string; newText: string } | null>(null);
   // 열려 있는 파일(§5.1). 없으면 빈 패널이 아니라 "무엇을 열 수 있나" 를 보여준다.
@@ -240,6 +141,10 @@ export default function App() {
   const [blocks, setBlocks] = useState<AgentBlock[]>([]);
   const [think, setThink] = useState<ThinkState>(() => initialThink());
   const [turnRunning, setTurnRunning] = useState(false);
+  /** 실행 중 들어온 입력의 대기열 — 서버 `agent.queue` 이벤트를 그대로 보여준다. */
+  const [queueItems, setQueueItems] = useState<string[]>([]);
+  /** 압축 진행·결과 — 서버 `agent.compaction` 이벤트. null이면 숨김. */
+  const [compaction, setCompaction] = useState<{ phase: "running" | "complete" | "failed"; droppedCount?: number; droppedTokens?: number; keptCount?: number; keptTokens?: number; summary?: string; droppedPreview?: string[] } | null>(null);
   /** §7.4 진행 중인 다운로드 목록(WS 로 온다). */
   const [downloads, setDownloads] = useState<{ id: string; file: string; state: string; progress: number; totalBytes: number; receivedBytes: number; error: string | null }[]>([]);
   /** 복원했음을 사용자에게 **한 번** 말한다 — 조용히 복원되면 "왜 대화가 있지?" 가 된다. */
@@ -278,7 +183,8 @@ export default function App() {
    */
   const sendTurn = useCallback(async () => {
     const text = draft.trim();
-    if (!text || turnRunning) return;
+    // 실행 중이어도 받는다 — 서버 대기열에 넣는다(거절하지 않는다, O4).
+    if (!text) return;
     setTurnRunning(true);
     // 사용자 입력을 대화 기록에 **먼저** 남긴다. WS 가 늦게 와도 순서가 뒤집히지 않는다.
     // **사람이 보낸 말을 블록으로 남긴다** — 이것이 대화 묶음의 경계다(2026-10-01).
@@ -287,16 +193,18 @@ export default function App() {
     setBlocks((prev) => applyEvent(prev, { type: "agent.user", text, at: Date.now() }));
     setDraft("");
     try {
-      const r = await client.post<{ ok: boolean; detail: string }>("/api/agent/turn", { text });
+      const r = await client.post<{ ok: boolean; detail: string; queued?: boolean }>("/api/agent/turn", { text });
       if (!r.ok) {
         setTurnRunning(false);
         pushToast({ id: "turn:fail", kind: "error", title: "턴을 시작하지 못했습니다", body: r.detail, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
+      } else if (r.queued) {
+        pushToast({ id: `turn:queued:${Date.now()}`, kind: "info", title: "대기열에 넣었습니다", body: r.detail, at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "agent" });
       }
     } catch (e) {
       setTurnRunning(false);
       pushToast({ id: "turn:fail", kind: "error", title: "턴 요청이 실패했습니다", body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
     }
-  }, [draft, turnRunning, pushToast]);
+  }, [draft, pushToast]);
 
   const loadTree = useCallback(async () => {
     try {
@@ -379,6 +287,29 @@ export default function App() {
     };
   }, []);
 
+  // thinking 초기 동기화 — 서버가 정본이다.
+  // 웹 기본값(ON)과 서버 기본값(OFF)이 어긋나면 체크는 켜져 있는데 아무것도 안
+  // 나온다(실측: 사고 토큰 항상 0). 부팅 1회만 맞춘다. 이후 토글은 기존 경로.
+  useEffect(() => {
+    let alive = true;
+    void client
+      .get<{ thinking?: { enabled?: boolean }; turn?: { running?: boolean } }>("/api/agent/state")
+      .then((s) => {
+        if (!alive) return;
+        if (typeof s.thinking?.enabled === "boolean") {
+          const on = s.thinking.enabled;
+          setThink((prev) => initialThink({ enabled: on, style: prev.style }));
+        }
+        if (s.turn?.running === true) setTurnRunning(true);
+      })
+      .catch(() => {
+        // 못 읽으면 웹 기본값 유지 — 다음 토글 때 서버와 맞춘다.
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // 로그 + 계측 스트리밍 (§2.3 · §5.5)
   useEffect(() => {
     const idePort = Number(new URL(location.href).port || 7317);
@@ -412,10 +343,29 @@ export default function App() {
         } else if (evType.startsWith("agent.")) {
           // **모든 에이전트 이벤트를 한 곳에서** 블록으로 바꾼다. 분기마다 따로
           // 처리하면 순서가 뒤집히고(상태 문구가 답변 뒤에 붙는다) 되돌리기 어렵다.
+          if (evType === "agent.queue") {
+            // 대기열은 대화 블록이 아니라 UI 상태다 — 블록으로 쌓으면 "명령 두 개" 로 보인다.
+            const items = ev.queue;
+            if (Array.isArray(items)) setQueueItems(items.filter((x): x is string => typeof x === "string"));
+            return;
+          }
+          if (evType === "agent.compaction") {
+            // 압축 진행·결과도 UI 상태다. 블록으로 쌓으면 요약이 대화를 오염시킨다.
+            const c = ev.compaction as { phase?: string; droppedCount?: number; droppedTokens?: number; keptCount?: number; keptTokens?: number; summary?: string; droppedPreview?: string[] } | undefined;
+            if (c && (c.phase === "running" || c.phase === "complete" || c.phase === "failed")) {
+              setCompaction({ ...c, phase: c.phase });
+            }
+            return;
+          }
           if (evType === "agent.reasoning") {
             setThink((s) => ({ ...ingest(s, { reasoning: String(ev.text ?? "") }), startedAt: s.startedAt ?? Date.now() }));
           }
-          if (evType === "agent.done" || evType === "agent.error") setTurnRunning(false);
+          if (evType === "agent.done" || evType === "agent.error") {
+            // 대기열이 남았으면 다음 턴이 바로 돈다 — 실행 중 표시를 내리면 깜빡인다.
+            const pending = typeof ev.queue === "number" ? ev.queue : 0;
+            if (evType === "agent.error" || pending === 0) setTurnRunning(false);
+            else setTurnRunning(true);
+          }
           if (evType === "agent.status" && /응답 중/.test(String(ev.text ?? ""))) setTurnRunning(true);
           if (evType === "agent.done" || evType === "agent.error") setThink((s) => finish(s));
           setBlocks((prev) =>
@@ -426,6 +376,20 @@ export default function App() {
               at: Number(ev.at ?? Date.now()),
             })
           );
+        } else if (ev.type === "approval.request") {
+          // 승인 대기 — 서버가 보낸 요청을 **대화 위에 떠 있는 카드**로 연다.
+          // 이미 같은 id 가 있으면 무시(재연결/중복 broadcast 방지).
+          const r = ev.request as ApprovalRequest | undefined;
+          if (r?.id) setApprovals((prev) => {
+            if (prev.has(r.id)) return prev;
+            const next = new Map(prev);
+            next.set(r.id, r);
+            return next;
+          });
+        } else if (ev.type === "approval.done") {
+          // 결정이 돌아오면 카드를 닫는다. "승인이 끝났는데 카드가 안 사라졌다" 가 없도록.
+          const id = ev.id as string | undefined;
+          if (id) setApprovals((prev) => prev.has(id) ? (() => { const n = new Map(prev); n.delete(id); return n; })() : prev);
         } else if (ev.type === "workspace.changed") {
           // 다른 곳(팔레트·다른 창)에서 루트가 바뀌었다. 화면을 **모으지 않으면** 사용자는
           // 옛 폴더에 계속 쓰게 된다.
@@ -531,7 +495,14 @@ export default function App() {
   // M5 팔레트
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key.toLowerCase() === "k") {
+      // **Ctrl+K / Ctrl+P 는 모두 팔레트** — 하나의 기능에 두 단축이 걸치면 사용자는
+      // "어느 키가 정답일까" 하고 헤맬 필요가 없다. 둘 다 자주 누르는 라우팅 명령이라
+      // 겹쳐도 괜찮고, 한쪽이 죽어도 반대쪽에서 열린다. (VS Code 는 P 를 파일 열기에
+      // 쓰지만 여기선 팔레트를 여는 단축으로 재지정한다 — 겹쳐도 기능은 하나다.)
+      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      } else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       } else if (e.key === "Escape") {
@@ -578,31 +549,19 @@ export default function App() {
   const commands: Command[] = useMemo(
     () => [
       { id: "view.toggleLog", title: "서버 로그 접기/펼치기", category: "보기", keys: [], run: () => setLogOpen((v) => !v) },
-      { id: "view.biggerShell", title: "셸 영역 키우기", category: "보기", keys: [], run: () => setBottomH((h) => Math.max(160, h - 80)) },
-      { id: "view.smallerShell", title: "셸 영역 줄이기", category: "보기", keys: [], run: () => setBottomH((h) => Math.min(window.innerHeight * 0.7, h + 80)) },
-      { id: "view.resetShell", title: "셸 영역 크기 초기화", category: "보기", keys: [], run: () => setBottomH(260) },
+      { id: "view.biggerShell", title: "셸 영역 키우기", category: "보기", keys: [], run: () => setBottomH((h) => Math.max(100, h - 80)) },
+      { id: "view.smallerShell", title: "셸 영역 줄이기", category: "보기", keys: [], run: () => setBottomH((h) => Math.min(window.innerHeight * 0.5, h + 80)) },
+      { id: "view.resetShell", title: "셸 영역 크기 초기화", category: "보기", keys: [], run: () => setBottomH(160) },
       {
         id: "view.openSettings",
         title: "설정 열기",
         category: "설정",
         keys: [],
         // **별도 패널이 아니라 대화 안의 블록**으로 연다(2026-10-01 요구).
+        // 상단 우측 ⚙ 아이콘과 같은 동작이다 — 팔레트는 키보드 경로다.
         run: () => setBlocks((prev) => openView(prev, { what: "settings" }, Date.now())),
       },
-      {
-        id: "view.openDiff",
-        title: "변경 검토 열기",
-        category: "보기",
-        keys: [],
-        run: () => setBlocks((prev) => openView(prev, { what: "diff" }, Date.now())),
-      },
-      {
-        id: "terminal.newShell",
-        title: "새 셸 열기",
-        category: "기타",
-        keys: [],
-        run: () => client.post("/api/terminal", {}).catch((e) => notice("warn", "셸을 열지 못했습니다", String(e))),
-      },
+
       { id: "palette.open", title: "명령 팔레트", category: "기타", keys: ["Ctrl+K"], run: () => setPaletteOpen((v) => !v) },
     ],
     [client, notice],
@@ -623,7 +582,28 @@ export default function App() {
     () => <ModelPanel client={client} onNotice={notice} onPhase={onModelPhase} />,
     [client, notice, onModelPhase],
   );
+  // ── 설정 — **대화 안의 블록**으로 연다. 여는 곳은 상단 우측 ⚙ 아이콘
+  // (헤더)과 명령 팔레트뿐이다. 측면 아이콘·디렉터리·변경 검토 진입로는 제거됨
+  // (사용자 지정: 설정만 남긴다). 저장된 옛 dirs/diff 블록은 ToolBlock이
+  // "제거되었습니다" 로 정직하게 말한다.
   const viewExtra = useMemo(() => ({ settings: settingsNode }), [settingsNode]);
+
+  // ── 승인 게이트 — **대화 위에 떠 있는 카드** (§8.2) ────────────────────────────
+  // 서버가 approval.request 를 보내면 이 맵에 넣고, done 이면 지운다. 카드는 아래
+  // `pendingApprovals` 로 AgentPanel→Ide.overlay 에 그린다(대화 흐름을 가리되 별도
+  // 패널이 아닌, "무엇을 하려다가 승인했나" 가 스크롤로 이어지게).
+  const pendingApprovals = useMemo(() => Array.from(approvals.values()), [approvals]);
+
+  // 승인 카드 — **대화 위에 떠 있는 카드** (§8.2). 여러 개가 동시에 떠 있어도
+  // 각기 `id` 가 다르니 두 번 그린다. 대화 흐름을 가리지만 별도 패널이 아니라,
+  // "무엇을 하려다가 승인했나" 가 스크롤로 이어진다. 카드는 IDE 본문 위에 오버레이로.
+  const approvalOverlay = pendingApprovals.length ? (
+    <div style={{ position: "absolute", right: 16, bottom: 80, display: "flex", flexDirection: "column", gap: 8, zIndex: 30 }}>
+      {pendingApprovals.map((r) => (
+        <ApprovalCard key={r.id} client={client} request={r} onNotice={(kind, title, body) => pushToast({ id: `approval:${title}`, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "approval" })} />
+      ))}
+    </div>
+  ) : null;
 
   /**
    * 패널 본문. **존과 무관하게** 같은 내용 — 패널이 옮겨가면 내용까지 바뀌면
@@ -632,6 +612,8 @@ export default function App() {
   const BODY: Partial<Record<PanelId, React.ReactNode>> & Record<string, React.ReactNode> = {
     agent: (
       <>
+        {/* M10 크래시 안내 — **있을 때만** 나타난다. 재개는 ResumeBanner 가 맡는다. */}
+        <CrashBanner client={client} />
         {/* M3 재개 배너 — **있을 때만** 나타난다. 항상 보이면 경고가 무시된다. */}
         <ResumeBanner
           client={client}
@@ -644,21 +626,18 @@ export default function App() {
       <AgentPanel
         blocks={blocks}
         client={client}
-        onOpenView={(what, path) => setBlocks((prev) => openView(prev, path ? { what, path } : { what }, Date.now()))}
+        notices={bellItems}
+        onDismissNotice={(id) => setToasts((p) => p.filter((x) => x.id !== id))}
+        compaction={compaction}
+        onDismissCompaction={() => setCompaction(null)}
         viewExtra={viewExtra}
+        overlay={approvalOverlay}
         running={turnRunning}
         // 상태바 — 이미 **앱 전체가 하나씩** 붙들고 있는 값을 **읽기만** 넘긴다.
         // 여기서 WS 를 새로 붙들면 소켓이 두 개 생기고 재연결이 두 배가 된다.
         wsState={wsState}
         context={metrics?.context ?? null}
         think={think}
-        onStyle={(s: ThinkStyle) => setThink((prev) => ({ ...prev, style: s }))}
-        onThinking={(on) => {
-          setThink((prev) => initialThink({ enabled: on, style: prev.style }));
-          void client.post("/api/agent/thinking", { enabled: on }).catch((e) =>
-            pushToast({ id: "think:fail", kind: "error", title: "thinking 설정을 보내지 못했습니다", body: String(e), at: Date.now(), ttlMs: 10_000, requiresAck: false, source: "agent" })
-          );
-        }}
         onCancel={() => void client.post("/api/agent/cancel")}
         // 예시는 **채우기만** 한다. 바로 보내면 사용자가 고칠 기회를 잃는다 —
         // "누르는 즉시 실행" 은 되돌리기 어렵다(§5.10: 무엇을 했는지 말해야 한다).
@@ -677,11 +656,9 @@ export default function App() {
         onNotice={notice}
       />
     ),
-    // ── 설정은 **패널이 아니라 대화 안의 블록**이다 (2026-10-01) ────────────────
-    // `BODY` 의 키는 이제 "존에 놓는 패널" 이 아니라 **열 수 있는 것** 의 목록이다.
-    // 설정은 머리 아이콘으로 열고 대화 사이에 블록으로 쌓인다 — 그래야 "무엇을
-    // 설정하려다가 무엇을 봤나" 가 한 스크롤로 이어진다.
-    settings: settingsNode,
+    // ── 설정은 **대화 안의 블록**이다 (2026-10-01) ────────────────
+    // 여는 곳은 상단 우측 ⚙ 아이콘뿐 — 별도 패널 항목은 두지 않는다.
+    // (사용자 지정: 설정만 남기고 설정 패널 부분은 제거)
 
   };
 
@@ -690,33 +667,31 @@ export default function App() {
   const full = bufferFullLabel(logStatus);
   const bootDone = steps?.filter((s) => s.ok).length ?? 0;
 
-  // ── 셸 구조 (2026-10-01 사용자 사양) ─────────────────────────────────────────
+  // ── 셸 구조 (2026-10-01 사용자 사양 · 높이 축소) ────────────────────────────
   //
   //   ┌──────────────────────────────────────────────┐
-  //   │  에이전트 출력  (가장 넓게, 화면 중앙 위)      │  ← 1fr
+  //   │  메시지창 (에이전트 출력, 가장 넓게, 위)       │  ← 1fr
   //   ├──────────────────────────────────────────────┤
-  //   │  프롬프트 입력창                              │  ← 고정
-  //   ├───────────────────────────────┬──────────────┤
-  //   │  셸(터미널)                   │  계측 상태  │  ← 하단, 가변 배분
-  //   │                               │  (전부 노출) │     + 리사이즈
-  //   ├───────────────────────────────┴──────────────┤
+  //   │  프롬프트 영역 (대화 바로 아래)                │  ← 고정
+  //   ├──────────────────────────────────────────────┤
+  //   │  셸 윈도우 (짧게 — 길 필요 없음)              │  ← 기본 160
+  //   ├──────────────────────────────────────────────┤
   //   │  서버 로그 (접힘 기본)                        │
   //   └──────────────────────────────────────────────┘
   //
   // **왜 좌우 존을 없앴나**: 좌우에 260px 과 380px 을 두면 1600px 창에서 **46%** 가
-  // 대화가 아니다. 이 프로그램의 첫 화면은 대화다. 계측은 읽는 게 아니라 **확인하는**
-  // 것이므로 좁은 폭으로 충분하고, 그 폭을 대화에 주는 게 낫다.
-  //
-  // **계측 패널 폭의 근거**: 게이지 4개가 나란히 들어갈 최소 폭. 이보다 좁으면 줄이
-  // 접히고, 그것은 "전부 노출" 이라는 요구를 어긴다. 300px 은 4개 게이지(각 72px +
-  // 라벨)가 딱 들어가는 폭이다.
-  const MONITOR_MIN_W = 300;
-  const [monitorW, setMonitorW] = useState(MONITOR_MIN_W);
+  // 대화가 아니다. 이 프로그램의 첫 화면은 대화다.
+  // **왜 셸을 짧게 두나**: 셸은 명령을 확인하는 자리지 읽는 자리가 아니다.
+  // 길면 메시지창을 밀어낸다 — 기본 160, 필요하면 드래그·키보드로 늘린다.
+  // 초기 비율: 대화가 주인공이다. 저장된 값이 화면을 넘기면(예전 드래그 잔재)
+  // 첫 화면부터 대화가 짓눌리므로 읽을 때 클램프로 되돌린다.
   const [bottomH, setBottomH] = useState(() => {
     try {
-      return Number(localStorage.getItem("harnesside.bottomH")) || 260;
+      const v = Number(localStorage.getItem("harnesside.bottomH")) || 160;
+      if (typeof window !== "undefined") return Math.max(100, Math.min(window.innerHeight * 0.4, v));
+      return Math.max(100, Math.min(400, v));
     } catch {
-      return 260;
+      return 160;
     }
   });
   useEffect(() => {
@@ -743,14 +718,54 @@ export default function App() {
     }
   }, [logOpen]);
 
+  // ── 입력창·하단 쉘 높이 (2026-10-04: 좌측 밴드 삭제 — 10-01 확정 구조로 복귀) ──
+  // 입력 창 높이(세로 가변) — localStorage 저장.
+  const [inputH, setInputH] = useState(() => { try { const v = Number(localStorage.getItem("harnesside.inputH")) || 96; return Math.max(48, Math.min(400, v)); } catch { return 96; } });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("harnesside.inputH", String(Math.round(inputH)));
+    } catch {
+      /* 저장 불가 — 이번 실행에만 적용 */
+    }
+  }, [inputH]);
+
+  // 입력창·하단 쉘 포인터 드래그 — **한 번만** 붙인다. 각 mousedown마다
+  // 스냅샷을 잡고 pointerup에서 리스너를 제거하므로 렌더마다 중복이 없다.
+  // 입력창 높이 드래그 — 위로 올리면 커지고 내리면 작아진다. 48~400px.
+  const onInputSepDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = inputH;
+    const move = (ev: MouseEvent) => setInputH(Math.max(48, Math.min(400, startH - (ev.clientY - startY))));
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const onBottomSepDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = bottomH;
+    // 마우스가 내려가면(shrink above) 쉘이 낮아진다. 기본 160 — 길 필요 없다.
+    const move = (ev: MouseEvent) => setBottomH(Math.max(100, Math.min(window.innerHeight * 0.5, startH - (ev.clientY - startY))));
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  /* LeftBand/SeparatorV removed 2026-10-04 (see layout note above). */
+
+
+
   return (
     <div
       style={{
         display: "grid",
-        // 열은 **하나**다. 좌우 존을 없앴으므로 좌우로 줄 것이 없다(2026-10-01).
+        // 열은 **하나**다(중앙 열: 대화→입력, 하단 행: 셸+계측). 행은 상단 바 ·
+        // 중앙 열(flex) · 하단 쉘(bottomH)만 — 로그 footer 는 쉘 아래 별도 행.
         gridTemplateColumns: "1fr",
-        // 행: 상단 바 · **에이전트(1fr)** · 프롬프트 · 하단(셸+계측) · 로그
-        gridTemplateRows: `28px 1fr auto ${bottomH}px ${logOpen ? `${layout.logHeight}px` : "28px"}`,
+        gridTemplateRows: `28px 1fr ${bottomH}px auto`,
         height: "100vh",
         background: BG,
         color: FG,
@@ -790,132 +805,87 @@ export default function App() {
         {full && <span style={{ color: full.color, fontSize: 11 }} title="로그 상한">{full.text}</span>}
         {error && <span style={{ color: "#f85149" }}>{error}</span>}
         <span style={{ flex: 1 }} />
+        {/* 설정 — 유일하게 남긴 패널 진입로. 대화 안에 블록으로 열린다.
+            측면 액티비티바는 두지 않는다(사용자 지정). */}
+        <button
+          type="button"
+          aria-label="설정 열기"
+          title="설정 열기"
+          onClick={() => setBlocks((prev) => openView(prev, { what: "settings" }, Date.now()))}
+          style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 14, padding: "0 4px" }}
+        >
+          <span aria-hidden="true">⚙</span>
+        </button>
         <span style={{ fontSize: 11, color: wsState === "open" ? "#3fb950" : wsState === "connecting" ? "#d29922" : "#f85149" }} title="WebSocket 연결 상태">
           {wsState === "open" ? "● 실시간" : wsState === "connecting" ? "○ 연결 중" : "▲ 끊김"}
         </span>
       </header>
 
 
-      {/* ── ① 에이전트 출력 (메인) ────────────────────────────────────────────
-          화면 중앙 위를 **가장 넓게** 차지한다(2026-10-01 사양). 이 앱의 첫 화면은
-          대화이고, 좌우 존을 없애면서 대화에 폭을 전부 줬다. */}
-      <div style={{ gridRow: 2, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", padding: "6px 6px 0" }}>
-        <div className="elev-1" style={{ flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {/* ── 중앙 열 (2026-10-04): 탐색기 완전 제거 — 출력 → 입력 → 쉘 순서. */}
+      <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0, minWidth: 0 }}>
+        <div className="elev-1" style={{ flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", padding: 6 }}>
           {BODY.agent}
         </div>
-      </div>
-
-      {/* ── ② 프롬프트 입력창 (에이전트 바로 아래) ────────────────────────────
-          요구: "하단에는 프롬프트 입력 창이됨". 대화의 **바로 아래**에 있어야
-          문맥이 이어진다 — 아래쪽 셸 영역에 두면 "무엇을 하려는지" 와 "무엇을 보고
-          있는가" 가 화면 양 끝으로 벌어진다. */}
-      <div style={{ gridRow: 3, padding: "6px", display: "flex" }}>
         <div
-          className="elev-1"
-          style={{ flex: 1, border: `1px solid ${BORDER}`, borderRadius: 6, display: "flex", flexDirection: "column", background: BG, overflow: "hidden" }}
-        >
-          <textarea
-            ref={draftRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              // **Enter 로 보내고 Shift+Enter 로 줄바꿈** — 대화창의 최대 규칙(§5.7).
-              // 키보드 중심 개발자에게 이것 없으면 다 줄을 Shift+Enter 로 눌러야 한다.
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                if (draft.trim() && !turnRunning) void sendTurn();
-              }
-            }}
-            placeholder="무엇을 할까요? (Enter 로 전송 · Shift+Enter 로 줄바꿈 · 창을 닫아도 입력 내용은 남습니다)"
-            style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", minHeight: 64, maxHeight: 220, padding: 8, font: "inherit" }}
-          />
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}` }}>
-            <span style={{ fontSize: 10, color: DIM }}>{draft ? "드래프트 저장됨" : ""}</span>
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="입력창 높이 조절"
+          title="드래그 또는 ↑↓키로 입력창 높이 조절"
+          tabIndex={0}
+          onPointerDown={onInputSepDown}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowUp") { e.preventDefault(); setInputH((h) => Math.min(400, h + 16)); }
+            if (e.key === "ArrowDown") { e.preventDefault(); setInputH((h) => Math.max(48, h - 16)); }
+          }}
+          style={{ flex: "0 0 auto", height: 6, cursor: "row-resize", background: "transparent" }}
+        />
+        <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: `1px solid ${BORDER}`, borderRadius: 6, margin: "0 6px 6px", background: "#161b22" }}>
+          <textarea ref={draftRef} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (draft.trim()) void sendTurn(); } }} placeholder="무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)" aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
+          {/* O4 대기열 — 실행 중 들어온 입력과 순서 변경. 칩의 ↑↓로 순서를 바꾼다. */}
+          {queueItems.length > 0 && (
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", padding: "2px 8px", borderTop: `1px solid ${BORDER}`, fontSize: 10 }}>
+              <span style={{ color: DIM }}>대기 {queueItems.length}</span>
+              {queueItems.map((q, i) => (
+                <span key={`${i}:${q.slice(0, 24)}`} style={{ display: "inline-flex", gap: 2, alignItems: "center", background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 999, padding: "0 2px 0 6px", color: FG, maxWidth: 220 }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i + 1}. {q.slice(0, 40)}</span>
+                  <button type="button" aria-label={`대기 ${i + 1}번째를 앞으로`} title="앞으로" disabled={i === 0} onClick={() => void client.post("/api/agent/queue/move", { from: i, to: i - 1 }).catch(() => {})} style={{ background: "none", border: 0, color: i === 0 ? "#484f58" : DIM, cursor: i === 0 ? "default" : "pointer", font: "inherit", padding: "0 2px" }}>↑</button>
+                  <button type="button" aria-label={`대기 ${i + 1}번째를 뒤로`} title="뒤로" disabled={i === queueItems.length - 1} onClick={() => void client.post("/api/agent/queue/move", { from: i, to: i + 1 }).catch(() => {})} style={{ background: "none", border: 0, color: i === queueItems.length - 1 ? "#484f58" : DIM, cursor: i === queueItems.length - 1 ? "default" : "pointer", font: "inherit", padding: "0 2px" }}>↓</button>
+                </span>
+              ))}
+              <button type="button" onClick={() => void client.post("/api/agent/queue/clear", {}).catch(() => {})} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", textDecoration: "underline" }}>비우기</button>
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
+            <span style={{ fontSize: 11, color: FG, fontWeight: 700 }}>프롬프트</span>
+            <button type="button" onClick={() => { clearDraft(typeof localStorage !== "undefined" ? localStorage : null); setDraft(""); }} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}>지우기</button>
+            <span style={{ fontSize: 10, color: DIM }}>Enter 전송 · Shift+Enter 줄바꿈</span>
             <span style={{ flex: 1 }} />
-            <button
-              type="button"
-              onClick={() => {
-                clearDraft(typeof localStorage !== "undefined" ? localStorage : null);
-                setDraft("");
-              }}
-              style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}
-            >
-              지우기
-            </button>
-            <button
-              type="button"
-              disabled={!draft.trim() || turnRunning}
-              onClick={() => void sendTurn()}
-              style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 10px", cursor: draft.trim() && !turnRunning ? "pointer" : "default", font: "inherit" }}
-            >
-              {turnRunning ? "응답 중…" : "보내기"}
+            <button type="button" disabled={!draft.trim()} onClick={() => void sendTurn()} style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "3px 10px", cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
+              {turnRunning ? "대기열에 추가" : "보내기"}
             </button>
           </div>
         </div>
       </div>
-
-      {/* ── ③ 하단: 셸(가변) + 계측(최소 폭, 전부 노출) ──────────────────────
-          요구: "패널간에는 사이즈가 플랙스하게 조정이 가능함" · "cpu 등 상태표시
-          내용은 제일 하단의 쉘 영역 우측에 최소 사이즈로 모두 다 노출될 수 있는
-          높이를 유지하면서 폭을 설정해서 반영해줘"
-
-          즉 (a) 둘 사이에 **드래그 경계선**이 있고, (b) 계측은 **줄이 보이지
-          않게** — 즉 자체 스크롤이 없어야 한다(2026-10-01 앞선 요구: "항상 전체를
-          보여줘야"). */}
-      <div style={{ gridRow: 4, display: "flex", minHeight: 0, minWidth: 0, padding: "0 6px 6px", gap: 0 }}>
-        <div className="elev-1" style={{ flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* 하단: 전폭 그립 + 셸 + 한 줄 모니터 스트립 (2026-10-04) */}
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="쉘 영역 높이 조절"
+        title="드래그로 쉘 영역 높이 조절"
+        tabIndex={0}
+        onPointerDown={onBottomSepDown}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowUp") { e.preventDefault(); setBottomH((h) => Math.min(window.innerHeight * 0.5, h + 24)); }
+          if (e.key === "ArrowDown") { e.preventDefault(); setBottomH((h) => Math.max(100, h - 24)); }
+        }}
+        style={{ flex: "0 0 auto", height: 6, cursor: "row-resize", background: "transparent" }}
+      />
+      <div className="elev-1" style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+        <div style={{ flex: "1 1 auto", minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {BODY.terminal}
         </div>
-
-        {/* 리사이저 — **키보드로도** 잡을 수 있게 했다. 마우스만으로는 "고정돼 있나?"
-           를 알 수 없다(M8: 키보드만으로 조작 가능해야 한다). */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="패널 크기 조절"
-          tabIndex={0}
-          onPointerDown={(e) => {
-            const startX = e.clientX;
-            const startW = monitorW;
-            const move = (ev: PointerEvent) => {
-              // **왼쪽으로 끌면 계측이 넓어진다** — 시작점 대비의 변화량을 그대로 쓴다.
-              setMonitorW(Math.max(MONITOR_MIN_W, Math.min(window.innerWidth * 0.6, startW - (ev.clientX - startX))));
-            };
-            const up = () => {
-              window.removeEventListener("pointermove", move);
-              window.removeEventListener("pointerup", up);
-            };
-            window.addEventListener("pointermove", move);
-            window.addEventListener("pointerup", up);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowLeft") {
-              e.preventDefault();
-              setMonitorW((w) => Math.max(MONITOR_MIN_W, w + 24));
-            } else if (e.key === "ArrowRight") {
-              e.preventDefault();
-              setMonitorW((w) => Math.max(MONITOR_MIN_W, w - 24));
-            }
-          }}
-          style={{ width: 6, flex: "0 0 auto", cursor: "col-resize", background: "transparent" }}
-          onDoubleClick={() => setMonitorW(MONITOR_MIN_W)}
-        />
-        <div
-          className="elev-1"
-          style={{
-            flex: `0 0 ${monitorW}px`,
-            width: monitorW,
-            minWidth: 0,
-            minHeight: 0,
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-          }}
-        >
-          {/* **접지 않는다** — 계측은 언제나 보인다. 접으면 "이제 CPU 가 갑자기
-              100% 가 됐는데 왜 아무 말도 없지" 가 된다(요구: "전부 다 노출"). */}
-          <MonitorPanel latest={metrics} series={metricSeries} />
-        </div>
+        <MonitorStrip latest={metrics} />
       </div>
 
       {/* 로그 — **닫을 수 없는 기본 탭**(§5.12)이지만 **접을 수 있다**(2026-10-01).
@@ -938,14 +908,14 @@ export default function App() {
             type="button"
             onClick={() => setLogOpen(true)}
             aria-expanded={false}
-            title="서버 로그 펼치기"
+            title={t("panel.log") + " 펼치기"}
             style={{
               display: "flex", gap: 8, alignItems: "center",
               background: "none", border: 0, color: DIM, cursor: "pointer",
               font: "inherit", fontSize: 11, padding: "4px 10px", textAlign: "left", width: "100%",
             }}
           >
-            <span>▴ 서버 로그</span>
+            <span>▴ {t("panel.log")}</span>
             {/* **내용이 있으면 접어도 보여준다.** 몇 줄인지 말하지 않으면
                 "접었으니 0 건" 으로 읽힌다 — 실제로는 계속 쌓이고 있다. */}
             {visible.length > 0 && (
@@ -970,7 +940,7 @@ export default function App() {
                 font: "inherit", fontSize: 11, padding: "2px 10px", textAlign: "left",
               }}
             >
-              <span>▾ 서버 로그</span>
+              <span>▾ {t("panel.log")}</span>
               <span style={{ marginLeft: "auto" }}>접기</span>
             </button>
             <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}>
@@ -983,7 +953,7 @@ export default function App() {
       {/* 팔레트 */}
       {paletteOpen && (
         <div onClick={() => setPaletteOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(1,4,9,0.6)", display: "grid", placeItems: "start center", paddingTop: "12vh", zIndex: 50 }}>
-          <div onClick={(e) => e.stopPropagation()} className="elev-3" style={{ width: 520, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 8, overflow: "hidden" }}>
+          <div onClick={(e) => e.stopPropagation()} className="elev-3" style={{ width: 520, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, overflow: "hidden" }}>
             <input
               autoFocus
               value={paletteQuery}
@@ -1031,20 +1001,8 @@ export default function App() {
         </div>
       )}
 
-      {/* 알림 */}
-      <div style={{ position: "fixed", right: 12, bottom: 12, display: "grid", gap: 6, zIndex: 40, width: 320 }}>
-        {toasts.map((t) => (
-          <div key={t.id} style={{ background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, padding: 8, display: "flex", gap: 8 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ color: t.kind === "error" ? "#f85149" : t.kind === "warn" ? "#d29922" : FG, fontSize: 12 }}>{t.title}</div>
-              <div style={{ color: DIM, fontSize: 11 }}>{t.body}</div>
-            </div>
-            <button type="button" onClick={() => setToasts((p) => p.filter((x) => x.id !== t.id))} style={{ background: "none", border: 0, color: DIM, cursor: "pointer" }}>
-              ✕
-            </button>
-          </div>
-        ))}
-      </div>
+      {/* 우하단 팝업 제거됨(2026-10-04): 알림은 대화창 상단의 🔔 센터가 전담한다.
+          두 곳에 띄우면 같은 소식을 두 번 읽게 된다. 상태(toasts)는 센터가 읽는다. */}
     </div>
   );
 }

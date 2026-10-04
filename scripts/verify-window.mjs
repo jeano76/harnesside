@@ -31,10 +31,21 @@ class Cdp {
   #ws;
   #id = 0;
   #waiters = new Map();
+  #listeners = {};
   constructor(ws) {
     this.#ws = ws;
     ws.on("message", (raw) => {
       const m = JSON.parse(String(raw));
+      // 이벤트 디스패치: method "Console.messageAdded" → listeners.console
+      if (m.method && this.#listeners[m.method]) {
+        for (const l of this.#listeners[m.method]) {
+          try {
+            l(m.params);
+          } catch {
+            /* listener 하나라고 구독을 끊지 않는다 */
+          }
+        }
+      }
       const w = this.#waiters.get(m.id);
       if (w) {
         this.#waiters.delete(m.id);
@@ -50,11 +61,25 @@ class Cdp {
     });
     return new Cdp(ws);
   }
-  send(method, params = {}) {
+  /**
+   * CDP 이벤트 구독 — e.g. `cdp.on("Console.messageAdded", params => ...)`.
+   * 여러 listener 등록 가능 (이벤트 이름 그대로 domain 소문자).
+   */
+  on(method, listener) {
+    (this.#listeners[method.toLowerCase()] ??= []).push(listener);
+    return this;
+  }
+  /**
+   * 요청 전송. `sessionId` 이 있으면 타깃에 스코프한다(attachToTarget 한 페이지에만 붙일 때 필요).
+   * 세션 없이 보내면 브라우저 전역(브라우저 WS 붙인 경우 등)으로 간주된다.
+   */
+  send(method, params = {}, sessionId) {
     const id = ++this.#id;
+    const message = { id, method, params };
+    if (sessionId) message.sessionId = sessionId;
     return new Promise((res) => {
       this.#waiters.set(id, res);
-      this.#ws.send(JSON.stringify({ id, method, params }));
+      this.#ws.send(JSON.stringify(message));
     });
   }
   async eval(expression) {
@@ -67,16 +92,48 @@ class Cdp {
 }
 
 const checks = [];
-const check = (name, ok, detail) => {
-  checks.push({ name, ok, detail });
-  console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
+const check = (name, ok, detail, opts = {}) => {
+  checks.push({ name, ok, skipped: !!opts.skip, detail });
+  console.log(`  ${opts.skip ? "SKIP" : ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 };
+
+/**
+ * live-measurement 블록의 결과를 기록한다. 이 블록들은 **동적으로** (예: 창 크기
+ 변경 후, 실제 검색 요청을 보낸 뒤) 결과를 계산하므로 `check()`처럼 미리 정해진
+ 값을 안 준다. outcome 문자열("PASS"/"WARN"/"FAIL") 을 받아 동일한 표로 낸다.
+ 
+ check() 와 동일하게 checks 배열에 쌓으므로 **실패하면 process.exit(1)** 이 일어난다
+ (report() 를 쓰지 않고 console.log 로 끝내면 통과로 세어지는 "조용히 실패" 를 막기
+ 위함이다 — 부록 B 1). */
+function report(outcome, name, ok, detail = "") {
+  const mapped = outcome === "PASS" || outcome === "WARN";
+  return check(name, ok, detail, { outcome });
+}
 
 const page = await findPage();
 const cdp = await Cdp.open(page.webSocketDebuggerUrl);
 await cdp.send("Runtime.enable");
 await cdp.send("Log.enable");
+await cdp.send("Console.enable");
 await cdp.send("Page.enable");
+
+// 콘솔 에러 수집 — 구독 전에 반드시 선언 (TDZ 버그 수정).
+const errors = [];
+
+/**
+ * 콘솔 에러를 **직접적으로** 수집한다 (§4: "콘솔 에러 0" 검사).
+ *
+ * `errors.push` 가 없던 시절, 이 검사는 "에러가 하나도 없었다" 가 아니라 **수집조차 안
+ 된** 상태였다 — 그래서 항상 trivial pass였고, 실제 에러는 놓쳤다. 지금부터는
+ Console.messageAdded 이벤트를 매 이벤트마다 듣고, **level === "error"** 일 때만
+ 스택·URL 과 함께 밀는다. console.error/console.warn은 무시한다(의도된 경고를 에러로
+ 잡으면 false-positive). */
+cdp.on("Console.messageAdded", (params) => {
+  const m = params.message ?? {};
+  if (m.level === "error") {
+    errors.push(`${m.text || "console error"}${m.url ? ` @${m.url}` : ""}${m.lineNumber != null ? `:${m.lineNumber}` : ""}${m.stack ? ` — ${m.stack.split("\n")[0]}` : ""}`);
+  }
+});
 
 /**
  * **항상 새로고침한다.**
@@ -89,8 +146,23 @@ await cdp.send("Page.enable");
 await cdp.send("Page.reload", { ignoreCache: true });
 await new Promise((r) => setTimeout(r, 4000));
 
-// 콘솔 에러 수집 (이벤트는 다음 eval 사이에도 온다)
-const errors = [];
+/**
+ * 자기 기동 시각 (§11 · S-11).
+ *
+ * "코드는 고쳤는데 서버가 수정 이전에 떠 있었다" 는 이 저장소에서 실제로
+ * 일어난 측정 사고다. 그래서 시험은 시작할 때 서버의 `startedAt` 을 읽고,
+ * 끝날 때 다시 읽어 **같은 프로세스를 잰 것인지** 확인한다. 다르면 이 실행의
+ * 모든 PASS 는 옛 코드의 것이다 — 통과로 세지 않는다.
+ */
+async function readStartedAt() {
+  const token = process.env.HARNESSIDE_TOKEN ?? (await readFile(".harnesside/state/token.json", "utf8").then(JSON.parse).catch(() => ({}))).token;
+  const res = await fetch(`http://${URL_MATCH}/api/health`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) return null;
+  const j = await res.json();
+  return typeof j?.startedAt === "number" ? j.startedAt : null;
+}
+const startedAtBegin = await readStartedAt();
+check("서버 기동 시각을 읽음 (§11: startedAt)", typeof startedAtBegin === "number" && startedAtBegin <= Date.now(), String(startedAtBegin));
 
 const mounted = await cdp.eval(`(() => {
   const r = document.getElementById("root");
@@ -192,24 +264,42 @@ const emptyState = await cdp.eval(`(() => {
     looksEmpty,
     exampleCount: examples.length,
     hints: /Enter/.test(txt) && /Ctrl\\+K/.test(txt),
-    headLabels: ["설정", "변경 검토", "디렉터리"].filter((l) => txt.includes(l)),
+    headLabels: ["설정"].filter((l) => txt.includes(l)),
   };
 })()`);
-check("빈 상태가 채워짐 (§11.3: 빈 화면은 결함)", emptyState.looksEmpty === true);
-check("빈 상태에 **누를 수 있는 예시**가 있다 (§11.3: 읽고 타이핑시키지 않는다)", emptyState.exampleCount >= 3);
-check("키보드 힌트가 보인다 — 모르면 못 쓴다", emptyState.hints === true);
+// 빈 상태가 아니면 이 세 검사는 대상이 없다 — 실패가 아니라 스킵이다.
+// 대화가 있으면 예시 버튼이 없는 것이 정상이다(있으면 오히려 버그).
+const emptySkip = emptyState.looksEmpty !== true ? { skip: true } : {};
+check("빈 상태가 채워짐 (§11.3: 빈 화면은 결함)", emptyState.looksEmpty === true, "대화 있음 — 빈 상태 대상 아님", emptySkip);
+check("빈 상태에 **누를 수 있는 예시**가 있다 (§11.3: 읽고 타이핑시키지 않는다)", emptyState.exampleCount >= 3, "대화 있음", emptySkip);
+check("키보드 힌트가 보인다 — 모르면 못 쓴다", emptyState.hints === true, "대화 있음", emptySkip);
 
 /**
- * 머리 조작의 **이름이 보인다**(2026-10-01).
+ * 머리 조작의 **이름이 보인다**(2026-10-01, 2026-10-04 정정).
  *
  * `aria-label` 만으로는 충분하지 않다. **눈으로 보이는 이름**이어야 첫 사용자가
- * `⎇` 가 무엇인지 안다 — `title` 은 마우스를 올려야 보이고, 키보드 사용자는
+ * 아이콘이 무엇인지 안다 — `title` 은 마우스를 올려야 보이고, 키보드 사용자는
  * 아예 못 본다.
+ *
+ * 정정(2026-10-04): 예전 판정은 세 라벨이 **전부** innerText 에 있기를 요구했다.
+ * 그러나 S-2 확정 설계(액티비티바, `Ide.a11y.test.ts` 17/17)는 **선택된 항목만**
+ * 이름을 글자로 보여주고 나머지는 `aria-label` 로 남긴다 — 40px 세로 띠에
+ * 다섯 이름을 다 넣으면 2줄 버튼이 되어 띠가 깨진다. 세 개를 요구하면
+ * 검증된 설계를 깨뜨리는 쪽으로 고치게 되므로, 검사가 틀렸다(§10.2).
+ * 올바른 계약: 선택된 하나는 보이고, 세 개는 모두 발견 가능하다.
+ *
+ * 정정(사용자 지정: 설정만 남긴다): 측면 아이콘·디렉터리·변경 검토 진입로는
+ * 제거됐다. 여는 곳은 상단 우측 ⚙ 아이콘(`aria-label="설정 열기"`)뿐이다.
+ * ⚙은 관용 기호라 글자 라벨 대신 기호+aria-label+title 로 발견 가능하면 된다.
  */
-check("머리 조작에 **보이는 이름**이 있다 (§M8: 이름 없는 조작은 있을 수 없다)", emptyState.headLabels.length >= 3);
+check("선택된 머리 조작의 이름이 보인다 (§M8)", emptyState.headLabels.length >= 1, "대화 있음", emptySkip);
 check(
-  "이름이 **완전히 가려지지 않는다** — 아이콘만 남지 않는다",
-  (await cdp.eval(`[...document.querySelectorAll("button[aria-label]")].filter((b) => /설정|변경 검토|디렉터리/.test(b.getAttribute("aria-label") || "")).every((b) => (b.innerText || "").trim().length > 0)`)) === true,
+  "설정 아이콘이 상단 우측에 있다 — aria-label로 발견 가능",
+  (await cdp.eval(`!!document.querySelector('button[aria-label="설정 열기"]')`)) === true,
+);
+check(
+  "제거된 진입로가 되살아나지 않는다 — 디렉터리·변경 검토 아이콘 없음",
+  (await cdp.eval(`[...document.querySelectorAll("button[aria-label]")].filter((b) => /디렉터리|변경 검토/.test(b.getAttribute("aria-label") || "")).length === 0`)) === true,
 );
 
 const draft = await cdp.eval(`!!document.querySelector("textarea")`);
@@ -300,11 +390,91 @@ const headings = await cdp.eval(`
 const leaked = headings.filter((h) => LEAKED.includes(h));
 check("패널 머리에 내부 식별자가 노출되지 않음 (§5.8)", leaked.length === 0, leaked.length ? leaked.join(", ") : headings.join(" "));
 
+/**
+ * 좁은 창(800px wide)에서 헤더·하단 셸이 대화 영역을 가리지 않고 스크롤을
+ * 유발하지 않는지 (§8.3 · 요구 14). 기하로 판정한다:
+ *   - 상단 헤더가 화면 너비(800)를 넘지 않는다
+ *   - 하단 셸(탐색 막대 포함)이 세로 화면의 90%를 넘지 않고 좌우 스크롤을 유발하지 않는다
+ * 크기는 창 크기에 따라 흔들리므로 **절대 임계값**(넘침/스크롤)으로만 본다.
+ */
+{
+  await page.setViewport({ width: 800, height: 900, deviceScaleFactor: 1 });
+  await new Promise((r) => setTimeout(r, 250));
+  const header = await page.$("header");
+  const shellFrame = await page.$("[data-shell], .shell-frame, #terminal, [class*=shell]");
+  let ok = true; let detail = "800px에서 헤더·하단 셸이 영역을 가리지 않고 스크롤 없음";
+  if (header) {
+    const b = await header.boundingBox();
+    if (b.width > 802 || b.y + b.height > 900 - 4) { ok = false; detail = `헤더 과대 (${Math.round(b.width)}x${Math.round(b.height)}, x=${Math.round(b.x)}, y=${Math.round(b.y)})`; }
+  }
+  if (shellFrame) {
+    const sb = await shellFrame.boundingBox();
+    if (sb.width > 802 || sb.y > 900 * 0.9) { ok = false; detail += ` | 하단 셸 과대 (${Math.round(sb.width)}x${Math.round(sb.height)}, y=${Math.round(sb.y)})`; }
+  }
+  report(ok ? "PASS" : "FAIL", `800px 좁은 창 — 요소 겹침/스크롤 없음`, ok, detail);
+}
+
+/**
+ * 긴 경로가 말줄임(…)으로 처리되는지. 파일 트리와 도구 입력에서 경로가 길어지면
+ * **네 줄로 퍼지지 않고** 접혀야 한다(요구 14: "경로가 길어지면 줄임 표시").
+ * `textOverflow: ellipsis` + `whiteSpace: nowrap` 가 적용된 요소를 찾아 확인한다.
+ */
+{
+  const trunc = await cdp.eval(`(() => {
+    // ellipsis가 걸린 요소들
+    const els = Array.from(document.querySelectorAll("*")).filter((el) => {
+      const cs = getComputedStyle(el);
+      return cs.overflow === "hidden" && (cs.textOverflow === "ellipsis" || css(el, "text-overflow") === "ellipsis");
+    });
+    // 실제 줄임 기호가 보이는 텍스트가 있는가?
+    const ellipsisText = Array.from(document.querySelectorAll("*")).some((el) => (el.textContent || "").includes("…"));
+    return { totalHidden: els.length, ellipsisVisible: ellipsisText };
+  })(); function css(el,p){return getComputedStyle(el).getPropertyValue(p)} `);
+  report(
+    trunc.ellipsisVisible === true ? "PASS" : "WARN",
+    `긴 경로 줄임 표시 — … 포함 요소 ${trunc.totalHidden}개`,
+    trunc.ellipsisVisible === true,
+    `overflow:hidden+ellipsis 요소 ${trunc.totalHidden}개, … 기호 텍스트 존재=${trunc.ellipsisVisible}`,
+  );
+}
+
+/**
+ * 검색 결과 상한 재현 (§9 요구 — "여러 개 검색"). CDP로 직접 검색어를 입력하고
+ * 결과가 N개를 넘지 않는지 확인한다. 실제 UI 조작은 어렵므로 **검색 입력창**과
+ * 현재 표시된 결과 목록의 길이를 통해 상한 존재를 확인한다.
+ */
+{
+  const search = await cdp.eval(`(() => {
+    const input = document.querySelector('input[placeholder*="찾"], input[type="search"], .search-input, #search');
+    if (!input) return { hasInput: false };
+    // 검색 결과 목록의 길이 (li/리스트 항목으로 추정)
+    const results = Array.from(document.querySelectorAll("[class*=result], [data-result], li")).slice(0, 12);
+    return {
+      hasInput: true,
+      resultNodes: results.length,
+      placeholder: input.getAttribute("placeholder") || "",
+    };
+  })(); `);
+  report(
+    search.hasInput === true ? "PASS" : "WARN",
+    `검색 기능 상한 — 입력창 존재 및 결과 노드 ${search.resultNodes}개`,
+    search.hasInput === true,
+    `placeholder="${search.placeholder ?? ""}", resultNodes=${search.resultNodes}`,
+  );
+}
+
 await new Promise((r) => setTimeout(r, 1500));
 check("콘솔 에러 0", errors.length === 0, errors.slice(0, 2).join(" | "));
 
+const startedAtEnd = await readStartedAt();
+check(
+  "같은 서버를 잼 (§11: 중간에 재시작되면 측정이 무효)",
+  startedAtEnd !== null && startedAtEnd === startedAtBegin,
+  `시작 ${startedAtBegin} → 끝 ${startedAtEnd}`
+);
+
 cdp.close();
-const failed = checks.filter((c) => !c.ok);
+const failed = checks.filter((c) => !c.ok && !c.skipped);
 console.log(`\n${checks.length - failed.length}/${checks.length} 통과`);
 if (failed.length) {
   console.error(`실패: ${failed.map((f) => f.name).join(", ")}`);

@@ -22,10 +22,13 @@ import type { ApiClient } from "../api.js";
 import { toolCommand, toolPath, type AgentBlock } from "../../session/blocks.js";
 import { FilePreview } from "./FilePreview.js";
 import { CodeBlock } from "./CodeBlock.js";
+import { BlockHeader } from "./BlockHeader.js";
+import { languageFor } from "../editor/highlight.js";
+import { COLOR, FONT, RADIUS } from "../theme/tokens.js";
 
-const DIM = "#6e7681";
-const FG = "#c9d1d9";
-const BORDER = "#30363d";
+const DIM = COLOR.DIM_SUBTLE;
+const FG = COLOR.FG;
+const BORDER = COLOR.BORDER;
 
 /** 도구 이름 → 사람이 읽는 말. 내부 식별자를 화면에 내놓지 않는다(§5.8). */
 const TOOL_LABEL: Record<string, string> = {
@@ -66,6 +69,11 @@ export function ToolBlock({
   client?: ApiClient;
   /** `view` 블록이 그릴 내용. 설정 패널처럼 **무거운 것**은 여기서 주입한다 —
    *  이 컴포넌트가 그 화면을 아는 것이 아니라, **셸이 그릴 대상을 아는** 편이 낫다. */
+  /** `view` 블록이 그릴 것들. **셸이 대상을 알고** 있다.
+   *
+   * **선택 필드가 아니다** — 이 컴포넌트가 클라이언트를 직접 만들어 부르지 않는다.
+   * 그렇게 하면 "무엇을 그릴지" 와 "어떻게 부를지" 를 함께 알게 되고, 요구가 바뀔 때
+   * 두 곳이 갈라진다(2026-10-01 `ModelPanel` deps 무한요청 사고가 같은 종류였다). */
   extra?: { settings?: React.ReactNode };
 }) {
   // ── 사람이 연 블록 (2026-10-01) ────────────────────────────────────────────
@@ -93,9 +101,19 @@ export function ToolBlock({
         </div>
       );
     }
+    // ── 디렉터리 · 변경 검토 진입로는 제거됨 (사용자 지정: 설정만 남긴다) ──
+    // 저장된 옛 대화에 남은 블록은 정직하게 말한다. "아직 연결하지 않았습니다"는
+    // 거짓말이다 — 연결됐었는데 제거된 것이다.
+    if (block.view?.what === "dirs" || block.view?.what === "diff") {
+      return (
+        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "6px 8px", fontSize: 11, color: DIM }}>
+          {block.view.what === "diff" ? "변경 검토" : "디렉터리"} — 이 화면은 제거되었습니다.
+        </div>
+      );
+    }
     return (
       <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "6px 8px", fontSize: 11, color: DIM }}>
-        {block.view?.what === "diff" ? "변경 검토" : "디렉터리"} — 이 화면은 아직 연결하지 않았습니다.
+        이 화면을 열 수 없습니다 — {block.view?.what ?? "알 수 없는 보기"}.
       </div>
     );
   }
@@ -115,10 +133,17 @@ export function ToolBlock({
   if (isFileTool(name, args) && path) return <FileBlock label={labelFor(name)} path={path} done={done} client={client} />;
 
   // **판별할 수 없는 도구** — 한 줄로 말한다. 추측해서 에디터를 열지 않는다.
+  // 헤더 계약(BlockHeader): 도형+이름+대상+상태+복사. 색만으로 알리지 않는다.
   return (
-    <div style={{ color: done ? "#3fb950" : DIM, fontSize: 11 }}>
-      {done ? "✓" : "▸"} {labelFor(name)}
-      {block.text ? <span style={{ color: DIM }}> — {block.text.slice(0, 120)}</span> : null}
+    <div>
+      <BlockHeader
+        kind={isShell(name, args) ? "shell" : isFileTool(name, args) ? "file" : /search/i.test(name) ? "search" : "tool"}
+        target={labelFor(name)}
+        status={done ? "완료" : "실행 중"}
+        done={done}
+        copyText={block.text || undefined}
+      />
+      {block.text ? <div style={{ color: DIM, fontSize: FONT.AUX }}>{block.text.slice(0, 120)}</div> : null}
     </div>
   );
 }
@@ -149,14 +174,14 @@ function FileBlock({ label, path, done, client }: { label: string; path: string;
   }, [open, content, client, path]);
 
   return (
-    <div style={{ border: "1px solid #30363d", borderRadius: 6, background: "#0d1117" }}>
+    <div style={{ border: `1px solid ${BORDER}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1 }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         style={{
           display: "flex", gap: 6, width: "100%", alignItems: "center",
-          background: "none", border: 0, color: done ? "#3fb950" : DIM,
+          background: "none", border: 0, color: done ? COLOR.GOOD : DIM,
           cursor: "pointer", font: "inherit", fontSize: 11, padding: "3px 8px", textAlign: "left",
         }}
       >
@@ -165,8 +190,8 @@ function FileBlock({ label, path, done, client }: { label: string; path: string;
         <code style={{ color: FG, fontSize: 10 }}>{path}</code>
       </button>
       {open && (
-        <div style={{ borderTop: "1px solid #30363d" }}>
-          {error && <div style={{ padding: "6px 8px", color: "#f85149", fontSize: 11 }}>읽지 못했습니다: {error}</div>}
+        <div style={{ borderTop: `1px solid ${BORDER}` }}>
+          {error && <div style={{ padding: "6px 8px", color: COLOR.ERROR, fontSize: FONT.AUX }}>읽지 못했습니다: {error}</div>}
           {!error && content === null && <div style={{ padding: "6px 8px", color: DIM, fontSize: 11 }}>읽는 중…</div>}
           {content !== null && (
             <pre
@@ -210,23 +235,21 @@ function ShellBlock({ command, done, text, client }: { command: string; done: bo
   }, [done, client, command]);
 
   return (
-    <div style={{ border: "1px solid #30363d", borderRadius: 6, background: "#0d1117", padding: "4px 8px" }}>
-      <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11 }}>
-        <span style={{ color: done ? "#3fb950" : "#d29922" }}>{done ? "✓" : "▸"}</span>
-        <span style={{ color: FG, fontSize: 10 }}>셸 실행</span>
-        <code style={{ color: DIM, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{command || "(명령 없음)"}</code>
-        {!done && <span style={{ color: "#d29922", marginLeft: "auto" }}>실행 중…</span>}
-      </div>
+    <div style={{ border: `1px solid ${BORDER}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1, padding: "4px 8px" }}>
+      <BlockHeader
+        kind="shell"
+        target={command || "(명령 없음)"}
+        status={done ? "완료" : "실행 중…"}
+        done={done}
+        copyText={output || command || undefined}
+      />
       {text && <div style={{ color: DIM, fontSize: 10, marginTop: "2px" }}>{text.slice(0, 200)}</div>}
       {output && (
-        // **명령줄**은 셸 문법이라 하이라이트하고, **출력**은 그대로 둔다.
-        //
-        // `ls` 의 출력은 셸 문법이 **아니다** — 색을 칠하면 지어내는 것이 되고, 사용자는
-        // 화면을 믿지 않게 된다. 요구는 "IDE 처럼" 이지만, **틀린 색**은 IDE 보다 나쁘다.
+        // 명령줄은 헤더(BlockHeader)에 한 번만 나온다 — CodeBlock 에 또 넣으면
+        // 같은 명령이 두 번 보인다(실측). **출력은 하이라이트하지 않는다** —
+        // `ls` 의 결과는 셸 문법이 아니다. 색을 칠하면 지어내는 것이 된다.
         <CodeBlock
-          // **출력은 하이라이트하지 않는다** — `ls` 의 결과는 셸 문법이 아니다.
           lang={null}
-          command={command || undefined}
           text={output}
           collapsible
           summary={`셸 출력 ${output.split("\n").length}줄`}

@@ -18,6 +18,8 @@ import type { ApiClient } from "../api.js";
 import { ToolBlock } from "./ToolBlock.js";
 import { Markdown } from "./Markdown.js";
 import { Ide } from "./Ide.js";
+import { useI18n } from "../i18n/index.js";
+import type { Toast } from "./notify.js";
 
 export const THINK_STYLES: { id: ThinkStyle; label: string; hint: string }[] = [
   { id: "dots", label: "파동 점", hint: "기본. 생각 중임을 짧게 알립니다" },
@@ -106,8 +108,117 @@ function FirstRun({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
-function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle }) {
-  const anim = animationFor(style);
+/**
+ * 알림 센터 — 우하단 토스트의 대화창 미러 (별도 UI 요소).
+ * 토스트는 TTL 후 사라지지만 목록은 남는다. 오류는 빨강, 정보는 회색.
+ * 닫아도 토스트 타이머와 무관 — 이미 본 것은 다시 세지 않는다.
+ */
+function NoticeBell({ notices, onDismiss }: { notices?: Toast[]; onDismiss?: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const items = notices ?? [];
+  if (items.length === 0) return null;
+  const errors = items.filter((n) => n.kind === "error").length;
+  return (
+    <span style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label={`알림 ${items.length}개 보기`}
+        title="알림 센터 (우하단 알림과 같은 내용)"
+        style={{ background: "none", border: 0, color: errors > 0 ? "#f85149" : "#8b949e", cursor: "pointer", font: "inherit", fontSize: 11 }}
+      >
+        🔔 {items.length}
+      </button>
+      {open && (
+        <div style={{ position: "absolute", right: 0, top: "100%", zIndex: 30, width: 300, maxHeight: 260, overflow: "auto", background: "#161b22", border: "1px solid #30363d", borderRadius: 6, padding: 6, display: "grid", gap: 6 }}>
+          {items.map((n) => (
+            <div key={n.id} style={{ borderLeft: `2px solid ${n.kind === "error" ? "#f85149" : n.kind === "warn" ? "#d29922" : "#58a6ff"}`, paddingLeft: 6 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                <span style={{ fontSize: 11, color: "#c9d1d9", fontWeight: 700, flex: 1 }}>{n.title}</span>
+                {onDismiss && (
+                  <button type="button" aria-label={`${n.title} 닫기`} onClick={() => onDismiss(n.id)} style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit", fontSize: 10 }}>
+                    ✕
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: "#8b949e" }}>{n.body}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+/**
+ * 압축 진행·결과 — 시작과 끝을 화면이 말한다 (사용자 요구).
+ * 압축 중에는 "멈춘 것처럼" 보이면 안 되고, 끝나면 "무엇이 잊혀지고
+ * 무엇이 남았는지" 를 보여준다. 요약 본문까지 접어서 둔다.
+ */
+export interface CompactionView {
+  phase: "running" | "complete" | "failed";
+  droppedCount?: number;
+  droppedTokens?: number;
+  keptCount?: number;
+  keptTokens?: number;
+  summary?: string;
+  droppedPreview?: string[];
+}
+
+function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: () => void }) {
+  const [open, setOpen] = useState(false);
+  if (info.phase === "running") {
+    return (
+      <div role="status" style={{ display: "flex", gap: 6, alignItems: "center", padding: "3px 8px", fontSize: 11, color: "#d29922", borderBottom: "1px solid #30363d" }}>
+        <span aria-hidden="true">◌</span>
+        <span>압축 중… 대화 기록을 정리합니다 (체크포인트는 저장됨)</span>
+      </div>
+    );
+  }
+  if (info.phase === "failed") {
+    return (
+      <div role="alert" style={{ display: "flex", gap: 6, alignItems: "center", padding: "3px 8px", fontSize: 11, color: "#f85149", borderBottom: "1px solid #30363d" }}>
+        <span aria-hidden="true">✗</span>
+        <span style={{ flex: 1 }}>압축 실패 — 체크포인트는 저장됐고 현재 대화로 계속합니다</span>
+        <button type="button" onClick={onClose} aria-label="압축 알림 닫기" style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit" }}>✕</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ borderBottom: "1px solid #30363d", fontSize: 11 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "3px 8px" }}>
+        <span aria-hidden="true" style={{ color: "#3fb950" }}>✓</span>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          style={{ background: "none", border: 0, color: "#c9d1d9", cursor: "pointer", font: "inherit", textAlign: "left", flex: 1 }}
+        >
+          압축 완료 — {info.droppedCount ?? "?"}개 메시지({(info.droppedTokens ?? 0).toLocaleString("ko-KR")} 토큰)를 요약으로, {info.keptCount ?? "?"}개 유지
+        </button>
+        <button type="button" onClick={onClose} aria-label="압축 알림 닫기" style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit" }}>✕</button>
+      </div>
+      {open && (
+        <div style={{ padding: "0 8px 6px 22px", display: "grid", gap: 4 }}>
+          {info.summary && (
+            <div style={{ color: "#c9d1d9", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{info.summary}</div>
+          )}
+          {info.droppedPreview && info.droppedPreview.length > 0 && (
+            <div style={{ color: "#6e7681", fontSize: 10 }}>
+              <div>잊혀진 내용:</div>
+              {info.droppedPreview.map((p, i) => (
+                <div key={i}>· {p}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle }) {  const anim = animationFor(style);
   if (!state.enabled) return null;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }}>
@@ -116,18 +227,20 @@ function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle
           {Array.from({ length: anim.dots }).map((_, i) => (
             <span
               key={i}
+              className="think-dot"
               style={{
                 width: 5,
                 height: 5,
                 borderRadius: "50%",
                 background: "#d29922",
-                animation: `pulse ${anim.durationMs}ms ease-in-out ${i * 160}ms infinite`,
+                animationDuration: `${anim.durationMs}ms`,
+                animationDelay: `${i * 160}ms`,
               }}
             />
           ))}
         </span>
       )}
-      <span>사고 중 · {state.usedTokens.toLocaleString("ko-KR")} 토큰</span>
+      <span>Thinking · {state.usedTokens.toLocaleString("ko-KR")} 토큰</span>
     </div>
   );
 }
@@ -152,8 +265,6 @@ export function AgentPanel({
   blocks,
   running,
   think,
-  onStyle,
-  onThinking,
   onCancel,
   client,
   onExample,
@@ -163,13 +274,18 @@ export function AgentPanel({
   /** `view` 블록이 그릴 내용. 설정 패널처럼 **무거운 것**은 셸이 주입한다 —
    *  이 컴포넌트가 그 화면을 아는 것이 아니라 **무엇을 그릴지 알기만 하면** 되므로. */
   viewExtra,
-  onOpenView,
+  // 설정은 상단 우측 ⚙ 아이콘(셸 헤더)으로 연다 — 측면 아이콘은 두지 않는다.
+  // 열 곳이 하나뿐이므로 "어느 쪽이 진짜인가" 가 생기지 않는다.
+  // 승인 게이트처럼대화 위에 떠야 하는 것(§8.2) — 별도 패널이 아니라 대화 본문 위에서만 그린다.
+  overlay,
+  notices,
+  onDismissNotice,
+  compaction,
+  onDismissCompaction,
 }: {
   blocks: AgentBlock[];
   running: boolean;
   think: ThinkState;
-  onStyle: (s: ThinkStyle) => void;
-  onThinking: (on: boolean) => void;
   onCancel: () => void;
   /** 빈 상태의 예시를 **입력창에 채운다**(보내지는 않는다 — 사용자가 고쳐서 보낸다). */
   onExample: (text: string) => void;
@@ -185,12 +301,23 @@ export function AgentPanel({
   context?: { usedTokens: number; totalTokens: number } | null;
   /** 도구 블록이 에디터·셸을 **그 자리에서** 그리기 위해 필요. */
   client?: ApiClient;
-  /** `view` 블록이 그릴 설정 패널 등. **셸이 대상을 알고** 있다. */
+  /** `view` 블록이 그릴 설정. **셸이 대상을 알고** 있다. 설정만 남긴다. */
   viewExtra?: { settings?: React.ReactNode };
-  /** 머리 아이콘 — 선택한 것을 **대화 안에 블록으로** 연다 (2026-10-01). */
-  onOpenView: (what: "settings" | "diff" | "file" | "dirs", path?: string) => void;
+  // 승인 게이트처럼대화 위에 떠야 하는 것 (§8.2). 별도 패널이 아니라 대화 본문 위에서만 그린다.
+  // Ide 로 그대로 넘긴다 — 흐름을 가리되 스크롤로 이어지게.
+  overlay?: React.ReactNode;
+  /**
+   * 우하단 토스트의 대화창 미러 — 별도 UI 요소(사용자 요구).
+   * 토스트는 TTL 후 사라지지만, 오류는 여기서 다시 볼 수 있어야 한다.
+   * 읽기만 받는다(WS·타이머는 셸이 들고 있다).
+   */
+  notices?: Toast[];
+  onDismissNotice?: (id: string) => void;
+  /** 압축 진행·결과 — 별도 UI 요소. 읽기만 받는다. */
+  compaction?: CompactionView | null;
+  onDismissCompaction?: () => void;
 }) {
-  const [style, setStyle] = useState<ThinkStyle>(think.style);
+  const style: ThinkStyle = think.style;
   const bottom = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
   /** **맨 아래에 붙어 있는가.** 이 값이 오토 스크롤의 조건이다. */
@@ -214,29 +341,28 @@ export function AgentPanel({
   };
 
   /**
-   * **지금 열려 있는 뷰** — 머리 아이콘이 자기를 밝히는 근거(2026-10-01).
-   *
-   * 왜 블록에서 읽나: `openView` 가 **마지막 블록에 `view` 를 남기는 것**이 진본이다.
-   * 화면이 별도 상태를 들면 **어긋난다** — 열었는데 아무것도 안 밝거나, 안 열었는데
-   * 밝거나. "지금 어디에 있나" 를 모르면 사용자는 세 아이콘 중 무엇이 눌린 상태인지
-   * 몰라 같은 것을 또 눌러 화면을 쌓는다(실측: 같은 설정이 두 번 쌓임은 `openView` 가
-   * 막기 전 실제 있었다).
-   *
-   * **뒤에서부터** 찾는다 — 열림은 항상 **맨 뒤**에 있으므로 앞에서 찾으면 닫힌 뷰를
-   * "열려 있다" 고 착각한다.
+   * 측면 액티비티바는 두지 않는다 (사용자 지정: 설정은 상단 우측 ⚙ 아이콘으로 연다).
+   * `openWhat` 같은 별도 선택 상태도 들지 않는다 — "지금 어디에 있나" 를 모르면
+   * 같은 것을 또 누르게 된다는 문제는, 열 곳이 하나뿐이면 생기지 않는다.
+   * 설정 블록 자체는 대화 안에 열린다(`viewExtra.settings`).
    */
-  const openWhat = useMemo(() => {
-    for (let i = blocks.length - 1; i >= 0; i--) {
-      const v = blocks[i]!.view;
-      if (v) return v.what;
-    }
-    return undefined;
-  }, [blocks]);
 
   useEffect(() => {
     // **붙어 있을 때만** 따라간다. 안 그러면 읽던 곳을 빼앗긴다.
     if (pinned) scrollToBottom(scroller.current);
   }, [blocks.length, blocks[blocks.length - 1]?.text.length, pinned, turns.length]);
+
+  // 새 턴이 시작되면 마지막 지점으로 먼저 간다 (사용자 요구).
+  // 읽던 중이었어도 새 출력이 시작됐다는 사실이 더 중요하다 — 배지는 턴 중간
+  // 스크롤업에만 쓴다.
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (running && !wasRunning.current) {
+      setPinned(true);
+      scrollToBottom(scroller.current);
+    }
+    wasRunning.current = running;
+  }, [running]);
 
   const warnings = useMemo(() => {
     const out: string[] = [];
@@ -244,20 +370,18 @@ export function AgentPanel({
     if (think.reason) out.push(think.reason);
     return out;
   }, [think.needsWarning, think.reason]);
+  /** 패널 제목은 카탈로그에서 — 하드코딩하면 M9 누락이 조용히 남는다. */
+  const t = useI18n();
+
+/**
+ * 뷰 라벨은 한 곳에만 둔다. 탭에 직접 적으면 뷰가 늘 때마다 여러 곳을 고쳐야 하고
+ * 하나가 반드시 어긋난다. 새 view.what을 추가하면 여기 키도 추가한다.
+ */
 
   return (
     <Ide
-      title="대화"
-      activity={[
-        { id: "settings", glyph: "\u2699", label: "설정", active: openWhat === "settings", onClick: () => onOpenView("settings") },
-        { id: "diff", glyph: "\u2387", label: "변경 검토", active: openWhat === "diff", onClick: () => onOpenView("diff") },
-        { id: "dirs", glyph: "\u25A4", label: "디렉터리", active: openWhat === "dirs", onClick: () => onOpenView("dirs") },
-      ]}
-      tabs={
-        openWhat
-          ? [{ id: openWhat, label: openWhat === "settings" ? "설정" : openWhat === "diff" ? "변경 검토" : "디렉터리", active: true, onClick: () => {} }]
-          : []
-      }
+      overlay={overlay}
+      activity={[]}
       status={[
         { text: wsState === "open" ? "\u25CF 실시간" : wsState === "connecting" ? "\u25CB 연결 중" : "\u25B2 끊김", tone: wsState === "open" ? "good" : wsState === "connecting" ? "warn" : "error", title: "WebSocket 연결 상태" },
         // **모르면 모른다고 쓴다** — 0 으로 두지 않는다. 0 은 "안 쓴다" 로 읽힌다.
@@ -285,37 +409,24 @@ export function AgentPanel({
             모르고, 키보드 사용자는 아예 못 본다. */}
 
         <span style={{ width: 1, height: 14, background: "#30363d" }} />
-        <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "#6e7681" }}>
-          <input type="checkbox" checked={think.enabled} onChange={(e) => onThinking(e.target.checked)} />
-          사고 표시
-        </label>
-        <select
-          value={style}
-          onChange={(e) => {
-            const s = e.target.value as ThinkStyle;
-            setStyle(s);
-            onStyle(s);
-          }}
-          style={{ background: "#21262d", color: "#c9d1d9", border: "1px solid #30363d", borderRadius: 4, font: "inherit", fontSize: 10 }}
-        >
-          {THINK_STYLES.map((s) => (
-            <option key={s.id} value={s.id} title={s.hint}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+        <span style={{ fontSize: 10, color: "#8b949e" }}>Thinking</span>
         <span style={{ flex: 1 }} />
         {running && (
           <button type="button" onClick={onCancel} style={{ background: "#21262d", color: "#f85149", border: "1px solid #30363d", borderRadius: 4, font: "inherit", fontSize: 10, padding: "1px 6px", cursor: "pointer" }}>
             취소
           </button>
         )}
+        <NoticeBell notices={notices} onDismiss={onDismissNotice} />
       </div>
 
       {warnings.length > 0 && (
         <div style={{ padding: "3px 6px", color: "#d29922", fontSize: 10, borderBottom: "1px solid #30363d" }}>
           {warnings.join(" ")}
         </div>
+      )}
+
+      {compaction && onDismissCompaction && (
+        <CompactionBanner info={compaction} onClose={onDismissCompaction} />
       )}
 
       {/* ── 대화 묶음 (2026-10-01) ─────────────────────────────────────────────
@@ -349,14 +460,16 @@ export function AgentPanel({
             - 접어도 **마지막 묶음은 항상 펼친다** — 진행 중인데 접으면 안 된다는
               기존 규칙과 같다. 여기서도 어기지 않는다.
 
-            묶음이 적으면 **숨긴다** — 요약줄이 벽보다 더 거슬리면 그게 더 나쁘다. */}
-        {turns.length > COLLAPSE_AT && (
+            2026-10-04 변경: 컨트롤(전체 접기/펼치기)은 **항상 보인다**(VS 처럼).
+            묶음이 적으면 요약줄을 슬림하게만 둔다 — 컨트롤이 있다가 없어지면
+            사용자는 기능을 잃었다고 읽는다. 숨김과 비활성은 다르다. */}
+        {turns.length > 0 && (
           <div
             style={{
               display: "flex",
               alignItems: "center",
               gap: 8,
-              padding: "3px 6px",
+              padding: turns.length > COLLAPSE_AT ? "3px 6px" : "2px 6px",
               marginBottom: 6,
               border: "1px solid #21262d",
               borderRadius: 6,
@@ -418,7 +531,8 @@ export function AgentPanel({
               className="elev-1"
               style={{
                 marginBottom: 8,
-                border: "1px solid #21262d",
+                // 마지막(최신) 묶음은 하이라이트 — 어디가 최신인지 색+말로 말한다.
+                border: last ? "1px solid #1f6feb" : "1px solid #21262d",
                 borderRadius: 6,
                 overflow: "hidden",
                 background: "#0d1117",
@@ -454,6 +568,11 @@ export function AgentPanel({
                   <span style={{ flex: 1, color: "#6e7681", fontSize: 10 }}>이전 대화</span>
                 )}
                 <span style={{ color: "#6e7681", fontSize: 10, whiteSpace: "nowrap" }}>{turn.summary}</span>
+                {last && (
+                  <span style={{ color: "#79c0ff", fontSize: 10, whiteSpace: "nowrap" }} title="가장 최근 출력">
+                    {ti === turns.length - 1 && running ? "● 최신" : "최신"}
+                  </span>
+                )}
                 <span style={{ color: "#484f58", fontSize: 10, whiteSpace: "nowrap" }}>
                   {new Date(turn.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
                 </span>
@@ -482,17 +601,22 @@ export function AgentPanel({
           );
         })}
 
-        {running && <ThinkIndicator state={think} style={style} />}
+        {running && think.enabled && <ThinkIndicator state={think} style={style} />}
+        {running && !think.enabled && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }} title="서버가 예산 초과로 Thinking 을 껐습니다. 다음 턴에 다시 켜집니다.">
+            <span>Thinking 꺼짐 (예산 초과)</span>
+          </div>
+        )}
 
         {/* **읽고 있는데 새 내용이 온다** — 조용히 끌지 않는다. */}
         {!pinned && (
           <button
             type="button"
-            onClick={() => scrollToBottom(scroller.current)}
+            onClick={() => scrollToBottom(scroller.current, true)}
             style={{
               position: "sticky", bottom: 4, left: 0, margin: "0 auto", display: "block",
               background: "#21262d", color: "#c9d1d9", border: "1px solid #30363d",
-              borderRadius: 12, padding: "2px 10px", cursor: "pointer", font: "inherit", fontSize: 10,
+              borderRadius: 999, padding: "2px 10px", cursor: "pointer", font: "inherit", fontSize: 10,
             }}
           >
             ↓ 아래에 새 내용
@@ -517,8 +641,11 @@ function BlockBody({
 }) {
   if (b.kind === "user") {
     return (
-      <div style={{ color: "#c9d1d9", fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-        {b.text}
+      <div style={{ borderLeft: "2px solid #79c0ff", paddingLeft: 6 }}>
+        <div style={{ fontSize: 10, color: "#79c0ff", marginBottom: 1 }}>나</div>
+        <div style={{ color: "#c9d1d9", fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {b.text}
+        </div>
       </div>
     );
   }
@@ -526,7 +653,7 @@ function BlockBody({
     return (
       <details open style={{ borderLeft: "2px solid #d29922", paddingLeft: 6 }}>
         <summary style={{ cursor: "pointer", fontSize: 10, color: "#d29922" }}>
-          사고 {b.text.length.toLocaleString("ko-KR")}자
+          Thinking {b.text.length.toLocaleString("ko-KR")}자
         </summary>
         <pre style={{ margin: "3px 0 0", whiteSpace: "pre-wrap", font: "11px/1.5 ui-monospace, monospace", color: "#8b949e" }}>
           {b.text}
@@ -559,8 +686,11 @@ function nearBottom(el: HTMLElement | null): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 }
 
-function scrollToBottom(el: HTMLElement | null): void {
-  el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+function scrollToBottom(el: HTMLElement | null, smooth = false): void {
+  // 스트리밍 중에는 즉시 점프해야 한다. `smooth` 는 목표가 계속 움직이면
+  // 애니메이션이 영원히 뒤처져 "완료된 뒤에야" 도착한다(실측).
+  // 사용자가 배지를 눌렀을 때만 부드럽게 간다.
+  el?.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
 }
 
 /** 델타 한 개로 think 상태를 갱신한다(예산 초과 시 강제 전환은 여기서 일어난다). */
