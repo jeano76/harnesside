@@ -50,6 +50,11 @@
       :focus:not(:focus-visible) {
         outline: none !important;
       }
+      /* 프롬프트 입력창은 포커스 링을 그리지 않는다(사용자 지정, 2026-10-04: 입력창이 파랗게 바뀌어 어지럽다).
+         캐럿이 보이므로 어디에 포커스인지는 알 수 있고, 다른 요소의 링은 그대로다. */
+      .no-focus-ring:focus-visible {
+        outline: none !important;
+      }
       /* 스크린 리더 전용 텍스트 — 화면에는 보이지 않는다(레이아웃도 차지하지 않는다). */
       .sr-only {
         position: absolute;

@@ -1224,7 +1224,7 @@ export default function App() {
         />
         <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: 0, borderTop: `2px solid ${toCli ? (cliTarget?.yolo ? "#f85149" : "#a371f7") : BORDER}`, borderRadius: 0, margin: 0, background: "#161b22" }}>
           <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-          <textarea ref={draftRef} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => {
+          <textarea ref={draftRef} className="no-focus-ring" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             if (slashOpen) {
               if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashItems.length); return; }
