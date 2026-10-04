@@ -95,6 +95,9 @@ export interface BootStep {
   detail: string;
   pending?: boolean;
   tookSeconds: number;
+  /** 실패했을 때 왜(원본 로그 한 줄)·다음 행동 — 형식은 `shared/bootFailure.ts`(Q-5). */
+  why?: string | null;
+  next?: string | null;
 }
 
 export interface GpuInfo {

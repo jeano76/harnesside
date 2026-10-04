@@ -30,6 +30,7 @@ import { decideGpuMode, type GpuDecision, type GpuMode } from "../setup/gpuPolic
 import { detectRunningServer } from "../backend/detect.js";
 import { chooseModel, type ModelChoice } from "./modelChoice.js";
 import { stat as fsStat } from "node:fs/promises";
+import { bootFailureLines, firstLine } from "../shared/bootFailure.js";
 
 /**
  * "이미 떠 있는 OpenAI 호환 서버" 를 찾는 함수형태.
@@ -59,6 +60,13 @@ export interface BootstrapStep {
   fatal: boolean;
   /** 아직 구현되지 않은 단계(P2 이후). */
   pending?: boolean;
+  /**
+   * 실패했을 때 **왜** — 원본 로그·판정 한 줄(Q-5). 모르면 null(문장을 지어내지 않는다 → 화면은 "확인 못 함").
+   * 형식·표시는 `shared/bootFailure.ts` 한 곳이 정한다(로그와 창이 같은 말을 하게).
+   */
+  why?: string | null;
+  /** 실패했을 때 사용자가 할 수 있는 **다음 행동 하나**. */
+  next?: string | null;
 }
 
 /**
@@ -114,7 +122,7 @@ export interface BootstrapDeps {
    * 나왔던 버그(단계 10 이 1~9 결과를 볼 수 없음)의 원인이다.
    */
   lateSteps?: Partial<
-    Record<9 | 10 | 11 | 12, (ctx: { result: BootstrapResult }) => Promise<{ ok: boolean; detail: string }>>
+    Record<9 | 10 | 11 | 12, (ctx: { result: BootstrapResult }) => Promise<{ ok: boolean; detail: string; why?: string | null; next?: string | null }>>
   >;
   log?: (line: string) => void;
   /** 부팅 로그 패널(§5.12)로 흘릴 로거. 같은 싱글턴을 쓴다. */
@@ -203,6 +211,8 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
     steps.push(s);
     logger?.info({ step: s.n, ok: s.ok, took: s.tookSeconds }, `부팅 ${s.n}/12 ${s.name}: ${s.detail}`);
     log(`[${s.n}/12] ${s.name} — ${s.detail}${s.ok ? "" : " (실패)"}`);
+    // 실패면 **왜 · 다음** 두 줄을 바로 밑에 — 창도 같은 함수로 같은 말을 한다(Q-5).
+    for (const l of bootFailureLines(s)) log(l);
   };
 
   let aborted = false;
@@ -255,6 +265,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   if (hw) result.hardware = hw;
 
   // [3] llama-server 탐색 ----------------------------------------------------
+  let llamaWhy: string | null = null;
   {
     const { value, seconds } = await timed(async () => {
       try {
@@ -262,8 +273,13 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         // paths travel with it) so a "found nothing" answer can say WHY. The
         // 12-step report only has a slot for the location, so unwrap here —
         // the extra fields are `/server`·`/models`' business (slashService), not this one's.
-        return (await findLlamaServer({ env: opts.env })).location;
-      } catch {
+        // 환경을 주입받았으면 홈도 그 환경을 따른다 — 안 그러면 `~/llama.cpp` 는 진짜 홈에서 찾는다(테스트가 머신을 검사하게 된다).
+        const found = await findLlamaServer({ env: opts.env, home: opts.env?.HOME });
+        // 못 찾았을 때 "왜" 를 말할 재료 — 있지만 실행 못 한 후보가 있으면 그게 원인이다.
+        if (!found.location && found.rejected.length) llamaWhy = `있지만 실행할 수 없는 llama-server: ${found.rejected[0]}`;
+        return found.location;
+      } catch (e) {
+        llamaWhy = firstLine(msg(e));
         return null;
       }
     });
@@ -290,6 +306,14 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         : opts.allowBuild
           ? "빌드 실패 — 이후 단계는 계속 진행합니다"
           : "찾지 못함 (allowBuild=false) — 이후 단계는 계속 진행합니다",
+      why: result.llama
+        ? null
+        : (errors.find((e) => e.startsWith("llama.cpp 빌드 실패")) ??
+          llamaWhy ??
+          "PATH · ~/llama.cpp/build*/bin · ~/.harnesside/llama.cpp 어디에도 llama-server 가 없음"),
+      next: result.llama
+        ? null
+        : "`harnesside doctor --install` 로 설치하거나, 이미 있는 llama-server 경로를 HARNESSIDE_LLAMA_SERVER 로 지정하세요",
       tookSeconds: seconds,
       fatal: false,
     });
@@ -321,6 +345,8 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         ? `${value.reason} · ${(modelBytes / 1024 ** 3).toFixed(1)}GB`
         : `${value.reason} — 모델 없음(설정에서 선택 필요)`,
       ok: !!value.path,
+      why: value.path ? null : value.reason,
+      next: value.path ? null : "`harnesside doctor --install` 로 모델을 받거나, `.harnesside/config.yaml` 의 llama.modelPath 에 GGUF 경로를 적으세요",
       tookSeconds: seconds,
       fatal: false,
     });
@@ -513,6 +539,16 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         : result.llamaReady
           ? `모델 ${result.model?.path ?? result.servedModel ?? "(경로 모름)"} 준비됨`
           : "모델 서버 미기동 — 창은 계속 뜨고 '모델 연결 실패' 배너를 표시합니다",
+      // 왜 — 앞 단계(3 탐색 · 4 모델 · 7 기동) 중 **처음 실패한 것**이 원인이다. 없으면 모른다고 말한다.
+      why: result.llamaReady
+        ? null
+        : (() => {
+            const cause = steps.find((s) => [3, 4, 7].includes(s.n) && !s.ok);
+            return cause ? `${cause.n}/12 ${cause.name}: ${firstLine(cause.why) ?? cause.detail}` : null;
+          })(),
+      next: result.llamaReady
+        ? null
+        : `이미 띄운 llama-server 가 있으면 포트 ${result.ports?.llamaPort ?? 8080} 에서 답하는지 확인(curl -s http://127.0.0.1:${result.ports?.llamaPort ?? 8080}/v1/models) — 없으면 \`harnesside doctor --install\``,
       tookSeconds: (Date.now() - t0) / 1000,
       fatal: false,
     });
@@ -543,7 +579,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
     const t0 = Date.now();
     try {
       const out = await impl({ result });
-      record({ n, name: STEP_NAMES[n - 1], ok: out.ok, detail: out.detail, tookSeconds: (Date.now() - t0) / 1000, fatal: false });
+      record({ n, name: STEP_NAMES[n - 1], ok: out.ok, detail: out.detail, why: out.why ?? null, next: out.next ?? null, tookSeconds: (Date.now() - t0) / 1000, fatal: false });
     } catch (e) {
       // 실패해도 부팅은 계속된다 — 창은 떠야 한다(§3.2 [8] 의 degrade 원칙과 같다).
       errors.push(`단계 ${n} 실패: ${msg(e)}`);
@@ -551,7 +587,9 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         n,
         name: STEP_NAMES[n - 1],
         ok: false,
-        detail: `실패: ${msg(e)}`,
+        detail: `실패: ${firstLine(msg(e)) ?? "확인 못 함"}`,
+        why: firstLine(msg(e)),
+        next: null,
         tookSeconds: (Date.now() - t0) / 1000,
         fatal: false,
       });

@@ -718,3 +718,19 @@ MoE/speculative 항목 포함). `slashService.ts` import 17개를 새 경로로.
 - `scripts/fixtures/coverage-report.txt` 는 Q-1 커밋(`d99655b`)에서 이미 재생성돼 있었다(localstack 없음 · loop.ts 미도달 행이 1,770 이하) — 확인만.
 - `npm run test:e2e` 는 Q-4 에서 실제 스크립트로 바뀌었다(21/23 — 휴리스틱 2건은 Q-6).
 **§9 미측정 표**: 줄어든 칸 없음. **되돌리는 법**: `git revert`.
+
+## 2026-10-04 — Q-5 (부팅 실패를 "어느 단계에서 왜" 로)
+
+- **새 리포트 구조를 만들지 않았다**: `BootstrapStep` 에 이미 단계별 결과(n · name · ok · detail)가 있었다 → `why`(원본 한 줄)·`next`(다음 행동 하나)
+  **두 필드만** 더했다. 문장 형식은 `src/shared/bootFailure.ts` 한 곳(서버 로그와 창이 같은 함수) — 원인을 모르면 **"확인 못 함"**.
+- 채운 곳: [3] 탐색(실행 못 한 후보 경로 · 빌드 실패 · 찾은 곳 목록) · [4] 모델(선택 사유) · [8] 헬스체크(앞 단계 3·4·7 중 첫 원인 +
+  포트·`curl` 확인 명령) · 실제 스폰 뒤 헬스체크 실패(ENOENT · `Address already in use` · OOM/CUDA 를 구분해 다음 행동, 창의 [8] 도 실제 결과로 덮음) ·
+  [11] Chrome(실행 파일 없음 → `sudo apt install chromium-browser` · 설치 없이 `--no-browser` / CDP 미첨부 → 포트 점유 확인·`HARNESSIDE_CDP_PORT`).
+- 실패면 로그의 단계 줄 바로 밑에 `· 왜:` `· 다음:` 두 줄, 창에는 **부팅 문제 배너**(단계·무엇·왜·다음).
+- 단계 순서 정본: `STEP_NAMES` 한 목록(1~8 bootstrap, 9~12 `lateSteps` 도 같은 목록을 씀) — 이미 한 곳이었음을 확인.
+- 발견한 hermetic 결함: `bootstrap` 이 환경을 주입받아도 `~/llama.cpp` 는 진짜 홈에서 찾았다 → 주입된 `HOME` 을 따르게 함.
+
+**검증**: `--dry` **12줄 · 1..12 연속**(CI 와 같은 명령) · 실패를 **실제로 만든** 유닛(`bootstrap.failure.test.ts`: 없는 llama 경로·빈 PATH·빈 HOME·모델 없음
+→ 3·4·8 단계에 왜·다음이 채워지고 로그에 두 줄) · 창 배너는 서버 상태를 건드리지 않고 `/api/bootstrap` 응답만 실패 단계로 바꿔 끼워 **실제 화면에서 렌더 확인**
+(평소 상태에선 배너 없음 확인). CI boot-smoke 에 **"llama 없는 부팅" 스텝** 추가 — 이 머신은 8080 에 실제 llama 가 있어 채택해 버리므로 **로컬 재현 불가, 러너 결과 미측정**.
+**§9 미측정 표**: #12 "실패 경로 부팅이 사용자에게 설명된다" → 유닛·화면으로 **검증**, CI 러너 실행은 **미측정**(다음 push 에서 확인).

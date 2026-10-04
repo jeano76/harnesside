@@ -27,6 +27,7 @@ import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";
 import { webSlashCommands, parseSlash, slashMatches } from "../shared/slashCommands.js";
 import { CLI_PROVIDERS, CLI_SUBCOMMANDS } from "../shared/cliProviders.js";
+import { describeBootFailure } from "../shared/bootFailure.js";
 import { CommitBox } from "./panels/CommitBox.js";
 import { ResumeBanner } from "./panels/ResumeBanner.js";
 import { CrashBanner } from "./panels/CrashBanner.js";
@@ -110,6 +111,7 @@ export default function App() {
   // 바뀌면 다시 그려야 해서다 — 함수를 그대로 받아쓰면 stale 이 된다.
   const t = useI18n();
   const [steps, setSteps] = useState<BootStep[] | null>(null);
+  const [bootFailHidden, setBootFailHidden] = useState(false);
   const [gpu, setGpu] = useState<GpuInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -1009,6 +1011,25 @@ export default function App() {
       <>
         {/* M10 크래시 안내 — **있을 때만** 나타난다. 재개는 ResumeBanner 가 맡는다. */}
         <CrashBanner client={client} />
+        {/* Q-5 부팅 실패 — **어느 단계 · 무엇 · 왜 · 다음** 을 창에도 보인다(로그와 같은 함수). 실패가 있을 때만. */}
+        {!bootFailHidden && (steps ?? []).some((st) => describeBootFailure(st)) && (
+          <div role="alert" aria-label="부팅 문제" style={{ border: "1px solid #d29922", borderRadius: 6, background: "#161b22", padding: "6px 8px", fontSize: 12, color: FG, margin: "0 0 6px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span aria-hidden="true" style={{ color: "#d29922" }}>⚠</span>
+              <strong>부팅 중 문제가 있었습니다 — 서버와 창은 계속 동작합니다</strong>
+              <span style={{ flex: 1 }} />
+              <button type="button" onClick={() => setBootFailHidden(true)} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}>닫기</button>
+            </div>
+            {(steps ?? []).map((st) => describeBootFailure(st)).filter((f): f is NonNullable<typeof f> => !!f).map((f) => (
+              <dl key={f.where} style={{ margin: "4px 0 0", display: "grid", gridTemplateColumns: "auto 1fr", gap: "1px 8px" }}>
+                <dt style={{ color: DIM }}>단계</dt><dd style={{ margin: 0 }}>{f.where}</dd>
+                <dt style={{ color: DIM }}>무엇</dt><dd style={{ margin: 0 }}>{f.what}</dd>
+                <dt style={{ color: DIM }}>왜</dt><dd style={{ margin: 0, fontFamily: "ui-monospace, monospace" }}>{f.why}</dd>
+                <dt style={{ color: DIM }}>다음</dt><dd style={{ margin: 0 }}>{f.next}</dd>
+              </dl>
+            ))}
+          </div>
+        )}
         {/* M3 재개 배너 — **있을 때만** 나타난다. 항상 보이면 경고가 무시된다. */}
         <ResumeBanner
           client={client}

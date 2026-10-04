@@ -53,6 +53,7 @@ import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { CliSessions } from "./cliSessions.js";
 import { installPipeGuard, isBrokenPipe, safeWrite } from "./safeOutput.js";
+import { bootFailureLines } from "../shared/bootFailure.js";
 import { SlashService, SERVER_SLASH_KEYS, type ServerSlashKey } from "./slashService.js";
 import { homedir } from "node:os";
 import { join, isAbsolute, resolve, relative } from "node:path";
@@ -366,6 +367,8 @@ async function main(): Promise<number> {
   let adoptedProbe: (() => boolean) | null = null;
   /** 창을 띄우려 한 적이 있는가. `never-opened` 판정의 전제다. */
   let browserLaunchAttempted = false;
+  /** 단계 11 실패 설명용 — Chrome 이 낸 마지막 오류 줄(Q-5). */
+  let lastChromeErr: string | null = null;
   /** 진행 중인 턴이 있는가 — S3 유예 사유 중 하나(§4.4). */
   let turnInProgress = false;
 
@@ -1400,16 +1403,29 @@ async function main(): Promise<number> {
                 source: "chrome",
                 message: l,
               });
-              if (isErr) emit(`[chrome] ${l}`);
+              if (isErr) {
+                emit(`[chrome] ${l}`);
+                lastChromeErr = l; // 단계 11 실패의 "왜"(Q-5)
+              }
             },
           }
         );
         const res = await browser.launch();
         if (!res.flags.length) {
-          return { ok: false, detail: "브라우저 바이너리를 찾지 못했습니다 — 설치 후 재시작 하세요 (창 없이 서버만 동작)" };
+          return {
+            ok: false,
+            detail: "브라우저 바이너리를 찾지 못했습니다 — 설치 후 재시작 하세요 (창 없이 서버만 동작)",
+            why: "google-chrome · google-chrome-stable · chromium · chromium-browser 실행 파일이 PATH 에 없음",
+            next: `Ubuntu: sudo apt install chromium-browser (또는 google-chrome-stable) — 설치 없이 쓰려면 --no-browser 로 띄우고 브라우저에서 http://127.0.0.1:${idePort} 를 여세요`,
+          };
         }
         if (!res.attached) {
-          return { ok: false, detail: `Chrome 기동은 했지만 CDP(${res.cdpPort}) 에 붙지 못했습니다` };
+          return {
+            ok: false,
+            detail: `Chrome 기동은 했지만 CDP(${res.cdpPort}) 에 붙지 못했습니다`,
+            why: lastChromeErr,
+            next: `CDP 포트 ${res.cdpPort} 를 다른 Chrome 이 쓰고 있는지 확인(ss -ltnp | grep :${res.cdpPort}) — 쓰고 있으면 HARNESSIDE_CDP_PORT 로 다른 포트를 지정해 다시 띄우세요`,
+          };
         }
         // §4.4 S4 — **길게 붙어 있는** CDP 소켓. GPU 판정용 소켓은 열었다 닫으므로
         // "소켓이 죽었다" 는 신호가 생길 수 없다. 감시 소켓을 따로 붙여야 그 신호가 있다.
@@ -1508,6 +1524,7 @@ async function main(): Promise<number> {
     emit(`[7] 기존 llama-server 를 채택했습니다: http://127.0.0.1:${adopted.port} (${adopted.model}) — 스폰하지 않습니다.`);
     emit("[8] 헬스체크: 채택한 서버 사용 (스폰 없음)");
   } else if (llama && model?.path && tuning && ports) {
+  let lastLlamaErr: string | null = null;
   launcher = new LlamaLauncher(
     {
       binPath: llama.binPath,
@@ -1525,7 +1542,13 @@ async function main(): Promise<number> {
         warn: (o, m) => emit(`[llama] ${lineOf(o) ?? m}`),
         error: (o, m) => emit(`[llama] ${lineOf(o) ?? m}`),
       },
-      events: { onLine: (line) => emit(line) },
+      events: {
+        onLine: (line, stream) => {
+          emit(line);
+          // 헬스체크 실패의 "왜"(Q-5) — 원인이 담긴 줄은 거의 항상 stderr 의 오류 줄이다.
+          if (stream === "stderr" || /error|fail|oom|abort|bind|address/i.test(line)) lastLlamaErr = line;
+        },
+      },
     }
   );
 
@@ -1536,6 +1559,22 @@ async function main(): Promise<number> {
 
   const ready = await launcher.waitUntilReady(120_000);
   emit(`[8] 헬스체크: ${ready ? "준비 완료 (/v1/models 200)" : "실패 — 창은 계속 뜹니다"}`);
+  if (!ready) {
+    // 계획 단계(bootstrap)의 [8] 은 "준비될 수 있다" 였다 — **실제** 결과로 덮어 창(/api/bootstrap)도 같은 말을 하게 한다(Q-5).
+    const spawnErr = launcher.error as NodeJS.ErrnoException | null;
+    const why = spawnErr ? `${spawnErr.code ?? ""} ${spawnErr.message}`.trim() : lastLlamaErr;
+    const port = ports.llamaPort;
+    const next = spawnErr?.code === "ENOENT"
+      ? `llama-server 실행 파일이 없습니다(${llama.binPath}) — HARNESSIDE_LLAMA_SERVER 로 경로를 지정하거나 \`harnesside doctor --install\``
+      : /address already in use|bind/i.test(why ?? "")
+        ? `포트 ${port} 를 이미 쓰는 프로세스를 확인하세요(ss -ltnp | grep :${port}) — 이미 띄운 llama-server 라면 그것을 쓰도록 이 서버를 다시 시작하세요`
+        : /out of memory|oom|cuda/i.test(why ?? "")
+          ? "VRAM 이 부족합니다 — 다른 GPU 프로세스를 끄거나 /reset 으로 이 머신에 맞게 다시 계산하세요"
+          : `서버 로그에서 [llama] 줄을 확인하세요(harnesside logs) — 포트 ${port}`;
+    const step8 = boot.steps.find((x) => x.n === 8);
+    if (step8) Object.assign(step8, { ok: false, detail: "llama-server 가 준비되지 않았습니다(헬스체크 실패) — 창은 계속 뜹니다", why, next });
+    for (const l of bootFailureLines({ n: 8, name: "헬스체크 대기", ok: false, detail: "", why, next })) emit(l);
+  }
   } else {
     // 위 bail 조건과 같은 판정이다. 즉 여기에는 오로지 **두 판정이 서로 어긋난 경우**만
     // 도달한 하는 관치는 따단 패조이다.
