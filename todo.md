@@ -8,7 +8,7 @@
 >
 > 마지막 검증: **2026-10-05** · `npm test` **2022 pass / 0 fail** · `npm run typecheck` exit 0
 > · `node scripts/ci-checks.mjs` 통과 · `npm run build` 통과
-> · `node scripts/coverage-floor.mjs --min 80` **81.35%** 통과 (서버 계층 · 파일 130개)
+> · `node scripts/coverage-floor.mjs --min 80` **81.39%** 통과 (서버 계층 · 파일 133개)
 >
 > **축이 하나 늘었다.** 아래 ①~⑤ 는 `PROMPT_IDE_CLI.md` / `PROMPT_UX_COMMERCIAL.md` 쪽
 > (화면 · 레이아웃) 남은 일이다. **무게·안정성·호환성·상품성** 축은 새 문서
