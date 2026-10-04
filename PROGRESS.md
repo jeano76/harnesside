@@ -579,3 +579,65 @@ stash 에 있던 미완성 작업을 **끝냈다.** stash 는 비었다(드롭�
   → **자동 시작은 이미 충족**. 다만 `BackendState: NeedsLogin` 이라 트래픽은 안 나감.
   로그인은 sudo(비밀번호) 가 필요해 사용자 몫. 보존해야 할 설정: `--advertise-routes=10.0.0.0/24`
   (잘못 쓰면 초기화된다). IP forwarding 이 꺼져 있어 서브넷 라우팅은 **지금은 동작 안 함**.
+
+## 2026-10-04 — 웹에서 tmux 로 AI CLI 쓰기 (`PROMPT_TMUX_CLI.md`)
+
+**구현**: `shared/cliProviders.ts` · `server/tmux.ts` · `server/cliSessions.ts` · `/api/cli/*` ·
+`TerminalManager.create({command,cli})` · 웹 탭 막대/확대 · 슬래시 `/cli` + 2·3번째 토큰 자동완성.
+소켓은 **전용 `harnesside`**(`tmux -L harnesside attach -t hs-…`) — 기본 소켓의 서버 전역 옵션을
+바꾸면 사람의 세션까지 바뀌기 때문.
+
+| # | 결과 | 방법 |
+|---|---|---|
+| V1 tmux 없음 | **미측정**(이 머신엔 tmux 있음; 코드는 거절 경로 있음) | — |
+| V2 claude 탭 | 통과 — TUI 렌더, 로그인된 상태 | 서버가 띄운 Chrome(CDP)으로 실제 확인 |
+| V3 gemini 탭 | **미측정**(열어 보지 않음) | — |
+| V4 codex 미설치 | 통과 — "설치돼 있지 않습니다 + 안내", 자동 설치 없음 | 실제 |
+| V5 새로고침 | 통과 — 탭 3개 복원, 세션 유지 | 실제 |
+| V6 서버 재시작 후 목록 복구 | **미측정** | — |
+| V7 외부 attach | **미측정**(명령만 안내) | — |
+| V8/V9 탭 닫기·종료 | 종료 확인(confirm) 통과 / 탭 ✕ detach **미측정** | 실제 |
+| V10 한글 입력 | 통과(`insertText`) — IME 조합 중 Enter 는 **미측정** | CDP |
+| V12/V13 Esc 지연·리사이즈 | 옵션 적용 확인(`escape-time 10`), 체감·TUI 깨짐 **미측정** | — |
+| V15/V16 세션명·cwd | 통과 | 단위 테스트 |
+| V18 사람의 세션 보호 | 통과 — `claude`·`opencode` 시험 전후 그대로 | 실제 + 단위 |
+| V21 `/cli` 목록·자동완성 | 통과 | 실제 |
+| V22 kill 미리보기·거절 | 통과 | 실제 |
+
+**발견·수정한 결함**: (1) 새로고침 후 다시 붙은 셸에 `0c`·`276:` 같은 글자가 입력됨 — tmux 가 attach
+직후 보낸 DA/색 질의에 xterm.js 가 자동 응답하고 그 응답이 키 입력으로 새어 들어감 → attach 후 1.5초
+동안 터미널 자동 응답을 걸러냄(`terminalReply.ts`, 테스트 있음). (2) 설치 안 된 CLI 가 "시간 초과"로 표시됨
+— ENOENT 와 timeout 을 같은 코드로 합쳐서 → 분리. (3) `setCwd` 가 CLI 탭에도 `cd` 를 써 넣을 수 있었음 → 제외.
+**남은 일**: 서버 재시작 후 복구(V6)·gemini·외부 attach·탭 ✕ detach·IME 조합 중 Enter 확인, README 절 추가.
+
+### 같은 날 — CLI 별 슬래시 명령 동적 매핑 (T-14)
+**구현**: `cliCommands.ts`(스캔) · `GET /api/cli/commands` · `cliProviders.builtins/customDirs` ·
+입력창 대상 전환 칩(`harnesside | ◆ CLI`) · CLI 대상일 때 `/` 추천 = 그 CLI 명령.
+**표 출처**: claude 2.1.289 — `/help` Commands 탭에 **실제로 보인** 이름만(검증). gemini 0.60.0 — **미확인**:
+로그인 화면에서 막혀(`This client is no longer supported…`, 같은 머신에서 재현) `/help` 를 못 읽어 문서 기준 이름만.
+codex — 미설치라 비움. 플러그인 명령은 스캔하지 않음(목록에 없고 전달만 됨).
+| V23 | 통과 — claude 탭 활성 시 자동 전환, `/` 추천 40개(내장+스킬), `/help` 가 claude 로 전달됨(tmux 화면 확인), `/queue` 버튼은 harnesside 로 복귀 | 실제 + CDP |
+단위: 스캔 5건(프로젝트/스킬/네임스페이스/우선순위/미확인 codex). **미측정**: gemini 탭 실사용, 여러 줄 붙여넣기 전송.
+
+### 같은 날 — 프롬프트 옆 모델/CLI 선택기
+`<select>`: `local_model · <모델>` + 설치된 CLI(미설치 비활성). CLI 선택 → 탭 열기/재사용 + 대상 전환, 슬래시 버튼 줄이 대상별로 바뀜
+(`CliProvider.quick`). 실제 확인: claude 선택 시 탭 생성·`/compact` 채움·local 복귀·재선택 시 탭 중복 없음. **미측정**: gemini 선택(로그인 화면에서 막히는 것으로 보임).
+
+### 같은 날 — CLI 대상이면 터미널을 메시지창 자리에, 아래 셸은 숨김
+`position: fixed` 오버레이(메시지 영역 rect 추적) + 하단 행 26px(모니터 줄만). `대화 보기/터미널 보기` 토글, harnesside 명령 실행 시 자동 대화 보기,
+local 복귀 시 하단 4줄 셸 복원. 실제 확인: overlay 가 메시지 영역과 같은 좌표·크기(top 29, 905px), xterm 845px, 토글·복귀 모두 동작. **미측정**: 창 크기를 줄일 때의 재맞춤 체감.
+선택 박스는 크고 굵게(파랑/보라), 슬래시 버튼 줄에서 `/cli` 버튼 제거(자동완성·직접 입력은 유지).
+
+### 같은 날 — 하단 셸 창 완전 제거 + CLI 대상일 때 슬래시 버튼 숨김
+기본 bash 탭 생성·하단 행·높이 조절 그립·`셸 영역 키우기/줄이기/초기화`·`harnesside.bottomH` 저장 제거. 터미널은 CLI 탭만(로컬 대상일 땐 숨김, 마운트 유지).
+CLI 대상이면 슬래시 버튼 줄 숨김(`/` 자동완성은 유지). 새로고침 복원은 로컬로 시작(`auto` 플래그).
+버그 수정: 이미 열린 세션에 `/cli claude` 로 다시 붙을 때 터미널이 안 뜨던 것(재사용 시 `terminal.open` 이 오지 않음).
+실제 확인(CDP): 새로고침 후 로컬/숨김/버튼 12 · claude 선택 시 오버레이/버튼 0 · `/cli claude` 로도 동일 · local 복귀 시 버튼 12.
+
+### 같은 날 — "클로드를 골라도 메시지창이 빈 화면" 수정
+원인 둘(실측): (1) 숨겨진(display:none) 채로 붙은/새로고침으로 새로 만든 xterm 은 **이미 돌고 있는 PTY 의 지난 출력을 모른다** —
+tmux 는 크기가 바뀔 때만 다시 그리므로 새 출력이 오기 전까지 빈 화면. → `POST /api/terminal/:id/redraw`(한 줄 줄였다가 복원, SIGWINCH)를
+마운트·보이기 시작할 때 호출. (2) 그 세션이 `/memory` → User instructions 로 **vim 에 들어가 있었고**, 프롬프트 입력이 vim 키로 들어감
+(`E486`). `~/.claude/CLAUDE.md` 는 수정되지 않았음(mtime 불변)을 확인하고 `:q` 로 닫음.
+확인: 서버 재시작 후 새로고침 → claude 선택 직후 지난 화면이 즉시 그려짐. 보낸 질문에 `● 2` 응답 확인.
+**남은 위험**: CLI 가 대화상자·편집기(vim)에 들어가 있으면 프롬프트 입력이 그쪽으로 간다 — 화면에서 상태를 알아보기 어렵다(미해결).

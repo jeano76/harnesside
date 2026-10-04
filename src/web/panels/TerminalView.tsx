@@ -12,7 +12,8 @@
  *  - **입력을 보내지 못한 사실** 을 말하지 않으면 사용자는 타이핑이 먹혔다고 믿는다.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { isTerminalReply } from "./terminalReply.js";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ApiClient, ApiError } from "../api.js";
@@ -39,6 +40,8 @@ export interface TerminalSession {
   rows: number;
   /** 실제로 뜬 셸 — 요청과 다를 수 있다. */
   shell?: string | null;
+  /** tmux 위의 AI CLI 탭이면 그 정보. 탭을 닫아도 CLI 는 tmux 안에서 계속 산다(detach). */
+  cli?: { provider: string; sessionName: string; yolo?: boolean };
 }
 
 /** 종료 상태 문장 — 서버의 `exitLabel` 와 **같은 규칙** 을 화면에서도 쓴다. */
@@ -53,9 +56,20 @@ function exitLabel(s: TerminalSession): string | null {
 export function TerminalView({
   client,
   onNotice,
+  expanded = false,
+  onToggleExpand,
+  onActiveCli,
+  focusRequest,
 }: {
   client: ApiClient;
   onNotice: (kind: "info" | "warn" | "error", title: string, body: string) => void;
+  /** 셸 영역을 대화 영역까지 키운 상태인가(AI CLI 는 화면이 많이 필요하다). 기본 높이는 바꾸지 않는다. */
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+  /** 활성 탭이 AI CLI 탭이면 그 정보, 아니면 null — 프롬프트 입력창이 대상을 바꾸는 데 쓴다. */
+  /** 바깥(프롬프트 대상 선택)이 특정 탭을 열어 달라고 요청한다 — 없으면 목록에 넣고 활성화한다. */
+  focusRequest?: { n: number; session: TerminalSession } | null;
+  onActiveCli?: (t: { terminalId: string; provider: string; sessionName: string; title: string; cwd: string; alive: boolean; auto: boolean; yolo: boolean } | null) => void;
 }) {
   // ── 콜백이 매 렌더 새로 만들어져 deps 를 오염시킨다 (2026-10-01 실측) ──────────
   //
@@ -77,7 +91,27 @@ export function TerminalView({
     [],
   );
 
-  const [session, setSession] = useState<TerminalSession | null>(null);
+  // 탭 목록 — 기본 셸 + tmux 위의 AI CLI 탭들. 활성 탭 하나만 xterm 으로 그린다.
+  const [tabs, setTabs] = useState<TerminalSession[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const session = useMemo(() => tabs.find((t) => t.id === activeId) ?? tabs[0] ?? null, [tabs, activeId]);
+  useEffect(() => {
+    if (focusRequest) upsertTab(focusRequest.session, true);
+  }, [focusRequest?.n]);
+  // 사람이(슬래시/선택기/탭 클릭) 활성화했는가 — 새로고침 복원은 아니다. 복원 직후엔 로컬 대화로 시작한다.
+  const userActivated = useRef(false);
+  const activeCliRef = useRef(onActiveCli);
+  activeCliRef.current = onActiveCli;
+  useEffect(() => {
+    const c = session?.cli;
+    activeCliRef.current?.(
+      session && c ? { terminalId: session.id, provider: c.provider, sessionName: c.sessionName, title: session.title, cwd: session.cwd, alive: session.state === "running", auto: userActivated.current, yolo: !!c.yolo } : null
+    );
+  }, [session?.id, session?.state, session?.cli?.sessionName, userActivated.current]);
+  const upsertTab = useCallback((s: TerminalSession, activate: boolean) => {
+    setTabs((prev) => (prev.some((t) => t.id === s.id) ? prev.map((t) => (t.id === s.id ? s : t)) : [...prev, s]));
+    if (activate) { userActivated.current = true; setActiveId(s.id); }
+  }, []);
   /**
    * 셸이 **아직 뜰 때부터** 아는 작업 디렉터리 (사용자 요구: "바로 쉘 현재 디렉토리를
    * 보여주고").
@@ -107,16 +141,15 @@ export function TerminalView({
         if (!alive) return;
         // 경로는 **세션이 있으든 없든** 먼저 보인다.
         setCwd(r.cwd || null);
-        // 서버가 이미 세션을 하나만 두면 그것을 그대로 쓴다. 없으면 새로 연다.
-        if (!r.tabs || r.tabs.length === 0) {
-          // 기본 bash + `ls` (사용자 요구). bash 가 없으면 서버가 폴백하고
-          // 실제 뜬 셸을 session.shell 로 알린다 — 헤더에 그대로 보인다.
-          const s = await client.post<TerminalSession>("/api/terminal", { shell: "/bin/bash", init: "ls" });
-          if (!alive) return;
-          setSession(s);
-        } else {
-          if (!alive) return;
-          setSession(r.tabs[0]);
+        // **기본 셸을 만들지 않는다**(2026-10-04 사용자 요구: 셸 창 제거). 터미널은 AI CLI 탭만 있다 —
+        // 서버에 이미 살아 있는 CLI 탭(새로고침 뒤에도 남는다)만 복원한다.
+        const cliTabs = (r.tabs ?? []).filter((t) => t.cli);
+        if (!alive) return;
+        if (cliTabs.length > 0) {
+          // **합친다** — 복원 응답이 늦게 오는 사이에 사람이 이미 탭을 열었을 수 있다(덮어쓰면 그 탭이 사라지고
+          // 엉뚱한 탭이 활성이 된다, 2026-10-04 실측). 이미 있는 항목이 우선이고 활성 탭도 건드리지 않는다.
+          setTabs((prev) => [...prev, ...cliTabs.filter((t) => !prev.some((p) => p.id === t.id))]);
+          setActiveId((cur) => cur ?? cliTabs[0].id);
         }
       } catch (e) {
         if (!alive) return;
@@ -129,12 +162,15 @@ export function TerminalView({
     const unsub = subscribeWs((ev) => {
       if (!alive) return;
       const e = ev as unknown as { type?: string; id?: string; session?: TerminalSession };
-      // 종료 신호 — 같은 세션이면 상태창에 반영한다(새로 만들지 않음).
-      if (e.type === "terminal.exit" && e.session && session && e.session.id === session.id) {
-        setSession(e.session);
-      } else if (e.type === "terminal.closed" && e.id && e.id === session?.id) {
+      // 새 탭(슬래시 `/cli` 가 연 AI CLI 탭) — 목록에 넣고 **그 탭으로 옮긴다**.
+      if (e.type === "terminal.open" && e.session) {
+        if (e.session.cli) upsertTab(e.session, true);
+      } else if (e.type === "terminal.exit" && e.session) {
+        // 종료 신호 — 같은 탭의 상태를 갱신한다(새로 만들지 않음).
+        upsertTab(e.session, false);
+      } else if (e.type === "terminal.closed" && e.id) {
         // 서버가 이 세션을 완전히 닫았다는 신호 — 끝난 상태로 보인다.
-        setSession((prev) => (prev ? { ...prev, state: "exited", exitCode: null } : prev));
+        setTabs((prev) => prev.map((t) => (t.id === e.id ? { ...t, state: "exited", exitCode: null } : t)));
       }
     });
     return () => {
@@ -142,12 +178,31 @@ export function TerminalView({
       // **구독을 해제한다.** 남으면 패널이 죽었는데 이벤트를 계속 받아 메모리가 산다.
       unsub();
     };
-  }, [client, notice, session]);
+  }, [client, notice, upsertTab]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       {/* nav bar removed 2026-10-04 (user): use left explorer or cd. */}
       {/* 세션이 생성되는 동안 빈 패널을 두지 않는다 — "연결 중" 을 말한다. */}
+      {tabs.length > 1 && (
+        <div role="tablist" aria-label="터미널 탭" style={{ display: "flex", gap: 2, padding: "2px 6px 0", flex: "0 0 auto", overflowX: "auto" }}>
+          {tabs.map((t) => (
+            <span key={t.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 6px", fontSize: 11, borderRadius: "4px 4px 0 0", background: t.id === session?.id ? "#161b22" : "transparent", color: t.id === session?.id ? FG : DIM, border: `1px solid ${t.id === session?.id ? "#30363d" : "transparent"}`, borderBottom: 0 }}>
+              <button type="button" role="tab" aria-selected={t.id === session?.id} onClick={() => { userActivated.current = true; setActiveId(t.id); }} title={t.cli ? `${t.title} — tmux 세션 ${t.cli.sessionName}\n폴더 ${t.cwd}\n※ 이 탭의 작업은 harnesside 승인 게이트 밖에서 실행됩니다.` : t.cwd} style={{ background: "none", border: 0, color: "inherit", cursor: "pointer", font: "inherit", padding: 0 }}>
+                {t.cli ? "◆ " : ""}{t.title}{t.state === "exited" ? " ✕" : ""}
+              </button>
+              {t.cli && (
+                <button type="button" aria-label={`${t.title} 탭 닫기(CLI 는 계속 실행)`} title="탭만 닫습니다 — tmux 안의 CLI 는 계속 실행됩니다 (/cli 로 다시 붙기)" onClick={() => { void client.post(`/api/terminal/${encodeURIComponent(t.id)}/close`, {}).catch(() => {}); setTabs((prev) => prev.filter((x) => x.id !== t.id)); setActiveId((cur) => (cur === t.id ? null : cur)); }} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", padding: 0 }}>×</button>
+              )}
+            </span>
+          ))}
+          {onToggleExpand && (
+            <button type="button" onClick={onToggleExpand} aria-pressed={expanded} title={expanded ? "셸 영역을 원래 높이(4줄)로 되돌립니다" : "셸 영역을 크게 키웁니다 — AI CLI 는 화면이 많이 필요합니다"} style={{ marginLeft: "auto", background: "none", border: `1px solid #30363d`, borderRadius: 4, color: DIM, cursor: "pointer", font: "inherit", fontSize: 10, padding: "0 8px", alignSelf: "center" }}>
+              {expanded ? "축소" : "확대"}
+            </button>
+          )}
+        </div>
+      )}
       {session ? (
         <XtermPane key={session.id} session={session} client={client} notice={notice} />
       ) : (
@@ -156,8 +211,7 @@ export function TerminalView({
         // 두면 "앗 눌러야 되나" 로 읽힌다. 대신 **어디서 열리는지**(cwd)와
         // 기다리는 중이라는 사실만 말한다.
         <div style={{ padding: "8px 10px", color: DIM, fontSize: 11, display: "flex", gap: 8, alignItems: "baseline" }}>
-          {cwd && <code style={{ color: FG }}>{cwd}</code>}
-          <span>셸을 여는 중…</span>
+          <span>열린 AI CLI 탭이 없습니다 — 프롬프트 옆 선택기나 /cli claude 로 여세요.</span>
         </div>
       )}
     </div>
@@ -220,9 +274,25 @@ function XtermPane({
 
     // **창 크기가 바뀌면 PTY 에도 알려야 한다.** 안 하면 줄이 화면 폭을 넘어가서
     // 가로 스크롤이 생기고, 이후 출력 전부 어긋난다.
+    // 보이기 시작하는 순간(크기 0 → N)·마운트 직후에 서버에 **다시 그리기**를 요청한다.
+    let wasVisible = false;
+    let redrawTimer: ReturnType<typeof setTimeout> | null = null;
+    const requestRedraw = () => {
+      if (redrawTimer) clearTimeout(redrawTimer);
+      redrawTimer = setTimeout(() => {
+        void client.post(`/api/terminal/${encodeURIComponent(session.id)}/redraw`, {}).catch(() => { /* 끝난 세션이면 그대로 둔다 */ });
+      }, 120);
+    };
     const ro = new ResizeObserver(() => {
+      const nowVisible = el.clientWidth > 0 && el.clientHeight > 0;
+      if (nowVisible && !wasVisible) requestRedraw();
+      wasVisible = nowVisible;
       try {
         f.fit();
+        // **숨겨진 채로(display:none) 붙은 터미널은 화면이 비어 있다** — 버퍼에는 내용이 있는데 보이는 행이 그려지지
+        // 않았다. 다시 보이는 순간(크기 0 → N)에 **다시 그린다**. 안 하면 CLI 를 골라도 빈 화면이고,
+        // 크기가 같아 tmux 도 다시 그려 주지 않아 새 출력이 올 때까지 "아무것도 안 나온다"(2026-10-04 실측).
+        if (el.clientWidth > 0 && el.clientHeight > 0) t.refresh(0, Math.max(0, t.rows - 1));
         if (t.cols > 1 && t.rows > 1) {
           void client.post(`/api/terminal/${encodeURIComponent(session.id)}/resize`, { cols: t.cols, rows: t.rows });
         }
@@ -245,7 +315,10 @@ function XtermPane({
     });
 
     // 입력은 WS 가 아니라 **라우트** 로 보낸다(왕복이 짧고 실패를 HTTP 로 알 수 있다).
+    const born = Date.now();
     const sub = t.onData((d) => {
+      // AI CLI(tmux) 탭: attach 직후 1.5초 동안의 **터미널 자동 응답**은 버린다(위 `isTerminalReply`).
+      if (session.cli && Date.now() - born < 1500 && isTerminalReply(d)) return;
       void client.post(`/api/terminal/${encodeURIComponent(session.id)}/input`, { data: d }).catch((err) => {
         // **먹혔다고 말하지 않는다.** 죽은 셸에 계속 쓰면 사용자는 "터미널이 얼었다" 고
         // 판단하고, 사실은 "셸이 끝났는데 화면이 살아 있다" 다.
@@ -257,6 +330,7 @@ function XtermPane({
     });
 
     return () => {
+      if (redrawTimer) clearTimeout(redrawTimer);
       ro.disconnect();
       sub.dispose();
       unsub();

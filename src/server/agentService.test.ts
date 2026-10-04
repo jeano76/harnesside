@@ -161,7 +161,7 @@ test("표시를 꺼도 **예산은 이미 씀** 을 한 번 말한다 — 조용
   }
 });
 
-test("thinking 을 켜면 사고 델타가 나가고, 상한을 넘으면 **강제 전환**을 말한다", async () => {
+test("thinking 을 켜면 사고 델타가 나가고, 상한을 넘으면 강제 전환한다(대화에 상태 줄은 남기지 않는다)", async () => {
   const events: AgentEvent[] = [];
   const s = await sandbox();
   try {
@@ -172,8 +172,8 @@ test("thinking 을 켜면 사고 델타가 나가고, 상한을 넘으면 **강�
     assert.ok(events.some((e) => e.type === "agent.reasoning"), "켰는데 사고 델타가 안 왔다");
     assert.equal(svc.thinking.forcedToolChoice, true, "강제 전환이 일어나지 않았다");
     assert.ok(
-      events.some((e) => e.type === "agent.status" && /강제/.test(String(e.text))),
-      "왜 바뀌었는지 말하지 않는다 — 사용자는 도구가 왜 안 부는지 모른다"
+      !events.some((e) => e.type === "agent.status" && /강제/.test(String(e.text))),
+      "사용자 지정: thinking 은 기본 ON 이라 이 안내는 대화에 남기지 않는다(전환 자체는 일어난다)"
     );
   } finally {
     await s.cleanup();

@@ -51,6 +51,8 @@ import { startWatchdog, type Watchdog } from "./watchdog.js";
 import { issueToken } from "../auth/token.js";
 import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
+import { CliSessions } from "./cliSessions.js";
+import { installPipeGuard, isBrokenPipe, safeWrite } from "./safeOutput.js";
 import { SlashService, SERVER_SLASH_KEYS, type ServerSlashKey } from "./slashService.js";
 import { homedir } from "node:os";
 import { join, isAbsolute, resolve, relative } from "node:path";
@@ -67,8 +69,10 @@ const NO_BROWSER = !BROWSER_INTENT.launch;
 
 /** 데몬 상태 출력 — 한 줄씩만. 화면 출력(커서 이동·바)은 절대 하지 않는다(§3.7.1). */
 function emit(line: string) {
-  process.stdout.write(`${line}\n`);
+  // 닫힌 파이프에 써도 죽지 않는다(`safeOutput.ts` — 크래시 로그 2.7억 자 사고).
+  safeWrite(process.stdout, `${line}\n`);
 }
+installPipeGuard([process.stdout, process.stderr]);
 
 /**
  * 읽기 전용 명령은 부팅 없이 즉시 처리한다(§3.7.4).
@@ -300,6 +304,9 @@ async function main(): Promise<number> {
       }
     },
   });
+  // 웹에서 tmux 로 AI CLI(claude·gemini·codex) 쓰기 — `PROMPT_TMUX_CLI.md`.
+  // 서버를 내려도 tmux 세션(`hs-*`)은 죽이지 않는다 — `terminal.shutdown` 은 attach PTY 만 끊는다.
+  const cliSessions = new CliSessions({ terminal, root: () => workspace.root(), warn: (m) => emit(`[cli] ${m}`) });
   // `/models` · `/server` · `/reset` — llamacli 의 슬래시 명령을 그대로 서버에서 실행한다.
   // 서버가 바뀌면 **세션도 새 서버에 맞춘다**(안 맞추면 옛 모델 이름으로 요청한다).
   const slash = new SlashService({
@@ -394,7 +401,7 @@ async function main(): Promise<number> {
     // 프로세스만 쌓이고 사용자는 "터미널을 안 닫았는데 프로세스가 있다" 고 본다.
     {
       const killed = terminal.shutdown();
-      emit(`[shutdown] 셸 탭 ${killed}개 종료`);
+      emit(`[shutdown] 셸 탭 ${killed}개 종료 (tmux 위의 AI CLI 세션 hs-* 는 그대로 둡니다 — 다시 열면 이어 붙습니다)`);
     }
     if (launcher) {
       await launcher.stop();
@@ -446,7 +453,13 @@ async function main(): Promise<number> {
       }
     }
   });
+  let crashing = false;
   process.on("uncaughtException", (e) => {
+    // 출력 쪽이 끊긴 것(EPIPE)은 서버가 죽을 이유가 아니다 — 처리기가 같은 stdout 에 다시 써서 무한히 되풀이되던 사고.
+    if (isBrokenPipe(e)) return;
+    // 같은 처리기가 다시 불려도(처리 중 또 예외) **한 번만** 기록하고 종료를 시작한다.
+    if (crashing) return;
+    crashing = true;
     // M10: 죽기 전에 디스크에 남긴다 — 다음 실행의 창이 이것을 보여준다.
     // `legacy-tui` 의 installCrashHandlers 와 같은 기록 함수(정본은 한 곳).
     writeCrashLogSync(projectRoot, formatCrashReport("uncaughtException", e));
@@ -870,6 +883,11 @@ async function main(): Promise<number> {
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: 409 });
             return { ok: true };
           })
+          .route("POST", "/api/terminal/:id/redraw", async (c) => {
+            const r = terminal.redraw(c.params.id ?? "");
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: 409 });
+            return { ok: true };
+          })
           .route("POST", "/api/terminal/:id/close", async (c) => {
             const r = terminal.close(c.params.id ?? "");
             hub?.publish({ type: "terminal.closed", id: c.params.id ?? "" } as never);
@@ -930,6 +948,30 @@ async function main(): Promise<number> {
           // ── §5.3 에이전트 턴 ────────────────────────────────────────────────
           // **이전엔 "보내기" 버튼이 죽어 있었다.** 도구·압축·자기보호 로직은 전부
           // 검증되어 있는데 서버에서 아무것도 호출하지 않았다. 이제 실제로 돈다.
+          .route("GET", "/api/cli/status", async () => cliSessions.status())
+          .route("GET", "/api/cli/providers", async () => ({ providers: await cliSessions.providers() }))
+          .route("GET", "/api/cli/commands", async (c) => {
+            const r = await cliSessions.commands(String(c.query.get("provider") ?? ""), c.query.get("cwd") ?? undefined);
+            if ("error" in r) throw Object.assign(new Error(r.error), { status: r.status });
+            return r;
+          })
+          .route("GET", "/api/cli/sessions", async () => ({ sessions: await cliSessions.sessions(), socket: cliSessions.tmux.socket }))
+          .route("POST", "/api/cli/sessions", async (c) => {
+            const body = (await readBody(c.req)) as { provider?: string; cwd?: string; forceNew?: boolean; resume?: boolean; yolo?: boolean; cols?: number; rows?: number };
+            const r = await cliSessions.start({ provider: String(body.provider ?? ""), cwd: body.cwd, forceNew: body.forceNew === true, resume: body.resume === true, yolo: body.yolo === true, cols: body.cols, rows: body.rows });
+            // 열지 못했으면 성공으로 돌려주지 않는다 — 가짜 탭을 만들지 않는다.
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.status });
+            if (!r.reused) hub?.publish({ type: "terminal.open", session: r.session } as never);
+            ring.info("cli", `${r.session.title} 탭 ${r.reused ? "연결" : "생성"} — ${r.sessionName}`, "server");
+            return r;
+          })
+          .route("POST", "/api/cli/sessions/:name/kill", async (c) => {
+            const body = (await readBody(c.req)) as { confirm?: boolean };
+            const r = await cliSessions.kill(c.params.name ?? "", body.confirm === true);
+            if (!r.ok && r.status !== 200) throw Object.assign(new Error(r.detail), { status: r.status });
+            if (r.ok) ring.info("cli", r.detail, "server");
+            return r;
+          })
           .route("POST", "/api/slash/run", async (c) => {
             const body = (await readBody(c.req)) as { key?: string; arg?: string };
             const key = String(body.key ?? "");

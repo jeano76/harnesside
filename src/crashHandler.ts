@@ -62,10 +62,21 @@ export function readCrashTail(
 /** Best-effort: a failure to write the crash log must never prevent the
  *  crash message itself from still reaching stderr, and never throw
  *  recursively out of a handler that is itself already handling a crash. */
+/** 크래시 로그 상한(바이트). */
+export const MAX_CRASH_LOG_BYTES = 2 * 1024 * 1024;
+
 export function writeCrashLogSync(projectRoot: string, report: string): void {
   try {
     mkdirSync(join(projectRoot, ".harnesside"), { recursive: true });
-    appendFileSync(join(projectRoot, CRASH_LOG_RELATIVE_PATH), report);
+    const path = join(projectRoot, CRASH_LOG_RELATIVE_PATH);
+    // **크기 상한** — 같은 오류가 되풀이되면 로그가 끝없이 커진다(2026-10-04: EPIPE 41만 건·263MB).
+    // 상한을 넘으면 더 쓰지 않는다: 처음 기록이 원인을 말해 주고, 디스크를 채우지 않는다.
+    try {
+      if (statSync(path).size > MAX_CRASH_LOG_BYTES) return;
+    } catch {
+      /* 아직 없다 — 새로 쓴다 */
+    }
+    appendFileSync(path, report);
   } catch {
     // Nothing more we can do — the stderr write (the handler's other
     // half) is what actually matters if disk access itself is the problem.

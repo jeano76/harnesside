@@ -334,11 +334,9 @@ export class AgentService {
           this.forcedToolChoice = true;
           this.think = { ...this.think, enabled: false };
           this.invalidate();
-          this.emit({
-            type: "agent.status",
-            text: `사고 토큰이 상한(${this.think.maxReasoningTokens.toLocaleString("ko-KR")})을 넘어 thinking 을 끄고 도구 호출을 강제합니다.`,
-            at: now(),
-          });
+          // 대화에 상태 줄을 남기지 않는다(사용자 지정: thinking 은 기본 ON 이라 이 안내는 소음).
+          // 강제 도구 호출 자체는 그대로 동작한다.
+          this.opts.logger?.(`[think] 사고 토큰이 상한(${this.think.maxReasoningTokens})을 넘어 thinking 을 끄고 도구 호출을 강제합니다`);
         }
         this.emit({ type: "agent.reasoning", text, at: now() });
       },

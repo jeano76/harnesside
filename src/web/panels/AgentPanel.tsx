@@ -378,12 +378,10 @@ export function AgentPanel({
     wasRunning.current = running;
   }, [running]);
 
-  const warnings = useMemo(() => {
-    const out: string[] = [];
-    if (think.needsWarning) out.push("thinking 을 켜면 예산을 통째로 쓸 수 있습니다 — 도구 호출이 없을 수 있습니다.");
-    if (think.reason) out.push(think.reason);
-    return out;
-  }, [think.needsWarning, think.reason]);
+  // thinking 은 **기본 ON** 이다(사용자 지정, 2026-10-04) — "켜면 예산을 통째로 쓸 수 있습니다" /
+  // "상한을 넘어 thinking 을 끄고 도구 호출을 강제합니다" 안내는 상시 소음이라 **표시하지 않는다**.
+  // 상한 초과 시의 동작(강제 도구 호출)은 그대로이고 `think` 상태·테스트도 그대로다 — 화면만 조용하다.
+  const warnings = useMemo<string[]>(() => [], []);
   /** 패널 제목은 카탈로그에서 — 하드코딩하면 M9 누락이 조용히 남는다. */
   const t = useI18n();
 

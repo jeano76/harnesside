@@ -121,6 +121,11 @@ export interface TerminalSession {
   rows: number;
   /** 실제로 뜬 셸 — 요청과 다를 수 있다(없으면 폴백). 모르면 빈 문자열이 아니라 null. */
   shell: string | null;
+  /**
+   * tmux 위에서 도는 AI CLI 탭이면 그 정보. 이 탭의 PTY 는 `tmux attach` 클라이언트이고,
+   * 탭을 닫으면 **detach 만** 된다(CLI 는 tmux 안에서 계속 산다).
+   */
+  cli?: { provider: string; sessionName: string; yolo?: boolean };
 }
 
 export interface TerminalEvents {
@@ -239,6 +244,9 @@ export class TerminalManager {
     // 보여준다고 명시한다(거짓말하지 않기 위해).
     for (const e of this.tabs.values()) {
       if (e.session.state !== "running" || !e.pty) continue;
+      // **AI CLI 탭에는 `cd` 를 쓰지 않는다** — 그 입력은 셸이 아니라 claude/gemini 의
+      // 프롬프트로 들어간다. CLI 는 자기 폴더에서 계속 일한다.
+      if (e.session.cli) continue;
       e.session.cwd = target;
       e.pty.write(`cd ${shellQuote(target)}\n`);
     }
@@ -266,7 +274,12 @@ export class TerminalManager {
    * 말하면 사용자는 아무것도 안 보이는 탭을 붙잡게 된다.
    */
   create(
-    opts: { cwd?: string; cols?: number; rows?: number; title?: string; shell?: string; init?: string } = {}
+    opts: {
+      cwd?: string; cols?: number; rows?: number; title?: string; shell?: string; init?: string;
+      /** 셸 대신 이 프로그램을 PTY 로 띄운다(예: `tmux attach`). 주면 셸 탐색을 건너뛴다. */
+      command?: { file: string; args: string[]; env?: NodeJS.ProcessEnv };
+      cli?: { provider: string; sessionName: string; yolo?: boolean };
+    } = {}
   ): CreateResult {
     const max = this.opts.maxTabs ?? 8;
     const live = this.order.filter((id) => this.tabs.get(id)?.session.state === "running").length;
@@ -331,7 +344,7 @@ export class TerminalManager {
     // 명시 요청이 있으면 그 셸을 먼저 — 없으면 폴백(프로브 순서대로).
     // 요청 경로 검증은 shellCandidates 가 아니라 여기서 한다: 절대경로가 아니면
     // 요청 자체를 버리고 기본 순서로 간다(상대경로는 PATH 탐색이라 엉뚱한 것이 뜬다).
-    let explicit = opts.shell && opts.shell.startsWith("/") ? opts.shell : undefined;
+    let explicit = !opts.command && opts.shell && opts.shell.startsWith("/") ? opts.shell : undefined;
     // 명시 경로가 실행 불가면 여기서 버린다 — node-pty 는 없는 셸도 일단 열어
     // `execvp failed` 를 뒤늦게 찍으므로, 프로브 순서만으로는 폴백이 안 된다(실측).
     if (explicit) {
@@ -341,9 +354,9 @@ export class TerminalManager {
         explicit = undefined;
       }
     }
-    const candidates = shellCandidates(explicit ?? this.opts.shell, process.env);
+    const candidates = opts.command ? [opts.command.file] : shellCandidates(explicit ?? this.opts.shell, process.env);
     let shell = candidates[0]!;
-    for (const cand of candidates) {
+    for (const cand of opts.command ? [] : candidates) {
       const probe = trySpawn(cand, cwd, cols, rows);
       if (probe) {
         shell = cand;
@@ -366,11 +379,12 @@ export class TerminalManager {
       cols,
       rows,
       shell,
+      ...(opts.cli ? { cli: opts.cli } : {}),
     };
 
     let pty: IPty;
     try {
-      pty = ptySpawn(shell, [], {
+      pty = ptySpawn(shell, opts.command?.args ?? [], {
         name: "xterm-256color",
         cols,
         rows,
@@ -378,7 +392,7 @@ export class TerminalManager {
         // **사용자 셸 환경** 을 물려받되 로컬 변수는 뺀다 — PATH 에 개발용 junk 가 섞이면
         // 사용자가 터미널에서 못 찾는 명령이 나온다(measured: 로컬 PATH 에 phantomjs).
         // 로캘은 `ptyEnv` 가 UTF-8 로 맞춘다.
-        env: ptyEnv(process.env),
+        env: opts.command?.env ?? ptyEnv(process.env),
       });
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
@@ -460,6 +474,27 @@ export class TerminalManager {
     try {
       e.pty.resize(c, r);
       e.session = { ...e.session, cols: c, rows: r };
+      return { ok: true, detail: "" };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * 화면을 **다시 그리게 한다** — 새로 붙은 xterm 은 이미 돌고 있는 PTY 의 지난 출력을 모른다
+   * (새로고침·탭 전환·숨겼다 다시 보임). tmux 는 크기가 바뀔 때(SIGWINCH) 전체를 다시 그리므로
+   * 한 줄 줄였다가 되돌린다. 크기를 바꾸지 않는 요청은 아무것도 다시 그리지 않아 빈 화면으로 남는다
+   * (2026-10-04 실측: 클로드를 골라도 입력하기 전까지 메시지창이 빈 화면).
+   */
+  redraw(id: string): { ok: boolean; detail: string } {
+    const e = this.tabs.get(id);
+    if (!e?.pty) return { ok: false, detail: "살아 있는 셸이 없습니다" };
+    const { cols, rows } = e.session;
+    try {
+      e.pty.resize(cols, Math.max(5, rows - 1));
+      setTimeout(() => {
+        try { e.pty?.resize(cols, rows); } catch { /* 그 사이 끝났다 */ }
+      }, 60);
       return { ok: true, detail: "" };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };

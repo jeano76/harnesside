@@ -16,7 +16,7 @@ import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
 import { WorkspaceBar } from "./panels/WorkspaceBar.js";
 import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js";
-import { openView, toggleView, collapseView, addSlash, finishSlash, findSlash, toggleSlashFold, restartSlash } from "../session/blocks.js";
+import { openView, toggleView, collapseView, addSlash, finishSlash, toggleSlashFold, restartSlash } from "../session/blocks.js";
 import { ModelPanel } from "./panels/ModelPanel.js";
 import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
@@ -26,6 +26,7 @@ import { EditorView } from "./editor/EditorView.js";
 import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";
 import { webSlashCommands, parseSlash, slashMatches } from "../shared/slashCommands.js";
+import { CLI_PROVIDERS, CLI_SUBCOMMANDS } from "../shared/cliProviders.js";
 import { CommitBox } from "./panels/CommitBox.js";
 import { ResumeBanner } from "./panels/ResumeBanner.js";
 import { CrashBanner } from "./panels/CrashBanner.js";
@@ -98,6 +99,7 @@ const SLASH_TIPS: Record<string, string> = {
   "improve-apply": "/improve-apply — 제안 저장\n마지막 /improve 제안을 룰 파일로 저장합니다. 다음 세션부터 시스템 프롬프트에 자동 반영됩니다.\n저장할 제안이 없으면 먼저 /improve 를 실행하라고 알려줍니다.",
   "plan-clear": "/plan-clear — 계획 표시 초기화\n멈춘 계획 진행 표시와 체크포인트를 지웁니다.\n작업 중이던 계획 정보가 사라지므로 계획이 멈춰 있을 때만 사용하세요.",
   term: "/term — 터미널/브라우저 정보\n이 창의 브라우저, 플랫폼, 화면 크기·배율, 클립보드 사용 가능 여부를 보여줍니다.\n콘솔 전용 항목(제어문자·대체화면 등)은 웹 창에 해당이 없습니다.",
+  cli: "/cli — AI CLI 를 tmux 탭으로\n/cli : 설치된 CLI 와 살아 있는 세션 목록 (아무것도 만들지 않음)\n/cli claude | gemini | codex | shell : 해당 CLI 탭을 하단에 엽니다. 같은 폴더의 살아 있는 세션이 있으면 새로 만들지 않고 붙습니다.\n/cli <이름> new : 새 세션 · /cli <이름> resume : 지난 대화 이어가기(확인된 CLI만)\n/cli kill <세션명> confirm : hs-… 세션 종료(confirm 없으면 미리보기)\n탭을 닫아도 CLI 는 tmux 안에서 계속 실행됩니다. 이 탭의 작업은 harnesside 승인 게이트 밖에서 실행됩니다.",
   models: "/models — 구동 가능한 로컬 모델\n이 PC의 VRAM·RAM 기준으로 모델별 구동 가능 여부(✅ VRAM / ⚠️ RAM 스트리밍 / ❌)를 표로 보여줍니다.\n선택: 입력창에 /models <번호>. 실행 중인 서버를 바꾸려면 /models <번호> confirm 이 필요합니다(서버가 잠시 내려갑니다).",
   server: "/server — 모델 서버 상태\n지금 떠 있는 llama-server의 포트·모델·빌드와 재시작 시 계획을 보여줍니다.\n재시작: 입력창에 /server restart (변경 내용 미리보기) → /server restart confirm 으로 확정. 확정하면 실행 중인 서버를 내렸다 올립니다.",
   reset: "/reset — 설정 초기화\n현재 GPU·VRAM·RAM에 맞게 컨텍스트·스레드·오프로드 등 llama 설정을 다시 계산합니다.\n그냥 실행하면 미리보기만 하며 아무것도 바꾸지 않습니다. 적용은 /reset confirm (설정 파일을 덮어쓰며, 실행 중인 서버에는 /server restart 로 따로 반영).",
@@ -158,6 +160,21 @@ export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceFingerprint | null>(null);
   const [tree, setTree] = useState<{ name: string; kind: "dir" | "file"; size: number }[] | null>(null);
   // §5.3 Think + §5.4 블록. 델타는 WS 로 온다(폴링이 아니다).
+  // ── 프롬프트 대상: harnesside 에이전트 ↔ 활성 AI CLI 탭 ─────────────────────
+  // 활성 터미널 탭이 tmux 위의 AI CLI 면 입력창이 **그 CLI 의 입력창**이 된다(슬래시 추천도
+  // 그 CLI 의 것). 대상은 입력창에 항상 보인다 — 엉뚱한 곳으로 보내지 않게.
+  interface CliTarget { terminalId: string; provider: string; sessionName: string; title: string; cwd: string; alive: boolean; /** 사람이 연/고른 활성화인가 — 새로고침 복원은 false(복원 직후엔 로컬 대화로 시작한다) */ auto?: boolean; yolo?: boolean }
+  const [cliTarget, setCliTarget] = useState<CliTarget | null>(null);
+  const [promptTo, setPromptTo] = useState<"agent" | "cli">("agent");
+  const [cliCmds, setCliCmds] = useState<{ provider: string; commands: { name: string; description: string; source: string; label: string }[]; notes: string[]; stale: boolean } | null>(null);
+  const toCli = promptTo === "cli" && cliTarget !== null;
+  // CLI 대상일 때 터미널을 **메시지 출력창 자리**에 크게 보인다. harnesside 대화를 보려면 대상을 로컬로 바꾼다.
+  const msgRef = useRef<HTMLDivElement | null>(null);
+  const [msgRect, setMsgRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const termOverlay = toCli;
+  // 사용자 환경에 **등록(설치)된** 모델/CLI 목록 — 프롬프트 옆 선택기의 항목이다.
+  const [cliProviders, setCliProviders] = useState<{ id: string; label: string; installed: boolean | null; installHint: string }[]>([]);
+  const [focusReq, setFocusReq] = useState<{ n: number; session: unknown } | null>(null);
   const [blocks, setBlocks] = useState<AgentBlock[]>([]);
   const [think, setThink] = useState<ThinkState>(() => initialThink());
   const [turnRunning, setTurnRunning] = useState(false);
@@ -208,9 +225,26 @@ export default function App() {
     // 슬래시 명령을 입력창에 직접 써도 된다(`/models 3`, `/copy 20`) — 모델로 보내지 않고
     // 명령으로 실행한다. 등록된 명령이 아니면(`/home/...`) 평범한 문장이라 그대로 보낸다.
     const sl = parseSlash(text);
-    if (sl && webSlashCommands().some((c) => c.key === sl.key)) {
+    // CLI 대상일 때는 `/cli` 만 harnesside 명령이다 — 그 밖의 `/…` 은 CLI 자신의 명령이라 그대로 전달한다.
+    if (sl && (!toCli || sl.key === "cli") && webSlashCommands().some((c) => c.key === sl.key)) {
       setDraft("");
       void runSlash(sl.key, sl.arg);
+      return;
+    }
+    if (toCli && cliTarget) {
+      if (!cliTarget.alive) {
+        pushToast({ id: "cli:dead", kind: "warn", title: `${cliTarget.title} 이(가) 끝났습니다`, body: "/cli 로 다시 여세요.", at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "agent" });
+        return;
+      }
+      // 여러 줄은 bracketed paste 로 한 번에, 한 줄은 그대로 + Enter. 입력 경로는 attach PTY 하나다.
+      const data = text.includes("\n") ? `\x1b[200~${text}\x1b[201~\r` : `${text}\r`;
+      setDraft("");
+      try {
+        await client.post(`/api/terminal/${encodeURIComponent(cliTarget.terminalId)}/input`, { data });
+      } catch (e) {
+        setDraft(text);
+        pushToast({ id: "cli:send", kind: "error", title: `${cliTarget.title} 로 보내지 못했습니다`, body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 12_000, requiresAck: false, source: "agent" });
+      }
       return;
     }
     setTurnRunning(true);
@@ -232,7 +266,7 @@ export default function App() {
       setTurnRunning(false);
       pushToast({ id: "turn:fail", kind: "error", title: "턴 요청이 실패했습니다", body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
     }
-  }, [draft, pushToast]);
+  }, [draft, pushToast, toCli, cliTarget]);
 
   /**
    * 슬래시 버튼 — llamacli(TUI)의 `onSlashCommand` 와 **같은 내용**을 웹에서 실행하고,
@@ -245,8 +279,11 @@ export default function App() {
    * Enter 로 보내면 실행된다. 이미 쓰던 글이 있으면 명령으로 바꾼다.
    */
   const fillSlash = useCallback((key: string) => {
-    const withArg = key === "models" || key === "server" || key === "reset";
+    const withArg = key === "models" || key === "server" || key === "reset" || key === "cli";
     const text = `/${key}${withArg ? " " : ""}`;
+    // 이 버튼들은 **harnesside 의 명령**이다 — CLI 대상 상태로 두면 Enter 가 CLI 로 가 버린다
+    // (`/quit` 이 CLI 를 끌 수 있다). `/cli` 만 대상과 무관하다.
+    if (key !== "cli") setPromptTo("agent");
     setDraft(text);
     requestAnimationFrame(() => {
       const el = draftRef.current;
@@ -256,23 +293,162 @@ export default function App() {
     });
   }, []);
 
+  const refreshProviders = useCallback(() => {
+    void client.get<{ providers: { id: string; label: string; installed: boolean | null; installHint: string }[] }>("/api/cli/providers")
+      .then((r) => setCliProviders(r.providers))
+      .catch(() => { /* 목록을 못 읽어도 local 은 항상 고를 수 있다 */ });
+  }, []);
+  useEffect(() => { refreshProviders(); }, [refreshProviders]);
+  /**
+   * 프롬프트 대상 선택 — `local`(harnesside 의 로컬 모델 에이전트) 또는 CLI 프로바이더.
+   * CLI 를 고르면 **그 CLI 의 탭을 열거나(없으면 만들고) 활성화**한다 — 대상과 보이는 탭이 항상 같다.
+   */
+  const [yoloAsk, setYoloAsk] = useState(false);
+  const pickTarget = useCallback(async (id: string, opts: { yolo?: boolean; resume?: boolean } = {}) => {
+    if (id === "local") { setPromptTo("agent"); return; }
+    try {
+      const r = await client.post<{ session: unknown }>("/api/cli/sessions", { provider: id, yolo: opts.yolo === true, resume: opts.resume === true });
+      setFocusReq({ n: Date.now(), session: r.session });
+      setPromptTo("cli");
+    } catch (e) {
+      pushToast({ id: "cli:pick", kind: "error", title: "CLI 를 열지 못했습니다", body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 12_000, requiresAck: false, source: "agent" });
+    }
+  }, [pushToast]);
+  useEffect(() => {
+    const el = msgRef.current;
+    if (!el) return;
+    const upd = () => { const r = el.getBoundingClientRect(); setMsgRect({ left: r.left, top: r.top, width: r.width, height: r.height }); };
+    upd();
+    const ro = new ResizeObserver(upd);
+    ro.observe(el);
+    window.addEventListener("resize", upd);
+    return () => { ro.disconnect(); window.removeEventListener("resize", upd); };
+  }, []);
+  const onActiveCli = useCallback((t: CliTarget | null) => setCliTarget(t), []);
+  // 활성 탭이 바뀌면 대상을 맞춘다(CLI 탭 → CLI, 그 밖 → harnesside). 그 뒤의 수동 전환은 존중한다.
+  useEffect(() => {
+    // 복원(auto=false)은 대상을 **바꾸지 않는다** — 복원 응답이 사람의 선택보다 늦게 와도 그 선택을 덮지 않는다.
+    if (!cliTarget) setPromptTo("agent");
+    else if (cliTarget.auto) setPromptTo("cli");
+  }, [cliTarget?.terminalId, cliTarget?.auto]);
+  // 이 CLI 의 슬래시 명령 — 내장 표 + 작업 폴더/홈에서 스캔한 사용자 정의.
+  useEffect(() => {
+    if (!cliTarget) { setCliCmds(null); return; }
+    let alive = true;
+    void client.get<{ provider: string; commands: { name: string; description: string; source: string; label: string }[]; notes: string[]; stale: boolean }>(`/api/cli/commands?provider=${encodeURIComponent(cliTarget.provider)}&cwd=${encodeURIComponent(cliTarget.cwd)}`)
+      .then((r) => { if (alive) setCliCmds(r); })
+      .catch(() => { if (alive) setCliCmds(null); });
+    return () => { alive = false; };
+  }, [cliTarget?.provider, cliTarget?.cwd]);
+
   // ── 슬래시 자동완성 ─────────────────────────────────────────────────────────
-  // 입력이 `/` 로 시작하고 아직 명령명(첫 토큰)을 쓰는 중이면 후보를 띄운다.
-  // 공백 뒤(인자를 쓰는 중)에는 띄우지 않는다. 후보는 웹에서 실행되는 명령만이다.
+  // 입력이 `/` 로 시작하면 후보를 띄운다. 첫 토큰은 명령명, `/cli ` 뒤는 **두 번째 토큰**
+  // (프로바이더·`kill`), `/cli <프로바이더> ` 뒤는 세 번째 토큰(`new`·`resume`)을 추천한다.
+  // 후보는 웹에서 실행되는 명령만이다. 프로바이더 이름은 `shared/cliProviders` 가 정본이다.
+  interface SlashItem { fill: string; exact: string; label: string; description: string; tip?: string; dim?: boolean }
   const [slashIdx, setSlashIdx] = useState(0);
   const [slashHidden, setSlashHidden] = useState(false);
-  const slashItems = useMemo(() => {
-    if (!draft.startsWith("/") || /\s/.test(draft.trimStart().slice(1)) || draft.includes("\n")) return [];
+  const [cliInstalled, setCliInstalled] = useState<Record<string, boolean | null>>({});
+  const wantsCli = /^\/cli\s/i.test(draft);
+  useEffect(() => {
+    if (!wantsCli) return;
+    let alive = true;
+    void client.get<{ providers: { id: string; installed: boolean | null }[] }>("/api/cli/providers")
+      .then((r) => { if (alive) setCliInstalled(Object.fromEntries(r.providers.map((p) => [p.id, p.installed]))); })
+      .catch(() => { /* 설치 여부를 몰라도 후보는 보인다 */ });
+    return () => { alive = false; };
+  }, [wantsCli]);
+  const slashItems = useMemo<SlashItem[]>(() => {
+    if (!draft.startsWith("/") || draft.includes("\n")) return [];
+    const third = /^\/cli\s+(claude|gemini|codex|shell)\s+(\S*)$/i.exec(draft);
+    if (third) {
+      const q = third[2]!.toLowerCase();
+      return (["new", "resume"] as const).filter((x) => x.includes(q)).map((x) => ({
+        fill: `/cli ${third[1]!.toLowerCase()} ${x}`, exact: `/cli ${third[1]!.toLowerCase()} ${x}`, label: x,
+        description: x === "new" ? "같은 폴더에 이미 있어도 새 세션" : "지난 대화 이어가기(확인된 CLI만)",
+      }));
+    }
+    const second = /^\/cli\s+(\S*)$/i.exec(draft);
+    if (second) {
+      const q = second[1]!.toLowerCase();
+      const provs: SlashItem[] = CLI_PROVIDERS.filter((p) => p.id.includes(q)).map((p) => {
+        const inst = cliInstalled[p.id];
+        return {
+          fill: `/cli ${p.id}`, exact: `/cli ${p.id}`, label: p.id,
+          description: `${p.label}${inst === false ? " — 설치 안 됨" : inst === true ? "" : ""}`,
+          tip: inst === false ? p.installHint : undefined, dim: inst === false,
+        };
+      });
+      const subs: SlashItem[] = CLI_SUBCOMMANDS.filter((x) => x === "kill" && x.includes(q)).map((x) => ({
+        fill: `/cli ${x} `, exact: `/cli ${x}`, label: x, description: "hs-… 세션 종료 (/cli kill <세션명> confirm)",
+      }));
+      return [...provs, ...subs];
+    }
+    // ── 인자를 받는 harnesside 명령(`/models` `/server` `/reset`) — 버튼이 뒤에 공백을 남기므로 **공백 뒤에도**
+    // 추천이 이어져야 한다. 첫 항목은 "인자 없이 실행"이라 Enter 로 바로 목록/상태/미리보기를 볼 수 있다.
+    if (!toCli) {
+      const arg3 = /^\/(server\s+restart|models\s+\S+)\s+(\S*)$/i.exec(draft);
+      if (arg3) {
+        const q = arg3[2]!.toLowerCase();
+        const base = `/${arg3[1]!.replace(/\s+/g, " ").toLowerCase()}`;
+        return "confirm".includes(q)
+          ? [{ fill: `${base} confirm`, exact: `${base} confirm`, label: "confirm", description: base.startsWith("/server") ? "실행 중인 서버를 내렸다 올립니다(확정)" : "교체를 확정합니다(실행 중인 서버가 잠시 내려갑니다)" }]
+          : [];
+      }
+      const arg2 = /^\/(models|server|reset)\s+(\S*)$/i.exec(draft);
+      if (arg2) {
+        const cmd = arg2[1]!.toLowerCase();
+        const q = arg2[2]!.toLowerCase();
+        const none: SlashItem = { fill: `/${cmd}`, exact: `/${cmd}`, label: `/${cmd}`, description: cmd === "models" ? "인자 없이 실행 — 구동 가능한 모델 목록" : cmd === "server" ? "인자 없이 실행 — 서버 상태 보기" : "인자 없이 실행 — 변경 미리보기(아무것도 바꾸지 않음)", tip: SLASH_TIPS[cmd] };
+        const more: SlashItem[] =
+          cmd === "server" ? [{ fill: "/server restart", exact: "/server restart", label: "restart", description: "재시작 미리보기 → 이어서 confirm" }]
+          : cmd === "reset" ? [{ fill: "/reset confirm", exact: "/reset confirm", label: "confirm", description: "설정을 다시 계산해 덮어씁니다(확정)" }]
+          : ["1", "2"].map((n) => ({ fill: `/models ${n}`, exact: `/models ${n}`, label: n, description: `목록의 ${n}번으로 교체 — 먼저 /models 로 목록을 확인하세요` }));
+        // 이미 쓴 글이 어느 후보와 정확히 같으면 그것을 맨 위로 — Enter 가 곧바로 실행된다.
+        const typed = draft.trim().toLowerCase();
+        return [none, ...more.filter((m) => m.label.startsWith(q) || q === "")].sort((a, b) => Number(b.exact === typed) - Number(a.exact === typed));
+      }
+    }
+    if (/\s/.test(draft.trimStart().slice(1))) return [];
+    if (toCli && cliCmds && !/^\/cli$/i.test(draft)) {
+      // CLI 대상: 그 CLI 의 명령만 추천한다(+ harnesside 의 `/cli` 하나). 이름이 겹쳐도 CLI 것이 우선이다.
+      const q = draft.slice(1).toLowerCase();
+      const hits = cliCmds.commands
+        .filter((c) => c.name.toLowerCase().includes(q))
+        .sort((a, b) => Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)));
+      const items: SlashItem[] = hits.map((c) => ({
+        fill: `/${c.name}`, exact: `/${c.name}`, label: `/${c.name}`,
+        description: `${c.source === "custom" ? `[${c.label}] ` : ""}${c.description}`,
+        tip: `${c.description || c.name}\n출처: ${c.label}`,
+      }));
+      if ("cli".includes(q) && q.length > 0) items.push({ fill: "/cli ", exact: "/cli", label: "/cli", description: "[harnesside] AI CLI 탭 관리" });
+      return items;
+    }
     const web = new Set(webSlashCommands().map((c) => c.key));
-    return slashMatches(draft).filter((c) => web.has(c.key));
-  }, [draft]);
+    const typed = draft.slice(1).toLowerCase();
+    return slashMatches(draft).filter((c) => web.has(c.key)).sort((a, b) => Number(b.key.startsWith(typed)) - Number(a.key.startsWith(typed))).map((c) => ({
+      fill: `/${c.key}${c.key === "models" || c.key === "server" || c.key === "reset" || c.key === "cli" ? " " : ""}`,
+      exact: `/${c.key}`, label: c.label, description: c.description, tip: SLASH_TIPS[c.key],
+    }));
+  }, [draft, cliInstalled, toCli, cliCmds]);
   const slashOpen = slashItems.length > 0 && !slashHidden;
   useEffect(() => { setSlashIdx(0); setSlashHidden(false); }, [draft]);
   /** 후보를 입력창에 **완성**한다 — 실행은 하지 않는다(Enter 로 보낸다). */
-  const completeSlash = useCallback((key: string) => fillSlash(key), [fillSlash]);
+  const completeSlash = useCallback((text: string) => {
+    setDraft(text);
+    requestAnimationFrame(() => {
+      const el = draftRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(text.length, text.length);
+    });
+  }, []);
 
   const quitArmedAt = useRef(0);
   const runSlash = useCallback(async (key: string, arg = "", fromButton = true) => {
+    // harnesside 명령의 결과는 대화창에 쌓인다 — 터미널이 그 자리를 덮고 있으면(CLI 대상에서 `/cli …` 를 친 경우)
+    // 대상을 로컬로 돌려 결과가 보이게 한다. `/cli <이름>` 처럼 CLI 를 여는 명령은 끝에서 다시 CLI 대상으로 바꾼다.
+    setPromptTo("agent");
     // `/quit` 는 두 번 눌러야 종료한다(llamacli 도 확인 없이 끝내지 않는다).
     if (key === "quit") {
       const at = Date.now();
@@ -296,7 +472,10 @@ export default function App() {
     // 같은 버튼을 다시 누르면 **새로 쌓지 않는다** — 열려 있으면 접고, 접혀 있으면
     // 펼치면서 다시 실행한다(설정 버튼과 같은 규칙). 인자가 있는 입력(`/models 3`)은
     // 매번 **새 대화**다 — 다른 요청이기 때문이다.
-    const existing = fromButton && !arg ? findSlash(blocksRef.current, key) : undefined;
+    // 인자 없는 같은 명령의 결과만 대상이다 — `/cli kill …` 같은 인자 있는 결과를 접어 버리면 안 된다.
+    const existing = fromButton && !arg
+      ? [...blocksRef.current].reverse().find((b) => b.kind === "view" && b.view?.what === "slash" && b.view.path === key && blocksRef.current.find((u) => u.id === `${b.id}-user`)?.text === `/${key}`)
+      : undefined;
     let id: string;
     if (existing) {
       if (existing.view?.viewCollapsed !== true && existing.view?.slashState !== "running") {
@@ -331,6 +510,50 @@ export default function App() {
             : r.detail,
           r.ok
         );
+      } else if (key === "cli") {
+        const toks = arg.trim().split(/\s+/).filter(Boolean);
+        if (toks.length === 0) {
+          const [st, ss] = await Promise.all([
+            client.get<{ tmux: { installed: boolean; version: string | null; socket?: string }; providers: { id: string; label: string; installed: boolean | null; version: string | null; installHint: string; resumeSupported: boolean }[] }>("/api/cli/status"),
+            client.get<{ sessions: { name: string; cwd: string; attachedClients: number; dead: boolean; exitCode: number | null }[]; socket?: string }>("/api/cli/sessions"),
+          ]);
+          let last = "";
+          try { last = localStorage.getItem("harnesside.cli.last") ?? ""; } catch { /* 기억 못 해도 동작한다 */ }
+          const order = [...st.providers].sort((a, b) => (a.id === last ? -1 : b.id === last ? 1 : 0));
+          done([
+            `tmux: ${st.tmux.installed ? `${st.tmux.version ?? "?"} (소켓 ${st.tmux.socket ?? "기본"})` : "없음 — sudo apt install tmux"}`,
+            "",
+            "CLI",
+            ...order.map((p) => `  ${p.id.padEnd(7)} ${p.label.padEnd(14)} ${p.installed === true ? `✅ 설치됨${p.version ? ` (${p.version})` : ""}` : p.installed === false ? `❌ 설치 안 됨 — ${p.installHint}` : "❔ 확인하지 못함(시간 초과)"}${p.id === last ? "  ← 마지막 선택" : ""}`),
+            "",
+            ss.sessions.length ? "살아 있는 세션 (hs-*)" : "살아 있는 세션이 없습니다.",
+            ...ss.sessions.map((x) => `  ${x.name}  ${x.dead ? `종료됨(코드 ${x.exitCode ?? "?"})` : `실행 중 · 붙은 창 ${x.attachedClients}`}  ${x.cwd}\n    외부에서 붙기: tmux${ss.socket ? ` -L ${ss.socket}` : ""} attach -t ${x.name}`),
+            "",
+            "열기: /cli claude · /cli gemini · /cli codex · /cli shell   (새 세션 /cli claude new · 이어가기 /cli claude resume)",
+            "종료: /cli kill <세션명> confirm",
+          ].join("\n"));
+        } else if (toks[0] === "kill") {
+          const name = toks[1] ?? "";
+          if (!name) return done("사용법: /cli kill <세션명> [confirm]", false);
+          const r = await client.post<{ ok: boolean; detail: string }>(`/api/cli/sessions/${encodeURIComponent(name)}/kill`, { confirm: toks[2] === "confirm" });
+          done(r.detail, r.ok || toks[2] !== "confirm");
+        } else {
+          const provider = toks[0]!;
+          const sub = toks[1];
+          if (sub && sub !== "new" && sub !== "resume") return done(`알 수 없는 옵션입니다: ${sub} (new · resume)`, false);
+          const r = await client.post<{ sessionName: string; reused: boolean; attachCommand: string; session: { title: string; cwd: string }; notes: string[] }>("/api/cli/sessions", { provider, forceNew: sub === "new", resume: sub === "resume" });
+          try { localStorage.setItem("harnesside.cli.last", provider); } catch { /* 무시 */ }
+          // 이미 열린 세션에 다시 붙은 경우엔 `terminal.open` 이 오지 않는다 — 직접 그 탭을 띄우고 대상을 맞춘다.
+          setFocusReq({ n: Date.now(), session: r.session });
+          setPromptTo("cli");
+          done([
+            `${r.session.title} 탭을 ${r.reused ? "다시 붙였습니다 (살아 있는 세션)" : "열었습니다"} — 메시지창 자리에 터미널이 떴습니다.`,
+            `  세션 ${r.sessionName} · 폴더 ${r.session.cwd}`,
+            `  외부에서 붙기: ${r.attachCommand}`,
+            "  탭을 닫아도 CLI 는 계속 실행됩니다. 이 탭의 작업은 harnesside 승인 게이트 밖에서 실행됩니다.",
+            ...r.notes.map((n) => `  ! ${n}`),
+          ].join("\n"));
+        }
       } else if (key === "models" || key === "server" || key === "reset") {
         // 서버가 오래 걸리는 일(내려받기·재시작)을 하므로 작업으로 돌리고 출력을 따라간다.
         let job = await client.post<{ id: string; text: string; done: boolean; ok: boolean }>("/api/slash/run", { key, arg });
@@ -709,9 +932,6 @@ export default function App() {
   const commands: Command[] = useMemo(
     () => [
       { id: "view.toggleLog", title: "서버 로그 접기/펼치기", category: "보기", keys: [], run: () => setLogOpen((v) => !v) },
-      { id: "view.biggerShell", title: "셸 영역 키우기", category: "보기", keys: [], run: () => setBottomH((h) => Math.max(64, h - 80)) },
-      { id: "view.smallerShell", title: "셸 영역 줄이기", category: "보기", keys: [], run: () => setBottomH((h) => Math.min(window.innerHeight * 0.35, h + 80)) },
-      { id: "view.resetShell", title: "셸 영역 크기 초기화", category: "보기", keys: [], run: () => setBottomH(DEFAULT_BOTTOM_H) },
       {
         id: "view.openSettings",
         title: "설정 열기",
@@ -832,6 +1052,8 @@ export default function App() {
       <TerminalView
         client={client}
         onNotice={notice}
+        onActiveCli={onActiveCli}
+        focusRequest={focusReq as never}
       />
     ),
     // ── 설정은 **대화 안의 블록**이다 (2026-10-01) ────────────────
@@ -845,47 +1067,9 @@ export default function App() {
   const full = bufferFullLabel(logStatus);
   const bootDone = steps?.filter((s) => s.ok).length ?? 0;
 
-  // ── 셸 구조 (2026-10-01 사용자 사양 · 높이 축소) ────────────────────────────
-  //
-  //   ┌──────────────────────────────────────────────┐
-  //   │  메시지창 (에이전트 출력, 가장 넓게, 위)       │  ← 1fr
-  //   ├──────────────────────────────────────────────┤
-  //   │  프롬프트 영역 (대화 바로 아래)                │  ← 고정
-  //   ├──────────────────────────────────────────────┤
-  //   │  셸 윈도우 (짧게 — 길 필요 없음)              │  ← DEFAULT_BOTTOM_H
-  //   ├──────────────────────────────────────────────┤
-  //   │  서버 로그 (접힘 기본)                        │
-  //   └──────────────────────────────────────────────┘
-  //
-  // **왜 좌우 존을 없앴나**: 좌우에 260px 과 380px 을 두면 1600px 창에서 **46%** 가
-  // 대화가 아니다. 이 프로그램의 첫 화면은 대화다.
-  // **왜 셸을 짧게 두나**: 셸은 명령을 확인하는 자리지 읽는 자리가 아니다.
-  // 길면 메시지창을 밀어낸다.
-  //
-  // **높이는 기본값과 동일시한다** (사용자 요구). 저장된 값이 기본보다 크면 **옛 기본값
-  // (260) 이 남은 것** 이라서 버린다 — 예전 기본은 260 이었고 저장본이 그 값이라
-  // "짧게 해달라" 고 바꿔도 첫 화면이 그대로 길게 보인다. **조용히 남겨두면 사용자는
-  // "바뀌지 않았다" 고 읽는다.** 이번 실행에서 드래그로 키운 값도 다음 기동엔
-  // 기본으로 돌아간다 — 그게 "기본 높이와 동일" 이라는 요구다.
-  const DEFAULT_BOTTOM_H = 104; // 셸 4줄 + 정보줄 + 모니터 스트립
-  const [bottomH, setBottomH] = useState(() => {
-    try {
-      const stored = Number(localStorage.getItem("harnesside.bottomH"));
-      const v = Number.isFinite(stored) && stored > 0 ? Math.min(stored, DEFAULT_BOTTOM_H) : DEFAULT_BOTTOM_H;
-      if (typeof window !== "undefined") return Math.max(64, Math.min(window.innerHeight * 0.35, v));
-      return Math.max(64, Math.min(300, v));
-    } catch {
-      return DEFAULT_BOTTOM_H;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem("harnesside.bottomH", String(Math.round(bottomH)));
-    } catch {
-      /* 저장 불가 — 이번 실행에만 적용 */
-    }
-  }, [bottomH]);
-
+  // ── 화면 구조 (2026-10-04) ──────────────────────────────────────────────
+  //   메시지창(1fr) → 프롬프트 → 모니터 줄 → 서버 로그(접힘)
+  // **하단 셸 창은 없다**(사용자 요구: 완전 제거). 터미널은 AI CLI 를 고른 때만 메시지창 자리에 뜬다.
   /** 로그 접힘 — **기본 접힘**(2026-10-01). 데몬 상태 창이지 매번 보는 창이 아니다. */
   const [logOpen, setLogOpen] = useState(() => {
     try {
@@ -928,16 +1112,6 @@ export default function App() {
     window.addEventListener("pointerup", up);
   };
 
-  const onBottomSepDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startH = bottomH;
-    // 마우스가 내려가면(shrink above) 쉘이 낮아진다. 기본 160 — 길 필요 없다.
-    const move = (ev: MouseEvent) => setBottomH(Math.max(64, Math.min(window.innerHeight * 0.35, startH - (ev.clientY - startY))));
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
 
   /* LeftBand/SeparatorV removed 2026-10-04 (see layout note above). */
 
@@ -947,10 +1121,9 @@ export default function App() {
     <div
       style={{
         display: "grid",
-        // 열은 **하나**다(중앙 열: 대화→입력, 하단 행: 셸+계측). 행은 상단 바 ·
-        // 중앙 열(flex) · 하단 쉘(bottomH)만 — 로그 footer 는 쉘 아래 별도 행.
+        // 열은 하나다. 행은 상단 바 · 중앙 열(대화→입력) · 모니터 줄 · 로그.
         gridTemplateColumns: "1fr",
-        gridTemplateRows: `28px minmax(0, 1fr) 0px ${bottomH}px auto`,
+        gridTemplateRows: `28px minmax(0, 1fr) auto auto`,
         height: "100vh",
         background: BG,
         color: FG,
@@ -1009,7 +1182,7 @@ export default function App() {
 
       {/* ── 중앙 열 (2026-10-04): 탐색기 완전 제거 — 출력 → 입력 → 쉘 순서. */}
       <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0, minWidth: 0 }}>
-        <div className="elev-1" style={{ flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", padding: 6 }}>
+        <div ref={msgRef} className="elev-1" style={{ flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", padding: 6 }}>
           {BODY.agent}
         </div>
         {slashOpen && (
@@ -1017,19 +1190,22 @@ export default function App() {
             <div role="listbox" aria-label="슬래시 명령 추천" style={{ position: "absolute", left: 8, bottom: 4, minWidth: 380, maxWidth: "calc(100% - 16px)", maxHeight: 240, overflowY: "auto", background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, boxShadow: "0 4px 16px rgba(0,0,0,.5)" }}>
               {slashItems.map((c, i) => (
                 <div
-                  key={c.key}
+                  key={c.fill}
                   role="option"
                   aria-selected={i === slashIdx}
-                  title={SLASH_TIPS[c.key] ?? c.description}
+                  title={c.tip ?? c.description}
                   onMouseEnter={() => setSlashIdx(i)}
-                  onMouseDown={(e) => { e.preventDefault(); completeSlash(c.key); }}
+                  onMouseDown={(e) => { e.preventDefault(); completeSlash(c.fill); }}
                   style={{ display: "flex", gap: 10, padding: "4px 10px", cursor: "pointer", background: i === slashIdx ? "#1f6feb33" : "transparent", fontSize: 12 }}
                 >
-                  <span style={{ color: FG, fontWeight: 700, minWidth: 110 }}>{c.label}</span>
+                  <span style={{ color: c.dim ? DIM : FG, fontWeight: 700, minWidth: 110 }}>{c.label}</span>
                   <span style={{ color: DIM, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.description}</span>
                 </div>
               ))}
-              <div style={{ padding: "2px 10px", fontSize: 10, color: DIM, borderTop: `1px solid ${BORDER}` }}>↑↓ 선택 · Tab/Enter 완성 · Esc 닫기</div>
+              <div style={{ padding: "2px 10px", fontSize: 10, color: DIM, borderTop: `1px solid ${BORDER}` }}>
+                {toCli && cliTarget ? `${cliTarget.title} 명령 · ` : ""}↑↓ 선택 · Tab/Enter 완성 · Esc 닫기
+                {toCli && cliCmds?.stale ? " · ⚠ 내장 명령 표가 오래됐거나 미확인일 수 있음" : ""}
+              </div>
             </div>
           </div>
         )}
@@ -1046,7 +1222,7 @@ export default function App() {
           }}
           style={{ flex: "0 0 auto", height: 6, cursor: "row-resize", background: "transparent" }}
         />
-        <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: 0, borderTop: `1px solid ${BORDER}`, borderRadius: 0, margin: 0, background: "#161b22" }}>
+        <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: 0, borderTop: `2px solid ${toCli ? (cliTarget?.yolo ? "#f85149" : "#a371f7") : BORDER}`, borderRadius: 0, margin: 0, background: "#161b22" }}>
           <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
           <textarea ref={draftRef} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
@@ -1055,14 +1231,14 @@ export default function App() {
               if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashItems.length) % slashItems.length); return; }
               if (e.key === "Escape") { e.preventDefault(); setSlashHidden(true); return; }
               const pick = slashItems[Math.min(slashIdx, slashItems.length - 1)];
-              if (e.key === "Tab") { e.preventDefault(); completeSlash(pick.key); return; }
-              // Enter: 이미 명령명을 정확히 썼으면 실행, 아니면 선택한 후보로 **완성**한다.
-              if (e.key === "Enter" && !e.shiftKey && draft.trim().slice(1).toLowerCase() !== pick.key) { e.preventDefault(); completeSlash(pick.key); return; }
+              if (e.key === "Tab") { e.preventDefault(); completeSlash(pick.fill); return; }
+              // Enter: 이미 이 후보를 정확히 썼으면 실행, 아니면 선택한 후보로 **완성**한다.
+              if (e.key === "Enter" && !e.shiftKey && draft.trim().toLowerCase() !== pick.exact) { e.preventDefault(); completeSlash(pick.fill); return; }
             }
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (draft.trim()) void sendTurn(); }
-          }} placeholder="무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)" aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
+          }} placeholder={toCli && cliTarget ? `${cliTarget.title} 로 보냅니다 (Enter 로 전송 · Shift+Enter 줄바꿈 · / 로 이 CLI 의 명령)` : "무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)"} aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
           <button type="button" disabled={!draft.trim()} onClick={() => void sendTurn()} style={{ flex: "0 0 auto", alignSelf: "stretch", margin: 6, padding: "0 16px", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
-            {turnRunning ? "대기열에 추가" : "보내기"}
+            {toCli ? "CLI로 보내기" : turnRunning ? "대기열에 추가" : "보내기"}
           </button>
           </div>
           {/* O4 대기열 — 실행 중 들어온 입력과 순서 변경. 칩의 ↑↓로 순서를 바꾼다. */}
@@ -1082,39 +1258,53 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
             <span style={{ fontSize: 11, color: FG, fontWeight: 700 }}>프롬프트</span>
             <button type="button" onClick={() => { clearDraft(typeof localStorage !== "undefined" ? localStorage : null); setDraft(""); }} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}>지우기</button>
-            <span style={{ width: 1, alignSelf: "stretch", background: BORDER }} />
-            <div role="toolbar" aria-label="슬래시 명령" style={{ display: "flex", gap: 4, flex: 1, minWidth: 0, overflowX: "auto" }}>
-              {webSlashCommands().map((c) => (
-                <button key={c.key} type="button" title={`${SLASH_TIPS[c.key] ?? c.description}\n\n클릭하면 입력창에 채워지고, Enter 로 실행합니다. 같은 명령을 다시 실행하면 결과를 접고 폅니다.`} onClick={() => fillSlash(c.key)} style={{ flex: "0 0 auto", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 8px", cursor: "pointer", font: "inherit", fontSize: 11 }}>
-                  /{c.key}
-                </button>
+            <select
+              aria-label="프롬프트 대상"
+              title="이 입력창이 보내는 곳 — 로컬 모델(harnesside 에이전트) 또는 사용자 환경에 설치된 AI CLI. 고르면 그 모델에 맞는 슬래시 명령이 제공됩니다."
+              value={toCli && cliTarget ? cliTarget.provider : "local"}
+              onFocus={refreshProviders}
+              onChange={(e) => void pickTarget(e.target.value)}
+              style={{ background: toCli ? "#a371f733" : "#1f6feb33", color: "#f0f6fc", border: `2px solid ${toCli ? "#a371f7" : "#58a6ff"}`, borderRadius: 6, font: "inherit", fontSize: 13, fontWeight: 700, padding: "3px 10px", minWidth: 260, maxWidth: 380, cursor: "pointer", colorScheme: "dark" }}
+            >
+              <option value="local" style={{ background: "#161b22", color: "#f0f6fc" }}>local_model{modelName ? ` · ${modelName.split("/").pop()}` : ""}</option>
+              {cliProviders.filter((p) => p.id !== "shell").map((p) => (
+                <option key={p.id} value={p.id} style={{ background: "#161b22", color: p.installed === false ? "#6e7681" : "#f0f6fc" }} disabled={p.installed === false} title={p.installed === false ? p.installHint : undefined}>
+                  ◆ {p.label}{p.installed === false ? " — 설치 안 됨" : p.installed === null ? " — 확인 못 함" : ""}
+                </option>
               ))}
-            </div>
+            </select>
+                        {toCli && cliTarget && (() => {
+              const prov = CLI_PROVIDERS.find((p) => p.id === cliTarget.provider);
+              const supported = !!prov?.yoloArgs;
+              return (
+                <label title={supported ? "YOLO — 승인·확인 요청을 모두 자동 허용합니다(파일 수정·명령 실행이 묻지 않고 진행). 켜면 이 폴더에서 YOLO 세션을 새로 시작합니다(이전 대화는 이어가기)." : `${prov?.label ?? "이 CLI"} 의 YOLO 인자를 확인하지 못했습니다(미확인) — 지원하지 않습니다.`} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: cliTarget.yolo ? "#f85149" : supported ? FG : DIM, fontWeight: cliTarget.yolo ? 700 : 400, cursor: supported ? "pointer" : "not-allowed" }}>
+                  <input type="checkbox" checked={!!cliTarget.yolo} disabled={!supported} onChange={(e) => (e.target.checked ? setYoloAsk(true) : void pickTarget(cliTarget.provider, { yolo: false }))} />
+                  YOLO
+                </label>
+              );
+            })()}
+            {toCli && cliTarget && yoloAsk && (
+              <span role="alertdialog" aria-label="YOLO 켜기 확인" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#f85149", border: "1px solid #f85149", borderRadius: 4, padding: "1px 8px", background: "#f8514922" }}>
+                ⚠ 승인 요청을 모두 자동 허용합니다 — 파일 수정·명령 실행이 묻지 않고 진행되고, claude 의 폴더 신뢰·우회 모드 경고도 대신 수락합니다.
+                <button type="button" onClick={() => { setYoloAsk(false); void pickTarget(cliTarget.provider, { yolo: true, resume: !!CLI_PROVIDERS.find((p) => p.id === cliTarget.provider)?.resumeArgs }); }} style={{ background: "#da3633", color: "#fff", border: 0, borderRadius: 4, cursor: "pointer", font: "inherit", padding: "1px 8px" }}>켜기</button>
+                <button type="button" onClick={() => setYoloAsk(false)} style={{ background: "none", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: "pointer", font: "inherit", padding: "1px 8px" }}>취소</button>
+              </span>
+            )}
+            {/* 슬래시 버튼 줄은 없다(사용자 지정, 2026-10-04) — 명령은 `/` 자동완성으로 쓴다. */}
           </div>
         </div>
       </div>
-      {/* 하단: 전폭 그립 + 셸 + 한 줄 모니터 스트립 (2026-10-04) */}
+      {/* 터미널(AI CLI) — 하단 셸 창은 없다. CLI 대상일 때만 메시지창 자리에 오버레이로 뜨고,
+          그 밖에는 **마운트만 유지**한 채 숨긴다(탭 복원·`terminal.open` 수신·tmux 상태를 잃지 않게). */}
       <div
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="쉘 영역 높이 조절"
-        title="드래그로 쉘 영역 높이 조절"
-        tabIndex={0}
-        onPointerDown={onBottomSepDown}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowUp") { e.preventDefault(); setBottomH((h) => Math.min(window.innerHeight * 0.5, h + 24)); }
-          if (e.key === "ArrowDown") { e.preventDefault(); setBottomH((h) => Math.max(64, h - 24)); }
-        }}
-        style={{ position: "relative", zIndex: 2, height: 0, cursor: "row-resize", overflow: "visible" }}
+        data-term-host={termOverlay ? "overlay" : "hidden"}
+        style={termOverlay && msgRect
+          ? { position: "fixed", left: msgRect.left, top: msgRect.top, width: msgRect.width, height: msgRect.height, zIndex: 3, background: "#0d1117", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: cliTarget?.yolo ? "inset 0 0 0 2px #f85149" : undefined }
+          : { display: "none" }}
       >
-        <div style={{ position: "absolute", left: 0, right: 0, top: -3, height: 6 }} />
+        {BODY.terminal}
       </div>
-      <div className="elev-1" style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden", borderTop: `1px solid ${BORDER}` }}>
-        <div style={{ flex: "1 1 auto", minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {BODY.terminal}
-        </div>
-        <MonitorStrip latest={metrics} />
-      </div>
+      <MonitorStrip latest={metrics} />
 
       {/* 로그 — **닫을 수 없는 기본 탭**(§5.12)이지만 **접을 수 있다**(2026-10-01).
           "닫을 수 없음" 은 사라져서는 안 된다는 뜻이지, 항상 펼쳐 두어야 한다는 뜻이 아니다.

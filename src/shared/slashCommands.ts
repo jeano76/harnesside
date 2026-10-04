@@ -43,6 +43,8 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { key: "mouse", label: "/mouse", description: "마우스 스크롤/클릭 켜기·끄기", where: "tui" },
   // llamacli 의 서버 쪽 명령 — 웹 서버가 같은 내용을 실행한다(`server/slashService.ts`).
   // 콘솔(TUI)에는 핸들러가 없어서 `web` 으로 둔다.
+  // tmux 위의 AI CLI 탭 — 프로바이더 목록의 정본은 `shared/cliProviders.ts`.
+  { key: "cli", label: "/cli", description: "AI CLI(claude·gemini·codex)를 tmux 탭으로 열기 · 목록 · 종료", where: "web" },
   { key: "models", label: "/models", description: "이 PC에서 구동 가능한 로컬 모델 메트릭스 · 선택", where: "web" },
   { key: "server", label: "/server", description: "모델 제공 서버 상태 확인 · restart 로 재시작(확인 후)", where: "web" },
   { key: "reset", label: "/reset", description: "현재 GPU·VRAM·RAM에 맞는 모델/설정으로 다시 초기화", where: "web" },

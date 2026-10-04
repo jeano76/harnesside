@@ -102,3 +102,9 @@ test("검사는 **매처가 살아 있다** — 정규식이 틀리면 위 검�
   assert.ok(pal.test(main), "팔레트 매처가 현재 코드를 못 찾는다");
   assert.ok(!pal.test('{hits.map((h) => (<div'), "팔레트 매처가 div 를 통과시킨다");
 });
+
+import { isTerminalReply } from "./terminalReply.js";
+test("터미널 자동 응답은 걸러내고 사람이 누른 키는 통과시킨다", () => {
+  for (const r of ["\x1b[?62;4;22c", "\x1b[>0;276;0c", "\x1b[12;40R", "\x1b[?2026;2$y", "\x1b]11;rgb:0d0d/1111/1717\x07", "\x1bP>|xterm.js(6.0.0)\x1b\\"]) assert.equal(isTerminalReply(r), true, JSON.stringify(r));
+  for (const k of ["a", "\x1b[A", "\x1b[B", "\r", "\x03", "\x1b", "한", "\x1b[200~x\x1b[201~", "\x1b[1;5C"]) assert.equal(isTerminalReply(k), false, JSON.stringify(k));
+});
