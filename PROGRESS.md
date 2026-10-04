@@ -734,3 +734,22 @@ MoE/speculative 항목 포함). `slashService.ts` import 17개를 새 경로로.
 → 3·4·8 단계에 왜·다음이 채워지고 로그에 두 줄) · 창 배너는 서버 상태를 건드리지 않고 `/api/bootstrap` 응답만 실패 단계로 바꿔 끼워 **실제 화면에서 렌더 확인**
 (평소 상태에선 배너 없음 확인). CI boot-smoke 에 **"llama 없는 부팅" 스텝** 추가 — 이 머신은 8080 에 실제 llama 가 있어 채택해 버리므로 **로컬 재현 불가, 러너 결과 미측정**.
 **§9 미측정 표**: #12 "실패 경로 부팅이 사용자에게 설명된다" → 유닛·화면으로 **검증**, CI 러너 실행은 **미측정**(다음 push 에서 확인).
+
+## 2026-10-04 — Q-6 (로컬 전용 검사를 CI 게이트로)
+
+- **schedule 트리거 추가**(매일 03:00 KST, `cron: "0 18 * * *"`) + **nightly 잡**: `verify-signals`(창 띄우기 전, 스스로 서버를 띄움) →
+  헤드리스 창 → `verify-a11y` · `verify-i18n` · `verify-shell`. 기존 3잡(gate·boot-smoke·window)은 그대로.
+- `verify-firstrun` 은 **boot-smoke 에 편입**(빠르고 결정적, 4번째 시나리오만 가짜 llama 8080 을 실제로 본다).
+- `verify-shutdown.mjs` **삭제 — `verify-signals` 에 흡수**: 시나리오(SIGTERM·SIGINT·SIGHUP·창 닫기·브라우저 사망)가 전부 signals 에 있고
+  (signals 쪽이 포트 판정·pid 확인·가짜 llama), shutdown 은 실제 20GB 모델을 시나리오마다 올렸다. PROGRESS 에 이미 "지운 이유" 가 적혀 있었는데
+  파일이 남아 있었다.
+- `npm test` 가 `scripts/**/*.test.ts` 도 돈다 → `coverage-floor.test.ts` **9건**이 gate 에서 실행된다(기획서는 10건이라 적었으나 실제 9건).
+- **검사를 고친 것(통과시키려고가 아니라 기준이 낡아서 — 근거를 함께 적는다)**:
+  - `verify-i18n` "액티비티바가 발견 가능하다": **사용자가 지운** 변경 검토·디렉터리 아이콘을 요구했다 — 같은 날 `verify-window` 는
+    "제거된 진입로가 되살아나지 않는다" 를 검사해 **두 검사가 서로 반대를 요구**했다. 남은 진입로(⚙ 설정 열기 · 모델 선택기)로 바꿈.
+  - `verify-a11y` 포커스 표시: 프롬프트 입력창은 **사용자 결정**(1e4a0a2)으로 링이 없다 → `no-focus-ring` 이고 캐럿이 보이면 표시로 인정(그 밖 요소는 그대로).
+  - `verify-window` "긴 경로 줄임": textContent 에 `…` 를 찾았는데 CSS 말줄임의 … 는 textContent 에 **절대 안 들어간다** — 원래 성립하지 않던 판정
+    → 말줄임 규칙(ellipsis+nowrap+hidden)이 걸린 요소 수로. "검색 기능 상한": 사용자가 지운 검색 패널을 찾았다 → 창 검사에서 빼고 서버 상한은 유닛이 지킨다고 적음.
+- **로컬 3회 연속**(2026-10-04, 서버가 띄운 창): `verify-window` 22/22 ×3 · `verify-a11y` 7/7 ×3 · `verify-i18n` 7/7 ×3 · `verify-shell` 14 pass ×3 · `verify-firstrun` 19/19.
+  **`verify-signals` 는 로컬에서 돌리지 않았다** — 서버를 스스로 띄우고 8080 에 가짜 llama 를 올리는데, 이 머신엔 사용자의 실제 llama-server(8080)와 실행 중인 서버(인스턴스 락)가 있다.
+**§9 미측정 표**: #13 "nightly CI 가 한 번이라도 실제로 돌았다" · #14 "a11y/i18n 가 CI에서 3회 연속 통과" → **여전히 미측정**(GitHub Actions 실행 URL 없음 — push 후 workflow_dispatch 로 확인 필요).

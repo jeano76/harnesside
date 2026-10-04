@@ -427,48 +427,28 @@ check("패널 머리에 내부 식별자가 노출되지 않음 (§5.8)", leaked
  * `textOverflow: ellipsis` + `whiteSpace: nowrap` 가 적용된 요소를 찾아 확인한다.
  */
 {
+  // Q-6(2026-10-04) 기준 정정: 예전 판정은 "textContent 에 … 가 있다" 였는데, CSS `text-overflow: ellipsis` 의 … 는
+  // **textContent 에 절대 들어가지 않는다** — 화면이 우연히 … 글자를 담을 때만 통과하는, 원래부터 판정이 성립하지 않는 검사였다
+  // (800px 블록의 TypeError 때문에 한 번도 실행되지 않아 아무도 몰랐다). 그래서 **말줄임 규칙이 실제로 걸린 요소**를 센다:
+  // overflow hidden + text-overflow ellipsis + nowrap. 실제로 잘린 요소 수(scrollWidth > clientWidth)는 참고로 적는다.
   const trunc = await cdp.eval(`(() => {
-    // ellipsis가 걸린 요소들
     const els = Array.from(document.querySelectorAll("*")).filter((el) => {
       const cs = getComputedStyle(el);
-      return cs.overflow === "hidden" && (cs.textOverflow === "ellipsis" || css(el, "text-overflow") === "ellipsis");
+      return cs.overflow === "hidden" && cs.textOverflow === "ellipsis" && cs.whiteSpace === "nowrap";
     });
-    // 실제 줄임 기호가 보이는 텍스트가 있는가?
-    const ellipsisText = Array.from(document.querySelectorAll("*")).some((el) => (el.textContent || "").includes("…"));
-    return { totalHidden: els.length, ellipsisVisible: ellipsisText };
-  })(); function css(el,p){return getComputedStyle(el).getPropertyValue(p)} `);
+    return { rules: els.length, cut: els.filter((el) => el.scrollWidth > el.clientWidth).length };
+  })()`);
   report(
-    trunc.ellipsisVisible === true ? "PASS" : "WARN",
-    `긴 경로 줄임 표시 — … 포함 요소 ${trunc.totalHidden}개`,
-    trunc.ellipsisVisible === true,
-    `overflow:hidden+ellipsis 요소 ${trunc.totalHidden}개, … 기호 텍스트 존재=${trunc.ellipsisVisible}`,
+    trunc.rules > 0 ? "PASS" : "FAIL",
+    `긴 경로 줄임 표시 — 말줄임 규칙이 걸린 요소 ${trunc.rules}개`,
+    trunc.rules > 0,
+    `ellipsis+nowrap+hidden 요소 ${trunc.rules}개, 지금 실제로 잘린 요소 ${trunc.cut}개`,
   );
 }
 
-/**
- * 검색 결과 상한 재현 (§9 요구 — "여러 개 검색"). CDP로 직접 검색어를 입력하고
- * 결과가 N개를 넘지 않는지 확인한다. 실제 UI 조작은 어렵므로 **검색 입력창**과
- * 현재 표시된 결과 목록의 길이를 통해 상한 존재를 확인한다.
- */
-{
-  const search = await cdp.eval(`(() => {
-    const input = document.querySelector('input[placeholder*="찾"], input[type="search"], .search-input, #search');
-    if (!input) return { hasInput: false };
-    // 검색 결과 목록의 길이 (li/리스트 항목으로 추정)
-    const results = Array.from(document.querySelectorAll("[class*=result], [data-result], li")).slice(0, 12);
-    return {
-      hasInput: true,
-      resultNodes: results.length,
-      placeholder: input.getAttribute("placeholder") || "",
-    };
-  })(); `);
-  report(
-    search.hasInput === true ? "PASS" : "WARN",
-    `검색 기능 상한 — 입력창 존재 및 결과 노드 ${search.resultNodes}개`,
-    search.hasInput === true,
-    `placeholder="${search.placeholder ?? ""}", resultNodes=${search.resultNodes}`,
-  );
-}
+// 검색 결과 상한 — **창 검사에서 뺐다**(Q-6, 2026-10-04). 이 검사는 검색 입력창을 찾았는데, 검색 패널은 2026-10-01 탐색기와 함께
+// 사용자가 지운 화면이다(지금 웹은 /api/fs/search 를 부르지 않는다). 없는 화면을 찾는 검사는 되살리라는 압력이 된다.
+// 결과 상한 자체는 서버 쪽(`src/fs/search.ts`, clampInt)에 남아 있고 그 유닛 테스트가 지킨다.
 
 await new Promise((r) => setTimeout(r, 1500));
 check("콘솔 에러 0", errors.length === 0, errors.slice(0, 2).join(" | "));

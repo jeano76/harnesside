@@ -7,6 +7,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Q-6(2026-10-04): 헤더가 "E2E 는 nightly" 라고 쓰면서 schedule 트리거가 없었다. 매일 03:00 KST.
+  schedule:
+    - cron: "0 18 * * *"
 
 # 같은 브랜치에 새 커밋이 오면 이전 실행을 버린다(결과가 조용히 뒤섞이면 안 된다).
 concurrency:
@@ -131,6 +134,10 @@ jobs:
         # 단계 [9] 가 "dist/web 없음" 이라고 말하는 건 부팅이 아니라 **빌드 안 한 것** 이다.
         # 부팅 경로를 실제로 보는 잡이므로 자산까지 있어야 로그가 정직하다.
         run: npm run build
+
+      - name: 최초 구동 3상태 판정 (verify-firstrun · Q-6)
+        # 빠르고 결정적이다 — 주입으로 세 상태를 만들고, 4번째만 위의 가짜 llama(8080)를 실제로 본다.
+        run: node scripts/verify-firstrun.mjs
 
       - name: spawn 경로 — **우리가 띄운 llama 는 함께 죽는다** (§4.4)
         # 8080 을 비워 두고 데몬이 **직접 띄우게** 한다. 그래야 §4.4 의 요구
@@ -416,3 +423,65 @@ jobs:
             sleep 1
           done
           echo "창 종료 시 llama 함께 정리됨"
+
+  nightly:
+    # Q-6: 로컬에서만 돌던 검사를 매일 돈다. 창이 필요한 것(a11y·i18n·shell)은 window 잡과 같은 방법으로 창을 띄운 뒤 돈다.
+    # verify-signals 는 서버를 스스로 여러 번 띄우므로 **창을 띄우기 전에** 먼저 돈다(인스턴스 락이 겹치지 않게).
+    # verify-shutdown 은 verify-signals 에 흡수돼 지웠다(같은 신호를 다른 이름표로 재던 중복).
+    name: nightly (신호 · 접근성 · i18n · 셸)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci || npm install
+      - run: npm run build
+      - name: 가짜 모델 준비
+        run: |
+          mkdir -p .ci-fake-models
+          head -c 4096 /dev/zero > .ci-fake-models/Ornith-1.5-35B-A3B-Q3_K_M.gguf
+
+      - name: 종료 신호 각각 (verify-signals · §4.4 S1~S6)
+        env:
+          HARNESSIDE_MODELS_DIR: ${{ github.workspace }}/.ci-fake-models
+          HARNESSIDE_CHROME_EXTRA_ARGS: "--headless=new --no-sandbox"
+        run: node scripts/verify-signals.mjs
+
+      - name: 창을 띄운다 (헤드리스)
+        env:
+          HARNESSIDE_LLAMA_SERVER: ${{ github.workspace }}/scripts/fake-llama-server.mjs
+          HARNESSIDE_MODELS_DIR: ${{ github.workspace }}/.ci-fake-models
+          HARNESSIDE_CHROME_EXTRA_ARGS: "--headless=new --no-sandbox"
+        run: |
+          rm -f .harnesside/state/instance.lock
+          setsid ./node_modules/.bin/tsx src/server/index.ts < /dev/null > /tmp/nightly.log 2>&1 &
+          for i in $(seq 1 90); do [ -s .harnesside/state/instance.lock ] && break; sleep 1; done
+          [ -s .harnesside/state/instance.lock ] || { echo "데몬이 락을 만들지 않았다"; tail -30 /tmp/nightly.log; exit 1; }
+          head -1 .harnesside/state/instance.lock > /tmp/nightly.pid
+          for i in $(seq 1 90); do curl -sf --max-time 2 http://127.0.0.1:9222/json/version > /dev/null && break; sleep 1; done
+          curl -sf --max-time 3 http://127.0.0.1:9222/json/version > /dev/null || { echo "CDP 가 열리지 않았다"; tail -40 /tmp/nightly.log; exit 1; }
+
+      - name: 접근성 (verify-a11y)
+        run: node scripts/verify-a11y.mjs
+      - name: i18n (verify-i18n)
+        run: node scripts/verify-i18n.mjs
+      - name: 셸 (verify-shell)
+        run: node scripts/verify-shell.mjs
+
+      - name: 산출물 보존
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly
+          path: /tmp/nightly.log
+          if-no-files-found: ignore
+      - name: 정리
+        if: always()
+        run: |
+          [ -f /tmp/nightly.pid ] && kill -TERM "$(cat /tmp/nightly.pid)" 2>/dev/null || true
+          sleep 5
+          [ -f /tmp/nightly.pid ] && kill -9 "$(cat /tmp/nightly.pid)" 2>/dev/null || true

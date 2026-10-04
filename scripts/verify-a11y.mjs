@@ -96,7 +96,14 @@ const tabExpr = `(async () => {
     if (!el || el === before) break;
     if (seen.some((s) => s.el === el)) break;
     const style = getComputedStyle(el);
+    // 프롬프트 입력창은 **사용자 결정으로** 포커스 링을 그리지 않는다(no-focus-ring 클래스, 커밋 1e4a0a2 "어지러워 보여").
+    // 글 입력칸은 깜빡이는 캐럿이 포커스 표시다 — 캐럿이 투명하지 않을 때만 표시로 인정한다(Q-6, 2026-10-04 기준 정정).
+    const caretShows =
+      el.classList.contains("no-focus-ring") &&
+      (el.tagName === "TEXTAREA" || el.tagName === "INPUT") &&
+      style.caretColor !== "transparent";
     const hasRing =
+      caretShows ||
       (style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0) ||
       (style.boxShadow && style.boxShadow !== "none");
     const name = el.getAttribute("aria-label") || (el.textContent || "").trim().slice(0, 20);
@@ -148,7 +155,10 @@ for (let i = 0; i < 14; i++) {
     const el = document.activeElement;
     if (!el) return null;
     const style = getComputedStyle(el);
+    // 프롬프트 입력창은 사용자 결정으로 포커스 링을 그리지 않는다(no-focus-ring, 커밋 1e4a0a2) — 캐럿이 보이면 표시로 인정(Q-6).
+    const caretShows = el.classList.contains("no-focus-ring") && (el.tagName === "TEXTAREA" || el.tagName === "INPUT") && style.caretColor !== "transparent";
     const hasRing =
+      caretShows ||
       (style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0) ||
       (style.boxShadow && style.boxShadow !== "none");
     return {
