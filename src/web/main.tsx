@@ -100,7 +100,7 @@ const SLASH_TIPS: Record<string, string> = {
   term: "/term — 터미널/브라우저 정보\n이 창의 브라우저, 플랫폼, 화면 크기·배율, 클립보드 사용 가능 여부를 보여줍니다.\n콘솔 전용 항목(제어문자·대체화면 등)은 웹 창에 해당이 없습니다.",
   models: "/models — 구동 가능한 로컬 모델\n이 PC의 VRAM·RAM 기준으로 모델별 구동 가능 여부(✅ VRAM / ⚠️ RAM 스트리밍 / ❌)를 표로 보여줍니다.\n선택: 입력창에 /models <번호>. 실행 중인 서버를 바꾸려면 /models <번호> confirm 이 필요합니다(서버가 잠시 내려갑니다).",
   server: "/server — 모델 서버 상태\n지금 떠 있는 llama-server의 포트·모델·빌드와 재시작 시 계획을 보여줍니다.\n재시작: 입력창에 /server restart (변경 내용 미리보기) → /server restart confirm 으로 확정. 확정하면 실행 중인 서버를 내렸다 올립니다.",
-  reset: "/reset — 설정 초기화\n현재 GPU·VRAM·RAM에 맞게 컨텍스트·스레드·오프로드 등 llama 설정을 다시 계산합니다.\n그냥 누르면 미리보기만 하며 아무것도 바꾸지 않습니다. 적용은 /reset confirm (설정 파일을 덮어쓰며, 실행 중인 서버에는 /server restart 로 따로 반영).",
+  reset: "/reset — 설정 초기화\n현재 GPU·VRAM·RAM에 맞게 컨텍스트·스레드·오프로드 등 llama 설정을 다시 계산합니다.\n그냥 실행하면 미리보기만 하며 아무것도 바꾸지 않습니다. 적용은 /reset confirm (설정 파일을 덮어쓰며, 실행 중인 서버에는 /server restart 로 따로 반영).",
 };
 
 export default function App() {
@@ -210,7 +210,7 @@ export default function App() {
     const sl = parseSlash(text);
     if (sl && webSlashCommands().some((c) => c.key === sl.key)) {
       setDraft("");
-      void runSlash(sl.key, sl.arg, false);
+      void runSlash(sl.key, sl.arg);
       return;
     }
     setTurnRunning(true);
@@ -239,6 +239,23 @@ export default function App() {
    * 결과를 **대화 안 블록**(접고 펼 수 있음)으로 남긴다. 서버에 진입점이 없는
    * 명령(`copy`·`quit`)과 콘솔 전용(`term`·`mouse`)은 버튼으로 만들지 않는다.
    */
+  /**
+   * 슬래시 버튼 — **바로 실행하지 않고 입력창에 명령을 채운다**(자동완성).
+   * 인자를 받는 명령(`/models 3` 등)은 뒤에 공백을 남겨 바로 이어 쓸 수 있게 하고,
+   * Enter 로 보내면 실행된다. 이미 쓰던 글이 있으면 명령으로 바꾼다.
+   */
+  const fillSlash = useCallback((key: string) => {
+    const withArg = key === "models" || key === "server" || key === "reset";
+    const text = `/${key}${withArg ? " " : ""}`;
+    setDraft(text);
+    requestAnimationFrame(() => {
+      const el = draftRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(text.length, text.length);
+    });
+  }, []);
+
   const quitArmedAt = useRef(0);
   const runSlash = useCallback(async (key: string, arg = "", fromButton = true) => {
     // `/quit` 는 두 번 눌러야 종료한다(llamacli 도 확인 없이 끝내지 않는다).
@@ -1005,7 +1022,7 @@ export default function App() {
             <span style={{ width: 1, alignSelf: "stretch", background: BORDER }} />
             <div role="toolbar" aria-label="슬래시 명령" style={{ display: "flex", gap: 4, flex: 1, minWidth: 0, overflowX: "auto" }}>
               {webSlashCommands().map((c) => (
-                <button key={c.key} type="button" title={SLASH_TIPS[c.key] ?? c.description} onClick={() => void runSlash(c.key)} style={{ flex: "0 0 auto", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 8px", cursor: "pointer", font: "inherit", fontSize: 11 }}>
+                <button key={c.key} type="button" title={`${SLASH_TIPS[c.key] ?? c.description}\n\n클릭하면 입력창에 채워지고, Enter 로 실행합니다. 같은 명령을 다시 실행하면 결과를 접고 폅니다.`} onClick={() => fillSlash(c.key)} style={{ flex: "0 0 auto", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 8px", cursor: "pointer", font: "inherit", fontSize: 11 }}>
                   /{c.key}
                 </button>
               ))}
