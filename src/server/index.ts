@@ -54,6 +54,7 @@ import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { CliSessions } from "./cliSessions.js";
 import { installPipeGuard, isBrokenPipe, safeWrite } from "./safeOutput.js";
 import { bootFailureLines } from "../shared/bootFailure.js";
+import { readVersion } from "./version.js";
 import { SlashService, SERVER_SLASH_KEYS, type ServerSlashKey } from "./slashService.js";
 import { homedir } from "node:os";
 import { join, isAbsolute, resolve, relative } from "node:path";
@@ -259,7 +260,7 @@ async function main(): Promise<number> {
   const updateSlotsDir = join(stateDir(projectRoot), "update-slots");
   const updateMarker = join(stateDir(projectRoot), "update-pending.json");
   const updates: UpdateService = new UpdateService({
-    currentVersion: String((await readFile(join(projectRoot, "package.json"), "utf8").then(JSON.parse).catch(() => ({} as { version?: string }))).version ?? "0.0.0"),
+    currentVersion: readVersion(),
     channel: (process.env.HARNESSIDE_UPDATE_CHANNEL as UpdateChannel) ?? "stable",
     slotsDir: updateSlotsDir,
     selfPath: process.argv[1] ?? join(projectRoot, "dist", "server", "index.js"),
@@ -605,7 +606,7 @@ async function main(): Promise<number> {
           .route("GET", "/api/health", () => ({
             ok: true,
             llamaUp: r.llamaReady,
-            version: "0.1.0",
+            version: readVersion(),
             /**
              * 이 프로세스가 **떠난 시각** (2026-10-01).
              *
@@ -631,7 +632,7 @@ async function main(): Promise<number> {
             tuning: r.tuning?.rationale ?? [],
           }))
           .route("GET", "/api/system/version", () => ({
-            version: "0.1.0",
+            version: readVersion(),
             llama: r.llama?.source ?? null,
             // 채택한 경로에서는 **서버가 스스로 말한 모델 이름** 이 진짜다.
             // 로컬 파일 경로는 그 서버가 지금 serve 하는 것과 다를 수 있다.

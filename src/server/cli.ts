@@ -7,6 +7,7 @@
  * 부팅 코드까지 끌어들이면 "서버가 없으니 상태를 알 수 없다" 는 비참한 상황이 된다.
  */
 
+import { readVersion } from "./version.js";
 import {
   defaultPaths,
   collectStatus,
@@ -35,12 +36,14 @@ export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이
   harnesside logs [-f]       로그 보기 (데몬이어도 가능)
   harnesside down            우아한 종료 (체크포인트 기록 후)
   harnesside doctor          환경 진단 (읽기 전용)
+  harnesside version         버전 (= --version, package.json 의 version)
   harnesside doctor --install  없으면 설치 · 모델이 없으면 받는다 [포트]
 
 옵션:
   --install      doctor 와 함께 판정에 이어 설치·수령한다
   --no-browser    창을 띄우지 않고 서버만 (디버깅용)
   --daemon        = up -d
+  --version       버전만 출력
   --dry           12단계만 출력, 부수효과 없음
   --json          status 를 JSON 1줄로
   --level=LEVEL   logs 필터 (debug|info|warn|error)
@@ -64,7 +67,7 @@ export interface ParsedArgs {
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
-  const known = ["up", "open", "status", "logs", "down", "doctor", "help", "--help", "-h"];
+  const known = ["up", "open", "status", "logs", "down", "doctor", "version", "help", "--help", "-h"];
   const first = argv[0];
   const command = first && known.includes(first) ? first : "up";
   const rest = command === "up" && first && !known.includes(first) ? argv : argv.slice(1);
@@ -247,6 +250,11 @@ export async function runStandalone(argv: string[]): Promise<number | null> {
   const { command, rest, flags, json } = parseArgs(argv);
   if (flags.has("--help") || flags.has("-h") || command === "help") {
     emit(USAGE);
+    return 0;
+  }
+  // `--version` · `version` — 정본은 package.json(Q-7). 부팅하지 않는다(예전엔 `--version` 이 서버를 띄우려 했다).
+  if (command === "version" || flags.has("--version")) {
+    emit(readVersion());
     return 0;
   }
   if (command === "status") return cmdStatus(paths, json);

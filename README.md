@@ -110,10 +110,10 @@ codebase, and each is documented at its call site and covered by a test. The
 | Backend | `src/backend/` | llama-server process management, OpenAI-compatible client |
 | Tools | `src/tools/` | `read_file` / `write_file` / `edit_file` / `run_shell` / `browser_*` |
 | Skills & rules | `src/skills/` | Always-on rules, lazily-loaded skills |
-| Update | `src/selfUpdate.ts` | Manifest check, hash-verified install, restart |
+| Update | `src/server/updateService.ts` | GitHub Releases check, hash-verified slot swap, boot check, rollback (one path — Q-7) |
 | Crash handling | `src/crashHandler.ts` | Synchronous crash log + terminal restore |
 
-`src/setup/terminal.ts` and `src/selfUpdate.ts` are
+`src/setup/terminal.ts` and `src/server/updateService.ts` are
 the most recent additions and the ones with the sharpest edges — see the
 developer guide below before changing them.
 
@@ -284,7 +284,7 @@ no such mode, there is nothing to protect.
 
 **Binary self-update is unaffected.** `harnesside` still checks GitHub for a new
 release of itself at startup (opt out with `HARNESSIDE_NO_UPDATE=1`). That is the
-app updating, not the model — a different code path, in `src/selfUpdate.ts`.
+app updating, not the model — a different code path, in `src/server/updateService.ts` (the old tarball updater `selfUpdate.ts` was removed in Q-7).
 
 ## Validation — what is actually checked, and what is not
 

@@ -11,6 +11,7 @@
  *  따라서 전부 NDJSON 한 줄로 쓴다(§3.7.1).
  */
 
+import { readVersion } from "./version.js";
 import { readFile, writeFile, mkdir, unlink, stat } from "node:fs/promises";
 import { openSync, writeSync, closeSync } from "node:fs";
 import { join } from "node:path";
@@ -195,7 +196,8 @@ export function formatBytes(n: number): string {
 
 /** `status` 의 기계 판독용 출력(§3.7.4: JSON 1줄). */
 export async function statusJson(paths: Paths): Promise<string> {
-  return JSON.stringify(await collectStatus(paths));
+  // 버전도 함께 — `harnesside --version` 과 같은 정본(Q-7).
+  return JSON.stringify({ version: readVersion(), ...(await collectStatus(paths)) });
 }
 
 // ---- logs (§3.7.4) -------------------------------------------------------

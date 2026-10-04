@@ -753,3 +753,24 @@ MoE/speculative 항목 포함). `slashService.ts` import 17개를 새 경로로.
 - **로컬 3회 연속**(2026-10-04, 서버가 띄운 창): `verify-window` 22/22 ×3 · `verify-a11y` 7/7 ×3 · `verify-i18n` 7/7 ×3 · `verify-shell` 14 pass ×3 · `verify-firstrun` 19/19.
   **`verify-signals` 는 로컬에서 돌리지 않았다** — 서버를 스스로 띄우고 8080 에 가짜 llama 를 올리는데, 이 머신엔 사용자의 실제 llama-server(8080)와 실행 중인 서버(인스턴스 락)가 있다.
 **§9 미측정 표**: #13 "nightly CI 가 한 번이라도 실제로 돌았다" · #14 "a11y/i18n 가 CI에서 3회 연속 통과" → **여전히 미측정**(GitHub Actions 실행 URL 없음 — push 후 workflow_dispatch 로 확인 필요).
+
+## 2026-10-04 — Q-7 (자동 업데이트 경로를 1개로)
+
+**결정 — 정본은 슬롯 교체(`src/server/updateService.ts` + `update/pipeline.ts`)다.**
+① 사용자에게 닿는 경로가 이것뿐이다: HTTP 라우트(`/api/update/*`)와 창의 업데이트 섹션이 있고, 적용은 사용자가 누를 때만 일어난다(자동 재시작 없음 — 타이머 없음 확인).
+② 롤백·되돌릴 곳이 없으면 적용 금지(`ApplyGuard`/D14)·부팅 확인을 이미 갖고 있고, 그 동작이 임시 설치본 위에서 실제 파일 교체로 테스트된다.
+③ 반대쪽 tarball 경로(`selfUpdate.ts`)는 **호출자가 0** 이었다 — 유일한 호출자였던 Ink TUI 가 Q-2 로 지워졌고, 그 매니페스트를 놓는 `bin/` 은
+`.gitignore` + 커밋 금지 경로라 `raw.githubusercontent…/main/bin/manifest.json` 은 **애초에 게시될 수 없는 주소**였다.
+**반대 근거(감사용)**: tarball 쪽이 더 단순하다(슬롯 디렉터리·부팅 판정 없이 dist 한 덩어리) · GitHub Releases 를 만들 필요가 없다 ·
+슬롯 교체는 릴리스 자산을 실제로 올려야만 쓸 수 있는데 **이 저장소엔 아직 릴리스가 없다** — 즉 정본도 지금 당장은 "확인 → 최신" 이상을 실측할 수 없다.
+- 삭제: src/selfUpdate.ts(+테스트) · `scripts/update-bin.mjs`. 해시 2중 검증 설계는 이미 `update/pipeline.ts` 에 옮겨져 있다.
+  → `npm run build` 는 `bin/manifest.json` 을 **만들지 않는다**(확인: build 후 `bin/` 없음) — 문서와 일치.
+- **버전 정본 = `package.json` `version`(시맨틱)**: `src/server/version.ts` 하나를 `--version` · `version` · `status --json` · `/api/system/version` ·
+  `/api/bootstrap` · `updateService` 가 읽는다(예전엔 라우트 두 곳이 `"0.1.0"` 하드코딩). 시맨틱인 이유: 정본 업데이트가 릴리스 태그 `vX.Y.Z` 를
+  숫자 비교한다 — 날짜 버전은 같은 날 두 번 내면 구분이 안 된다.
+- **발견한 결함**: `harnesside --version` 이 버전을 출력하지 않고 **서버를 띄우려 했다**("이미 실행 중입니다"로 exit 1). 지금은 부팅 없이 출력.
+
+**실측**: `node dist/server/index.js --version` → `0.1.0` · `version` → `0.1.0` · `status --json` → `{"version":"0.1.0",…}` (같은 문자열).
+롤백: `updateService.apply.test.ts` 10/10 — 임시 설치본에서 "새 버전이 기동하지 못하면 되돌리고 옛 내용이 돌아온다" · "rollback() 은 가장 최근 슬롯으로" 를
+**실제 파일 교체**로 확인(가짜 업데이트로 시도한 뒤 되돌린 기록). 이 머신의 실제 설치본으로는 시도하지 않았다.
+**§9 미측정 표**: #15 "슬롯 교체 후 롤백이 실제로 된다" → 임시 설치본에서 **검증**, 실제 릴리스 자산으로는 **미측정**(릴리스 없음).

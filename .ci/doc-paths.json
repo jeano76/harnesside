@@ -50,6 +50,16 @@
       "doc": "MIGRATION_CHECKLIST.md",
       "path": "src/index.tsx",
       "reason": "이름 변경 이전(포크 시절) 체크리스트의 원래 진입점"
+    },
+    {
+      "doc": "PROMPT.md",
+      "path": "src/selfUpdate.ts",
+      "reason": "원 명세의 이동 표·설계 출처 — 해시 2중 검증 설계는 update/pipeline.ts 로 옮겨졌고 파일은 Q-7 에서 삭제(업데이트 경로를 하나로)"
+    },
+    {
+      "doc": "PROMPT_QUALITY_PRODUCT.md",
+      "path": "src/selfUpdate.ts",
+      "reason": "§2.2·Q-7 요구 본문 — 지울 대상(업데이트 2벌 중 하나)을 이름으로 가리킨다"
     }
   ]
 }
