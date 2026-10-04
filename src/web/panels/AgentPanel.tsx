@@ -278,6 +278,8 @@ export function AgentPanel({
   onToggleView,
   onCloseView,
   onToggleBlock,
+  /** 편집기로 파일을 연다(경로 하나). 없으면 파일 미리보기에 `편집` 버튼이 없다. */
+  onEditFile,
   // 설정은 상단 우측 ⚙ 아이콘(셸 헤더)으로 연다 — 측면 아이콘은 두지 않는다.
   // 열 곳이 하나뿐이므로 "어느 쪽이 진짜인가" 가 생기지 않는다.
   // 승인 게이트처럼대화 위에 떠야 하는 것(§8.2) — 별도 패널이 아니라 대화 본문 위에서만 그린다.
@@ -317,6 +319,8 @@ export function AgentPanel({
   onCloseView?: (block: AgentBlock) => void;
   /** 슬래시 결과 블록 하나를 접고 편다. */
   onToggleBlock?: (block: AgentBlock) => void;
+  /** 파일 미리보기의 `편집` → 편집기로 연다. 경로만 전달한다(열고 닫는 책임은 `main.tsx`). */
+  onEditFile?: (path: string) => void;
   // 승인 게이트처럼대화 위에 떠야 하는 것 (§8.2). 별도 패널이 아니라 대화 본문 위에서만 그린다.
   // Ide 로 그대로 넘긴다 — 흐름을 가리되 스크롤로 이어지게.
   overlay?: React.ReactNode;
@@ -612,6 +616,7 @@ export function AgentPanel({
                         onToggleView={onToggleView}
                         onCloseView={onCloseView ? () => onCloseView(b) : undefined}
                         onToggleBlock={onToggleBlock ? () => onToggleBlock(b) : undefined}
+                        onEditFile={onEditFile}
                       />
                     </div>
                   ))}
@@ -657,6 +662,7 @@ function BlockBody({
   onToggleView,
   onCloseView,
   onToggleBlock,
+  onEditFile,
 }: {
   block: AgentBlock;
   client?: ApiClient;
@@ -664,6 +670,7 @@ function BlockBody({
   onToggleView?: () => void;
   onCloseView?: () => void;
   onToggleBlock?: () => void;
+  onEditFile?: (path: string) => void;
 }) {
   if (b.kind === "user") {
     return (
@@ -711,6 +718,7 @@ function BlockBody({
       onToggleView={onToggleView}
       onCloseView={onCloseView}
       onToggleBlock={onToggleBlock}
+      onEditFile={onEditFile}
     />
   );
 }

@@ -95,6 +95,7 @@ export function ToolBlock({
   onToggleView,
   onCloseView,
   onToggleBlock,
+  onEditFile,
 }: {
   block: AgentBlock;
   /** 슬래시 블록 하나를 접고 편다(블록 id 로 찾는다 — 설정용 전역 토글과 별개). */
@@ -103,6 +104,8 @@ export function ToolBlock({
   /** 뷰를 접었다/펼쳤다 — 헤더 ⚙ 아이콘과 **같은 규칙**(`toggleView`)을 탄다.
    *  경로마다 따로 만들면 "아이콘에서는 닫히는데 블록에서는 쌓인다" 가 된다. */
   onToggleView?: () => void;
+  /** 편집기로 파일을 연다 — `main.tsx` 의 `openFileByPath` 까지만 전달한다(경로 하나). */
+  onEditFile?: (path: string) => void;
   /** 이 블록만 접는다(블록 안의 ✕). */
   onCloseView?: () => void;
   /** `view` 블록이 그릴 내용. 설정 패널처럼 **무거운 것**은 여기서 주입한다 —
@@ -124,7 +127,7 @@ export function ToolBlock({
         <div style={{ margin: "2px 0" }}>
           <div style={{ fontSize: 10, color: DIM, marginBottom: 2 }}>열기 · {block.view.path}</div>
           {/* **자동 연다** — 사람이 직접 연 블록이므로 접어 두면 "뭘 열었지" 가 된다. */}
-          <FilePreview client={client} path={block.view.path} autoOpen />
+          <FilePreview client={client} path={block.view.path} autoOpen onEdit={onEditFile} />
         </div>
       );
     }
@@ -195,7 +198,7 @@ export function ToolBlock({
   // 파일 도구 블록도 **미리보기**로 그린다 — 같은 파일을 두 모양으로 보여주면
   // 사용자는 "이거 편집기인가 미리보기인가" 를 헷갈린다.
   if (isFileTool(name, args) && path && client) {
-    return <FilePreview client={client} path={path} />;
+    return <FilePreview client={client} path={path} onEdit={onEditFile} />;
   }
   if (isFileTool(name, args) && path) return <FileBlock label={labelFor(name)} path={path} done={done} client={client} />;
 

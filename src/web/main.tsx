@@ -1063,6 +1063,8 @@ export default function App() {
         onToggleView={onToggleView}
         onCloseView={onCloseView}
         onToggleBlock={(b: AgentBlock) => setBlocks((prev) => toggleSlashFold(prev, b.id))}
+        // 파일 미리보기 `편집` → 편집기. **연결이 없다면 편집기는 도달 불가능**하다(실측).
+        onEditFile={(p: string) => void openFileByPath(p)}
         overlay={approvalOverlay}
         running={turnRunning}
         // 상태바 — 이미 **앱 전체가 하나씩** 붙들고 있는 값을 **읽기만** 넘긴다.
@@ -1078,6 +1080,52 @@ export default function App() {
           focusDraft();
         }}
       />
+
+      {/* 파일 편집기 — **2026-10-05 실측으로 발견해 연결했다.**
+          `EditorView` 는 import만 되어 있고 렌더되는 곳이 없었다. 즉 `openFileByPath` ·
+          `openFile` 상태 · `openTabs` 는 전부 있었는데 **열 방법이 없었다**.
+          ① 편집창 신택스 색과 ③ 인덴트 가이드가 화면에 없던 이유가 이것이다.
+
+          위치: 대화 **위**(승인 카드와 같은 층). 전용 패널을 새로 만드는 게 아니라
+          "지금 한 파일을 보고 있다" 를 잠깐 덮는 것으로 충분하다고 판단했다 — 새 존을
+          더하면 레이아웃이 무너지는 축이다(저장소 §3.11). */}
+      {openFile && (
+        <div
+          role="dialog"
+          aria-label={`파일 편집 · ${openFile.path}`}
+          style={{
+            position: "fixed",
+            inset: "34px 6px 26px 6px",
+            zIndex: 40,
+            display: "flex",
+            flexDirection: "column",
+            background: "#0d1117",
+            border: `1px solid ${BORDER}`,
+            borderRadius: 6,
+            boxShadow: "0 12px 32px rgba(1,4,9,0.6)",
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 8px", borderBottom: `1px solid ${BORDER}`, background: "#161b22" }}>
+            <span style={{ fontSize: 10, color: "#8b949e" }}>편집 중 · 자동 저장</span>
+            <span style={{ flex: 1 }} />
+            <button type="button" onClick={() => setOpenFile(null)} style={{ fontSize: 10, background: "#21262d", color: "#c9d1d9", border: `1px solid ${BORDER}`, borderRadius: 4, padding: "1px 8px", cursor: "pointer" }}>
+              닫기
+            </button>
+          </div>
+          <div style={{ flex: "1 1 auto", minHeight: 0 }}>
+            {/* EditorView 의 `onNotice` 는 (종류, 제목, 본문) 을 받는다. 토스트 makers(pushToast·
+                notice) 와 **모양이 다르므로 래퍼를 한 번 거친다** — 함수를 잘못 넘기면
+                화면에 아무 것도 안 뜬다(타입은 잡아 주지만 그건 "조용히 실패" 다). */}
+            <EditorView
+              client={client}
+              info={openFile}
+              onNotice={(kind, title, body) => pushToast({ id: "edit:" + title, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: kind === "error", source: "fs" })}
+            />
+          </div>
+        </div>
+      )}
+
       </>
     ),
     // §9.3 커밋. diff(한 파일 비교)와 **커밋(저장소 전체)** 은 다른 일이라 같은

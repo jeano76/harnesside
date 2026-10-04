@@ -235,6 +235,55 @@ one that pulls tool results into their own blocks. Which layer is not decided ye
 and this is where the next number belongs. n = 3, one model, one question: do not
 generalize it.
 
+## Reading code: colors, indent guides, diff (2026-10-05)
+
+Asked whether the coding surface had syntax colors, indent guides and diff, the
+honest answer was: **colors only where you cannot type.** The file preview, code
+blocks and fenced code were colored; the **editor itself** was a plain
+`<textarea>`, and there were **no indent guides at all**. All three now exist,
+and two of them are the reason this section exists — the editor was not
+reachable at all (see below).
+
+| Surface | Colors | Indent guides | Note |
+|---|---|---|---|
+| Editor (editable) | ✅ overlay on a transparent `<textarea>` | ✅ | autosave · 409 conflict · draft restore all live here |
+| File preview (read-only, in-conversation) | ✅ | ✅ | guides sit **inside** the code span |
+| Code block (shell/code in conversation) | ✅ | ✅ | **command lines get no guide** — `$ npm run build` indentation is a prefix, not a block |
+| Large / binary file (read-only view) | ✅ | ✅ | shares the same metrics object |
+| Diff panel | — | — | **`DiffPanel` is imported but never rendered** (acknowledged in `editorReachability.test.ts`) |
+
+**Three decisions worth knowing before changing this code:**
+
+1. **The editor overlay is two layers with one metrics object.** A `<textarea>`
+   cannot color its own text, so a transparent-text `<textarea>` sits on a
+   colored `<pre>`. If the two layers disagree by a single pixel of padding, the
+   colors shift one character per line. `EDITOR_TEXT_METRICS` is shared by three
+   surfaces for exactly that reason, and a test counts how many layers use it —
+   the invariant cannot be kept by discipline.
+2. **Indent guides are positioned in `ch`, not measured.** The usual
+   implementation measures the character width with a hidden span; measure before
+   the font loads and the guide lands *between* characters. `1ch` is exactly one
+   `"0"` in a monospace font, needs no measurement, and when the font is late it
+   renders late rather than wrong. There is no measurement path to undo.
+3. **Unknown languages are said out loud.** `languageFor` returns `text` and the
+   UI prints `이 형식은 색칠하지 않습니다 (미지원: .rs)`. Silently plain text
+   reads as a bug and sends the user hunting for one.
+
+**The editor had no way to open it.** `EditorView`, `openFileByPath`,
+`openFile` and `openTabs` all existed; nothing called any of them. So the editor
+was dead UI, and both features above were invisible. It is now reachable from the
+`편집` button on a file preview, and `src/web/editorReachability.test.ts` fails
+if an imported component stops being reachable again — or if a new one does,
+unless the reason is written down (currently: `DiffPanel`, `CommitBox`).
+
+**Measured vs not.** The unit tests (30) verify the *computation*: column
+counts, tab stops, which lines are closing, `calc(N ch)` strings, and that the
+two layers read one shared object. They cannot verify that the guide lands on a
+real glyph boundary — that needs a browser, and `scripts/verify-editor.mjs`
+measures it (also `1ch` vs the measured character width). That script **has not
+passed yet**: the session it ran against had no file block to open. Not
+measured, not claimed.
+
 ## Skill / Rule — reusing existing AI CLI conventions
 
 `src/skills/loader.ts` reuses whatever rule/skill files another AI coding CLI

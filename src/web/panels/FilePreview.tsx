@@ -47,9 +47,17 @@ export interface FilePreviewProps {
   path: string;
   /** 사용자가 명시적으로 여는 경우만 하이라이트를 미리 돌린다(자동 열림은 하지 않는다). */
   autoOpen?: boolean;
+  /**
+   * **편집기로 연다.** 있으면 헤더에 `편집` 버튼이 붙는다.
+   *
+   * 왜 기본값이 `없음`인가: 이 화면은 대화 안의 블록이고, 블록을 **둘러보는** 것과
+   * **편집**하는 것은 다른 행위다. 편집 버튼은 **편집기로 갈 수 있을 때만** 보여야
+   * 한다 — 항상 붙이면 "누르면 뭐가 된다" 를 모르는 버튼이 하나 늘어난다.
+   */
+  onEdit?: (path: string) => void;
 }
 
-export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps) {
+export function FilePreview({ client, path, autoOpen = false, onEdit }: FilePreviewProps) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -112,6 +120,25 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
         }}
       >
         <span style={{ color: COLOR.FG }}>{path.split("/").pop()}</span>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={() => onEdit(path)}
+            title={`${path} 를 편집기로 엽니다 (자동 저장)`}
+            style={{
+              background: "transparent",
+              color: COLOR.BLUE,
+              border: `1px solid ${BORDER}`,
+              borderRadius: RADIUS.XS,
+              padding: "0 6px",
+              font: "inherit",
+              fontSize: FONT.META,
+              cursor: "pointer",
+            }}
+          >
+            편집
+          </button>
+        )}
         <span style={{ color: DIM, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
         <span style={{ marginLeft: "auto", color: DIM, whiteSpace: "nowrap" }}>
           {LANGUAGE_LABEL[lang]}

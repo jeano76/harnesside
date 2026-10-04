@@ -160,19 +160,19 @@ async function main() {
   await cdp.send("Page.reload", { ignoreCache: true });
   await sleep(2500);
 
-  // 편집기를 연다: 팔레트(Ctrl+P) → 파일명 입력 → Enter. 이 저장소에는 탐색기 패널이
-  // 없고(2026-10-01 사용자가 삭제) 파일 여는 경로는 팔레트다.
-  await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "p", code: "KeyP", modifiers: 2, windowsVirtualKeyCode: 80 });
-  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "p", code: "KeyP", modifiers: 2, windowsVirtualKeyCode: 80 });
-  await sleep(500);
-  for (const ch of "indentGuides.ts") {
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", text: ch, key: ch });
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: ch });
-    await sleep(25);
-  }
-  await sleep(600);
-  await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  // 편집기를 연다 — **입구는 파일 미리보기의 `편집` 버튼**이다(2026-10-05 실측 사실:
+  // 팔레트(Ctrl+P/Ctrl+K)는 **명령 팔레트**이고 파일 검색이 아니다. 도구 블록으로
+  // 열린 파일 미리보기에 `편집` 버튼이 붙어 있고, 그것이 편집기로 가는 길이다).
+  //
+  // 키 입력 대신 **버튼을 눌러서** 연다. 이유: 이 검사가 키를 잘못 쏘면 **사용자의
+  // 대화에 프롬프트가 들어간다**(실측으로 한 번 일어났다). 버튼은 그 위험이 없다.
+  const clicked = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "편집");
+    if (!btn) return { ok: false, buttons: [...document.querySelectorAll("button")].slice(0, 12).map((b) => b.textContent.trim()).filter(Boolean) };
+    btn.click();
+    return { ok: true };
+  })()`);
+  check("파일 미리보기에 `편집` 입구가 있다 (편집기로 가는 길)", clicked?.ok === true, clicked?.ok ? "" : JSON.stringify(clicked?.buttons ?? clicked));
   await sleep(1500);
 
   // **편집기의 textarea 만** 찾는다 — 대화 입력창도 `textarea` 다. 아무거나 잡으면
@@ -187,10 +187,11 @@ async function main() {
       hasEditor: !!editor,
       fonts: tas.map((t) => getComputedStyle(t).fontFamily.split(",")[0]),
       header: (document.body.innerText.match(/indentGuides/) || [])[0] ?? null,
+      dialog: !!document.querySelector('[role="dialog"]'),
     };
   })()`;
   const opened = await cdp.eval(openState);
-  check("팔레트로 편집기가 열린다 (파일 여는 경로가 살아 있다)", opened?.hasEditor === true, JSON.stringify(opened));
+  check("편집기가 열린다 (입구 → 편집기 경로가 살아 있다)", opened?.hasEditor === true, JSON.stringify(opened));
 
   if (!opened?.hasEditor) {
     return done(1);

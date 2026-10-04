@@ -165,6 +165,31 @@ and `~/.harnesside` — stated in the test rather than left as a mystery.
 | Port attribution on macOS/Windows | relies on `ss`/`netstat`/`wmic`; where those are absent the answer is `unknown`, never "free" |
 | Whether `dist` matches the *commit* | mtime comparison only — a fresh checkout makes both trees equally "newest" |
 
+### Code surface — colors, indent guides, editor reachability (2026-10-05)
+
+| Property | How it was checked | Result |
+|---|---|---|
+| Overlay preserves the source line-by-line | `colorOverlay.test.ts` — CRLF normalization, trailing blank lines, tokens rejoined | identical, incl. empty/whitespace lines |
+| **Highlighted code loses no characters** | `highlight.test.ts` + the case that broke it (a 14,290-char minified CSS line lost 12,800) | fixed and pinned; reverting the fix fails 2 tests |
+| Guides land on the right columns | `indentGuides.test.ts` — 17 checks incl. tab stops, closing lines, `ch` strings | pass |
+| **The editor is reachable** | `editorReachability.test.ts` — import must reach a render; a guard and a state write must exist | pass; mutation-proven (4 ways) |
+| Colors are **transparent + a color layer exists** | one test binds both — either alone means an empty editor | pass |
+| Two layers share one metrics object | the test counts the layers that use `EDITOR_TEXT_METRICS` (3) | pass |
+| **The guide lands on a real glyph boundary** | `scripts/verify-editor.mjs` (browser, CDP) | **not measured** — see below |
+
+**Two bugs this round found, both by measuring instead of reading:**
+a minified single line silently lost 12,800 characters (an iteration guard was
+allowed to truncate content), and the editor had no way to open it at all.
+
+**Not measured (and why).** `verify-editor.mjs` needs a file block in the
+session to click `편집` on. The session it ran against had none, and this round
+did not send a prompt into the user's conversation to create one — an earlier
+attempt did exactly that by sending keystrokes, which is why the script now opens
+its own tab, closes it afterwards, and clicks buttons instead of typing. So:
+**the alignment of the color layer with the textarea, and `1ch` against the real
+character width, are unmeasured.** Run `node scripts/verify-editor.mjs` in a
+session where a file was opened.
+
 ### What this does not cover
 
 Stated plainly, because a validation section that only lists passes is not
