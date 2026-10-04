@@ -2144,7 +2144,7 @@ test("falls back to the shrink-and-nudge strategy when there is no partialToolCa
 // tool-call deltas to recover, and the UI rendered nothing the entire
 // time (it only draws `content` deltas) — which is what the repeated
 // "it looks stuck" reports actually were.
-test("chain-of-thought is disabled by default so the token budget goes to the actual work, not invisible reasoning", () =>
+test("chain-of-thought is enabled by default (panel improvement 2026-10-01: Thinking 상시) — no disable flag unless explicitly opted out", () =>
   withTempProject(async (dir) => {
     const { backend, turnRequests } = scriptedBackend({ turnResponses: [assistantMessage("done")], tokenCounts: [10] });
     const loop = new AgentLoop({
@@ -2157,11 +2157,28 @@ test("chain-of-thought is disabled by default so the token budget goes to the ac
 
     await loop.send("hi");
 
-    assert.deepEqual(
+    assert.equal(
       turnRequests[0].chat_template_kwargs,
-      { enable_thinking: false },
-      "expected thinking to be disabled by default on every turn request"
+      undefined,
+      "expected no thinking disable flag by default (ON is normal)"
     );
+  }));
+
+test("enableThinking: false opts out, sending the disable flag", () =>
+  withTempProject(async (dir) => {
+    const { backend, turnRequests } = scriptedBackend({ turnResponses: [assistantMessage("done")], tokenCounts: [10] });
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: { autoTriggerRatio: 0.99, contextWindowTokens: 16384 },
+      enableThinking: false,
+    });
+
+    await loop.send("hi");
+
+    assert.deepEqual(turnRequests[0].chat_template_kwargs, { enable_thinking: false }, "expected thinking disable flag when explicitly opted out");
   }));
 
 test("enableThinking: true opts back in, sending no disable flag at all", () =>

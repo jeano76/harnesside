@@ -158,8 +158,8 @@ export const SETTINGS: SettingDef[] = [
     section: "agent",
     label: "thinking 사용",
     type: "boolean",
-    default: false,
-    rationale: "§5.3 의 실측 함정: 420토큰 예산에서 켜면 사고에 예산을 다 써서 tool_call 이 0개가 된다. 그래서 기본 꺼짐.",
+    default: true,
+    rationale: "패널 개선(2026-10-01 Thinking 상시·사고 표시 기본 ON)의 정상 기본값은 켜짐이다. §5.3의 예산 함정은 상한(maxReasoningTokens 1024)+초과 시 강제 도구호출 전환으로 방어하므로, 기본을 꺼서 화면에 사고가 안 보이는 상태를 정상으로 두지 않는다.",
   },
   {
     key: "agent.thinkStyle",

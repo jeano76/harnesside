@@ -46,8 +46,8 @@ test("§5.13 의 **6개 섹션** 이 모두 있다", () => {
 test("기본값이 **요구사항과 일치**한다 — 근거 없는 기본값은 안 된다", () => {
   // §4.7 / 사용자의 원래 요청: 브라우저 GPU 는 꺼짐
   assert.equal(SETTINGS_BY_KEY["browser.gpu"].default, "off");
-  // §5.3 실측 함정: thinking 기본 OFF
-  assert.equal(SETTINGS_BY_KEY["agent.enableThinking"].default, false);
+  // §5.3 + 패널 개선(2026-10-01 Thinking 상시): thinking 기본 ON
+  assert.equal(SETTINGS_BY_KEY["agent.enableThinking"].default, true);
   // §5.12: 로그 상한 50만 자
   assert.equal(SETTINGS_BY_KEY["log.maxChars"].default, 500_000);
   // §7.2: Ornith 고정

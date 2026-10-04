@@ -457,7 +457,7 @@ async function main() {
       contextWindowTokens,
     },
     autoResume: config.compaction.autoResume,
-    enableThinking: config.enableThinking ?? false,
+    enableThinking: config.enableThinking ?? true,
     verify: config.verify?.afterEdit,
     gitCheckpoint: config.checkpoint?.git ?? false,
     repeatPenalty: config.repeatPenalty,

@@ -1,5 +1,6 @@
 import type { ChatMessage, ModelBackend } from "../backend/types.js";
 import { AGENT_STATE_TOOLS, FILE_TOOLS, activeToolDefs, executeTool } from "../tools/index.js";
+import type { ApprovalGate, ToolRequest } from "../server/approval.js";
 import { CircuitBreaker } from "../hermes/selfHeal.js";
 import { logFailure, getFailureLog } from "../hermes/selfHeal.js";
 import { proposeImprovement, writeProposedRule, appendImprovementLog, ImprovementProposal } from "../hermes/selfImprove.js";
@@ -235,9 +236,11 @@ export interface AgentLoopOptions {
   backend: ModelBackend;
   systemPrompt: string;
   thresholds: CompactionThresholds;
-  /** Off by default — see config.ts's `enableThinking` for the measured
-   *  reason (an entire max_tokens budget spent on invisible
-   *  `reasoning_content` before the tool call even began). */
+  /** On by default (panel improvement 2026-10-01: Thinking 상시) — see
+   *  config.ts's `enableThinking` for the measured reason the old default
+   *  was off (an entire max_tokens budget spent on invisible
+   *  `reasoning_content` before the tool call even began). The guard
+   *  (budget cap + forced tool_choice) keeps ON safe. */
   enableThinking?: boolean;
   /** Per-extension checks run after each file edit (see harness.ts);
    *  false turns them off. From config.yaml's verify.afterEdit. */
@@ -271,10 +274,10 @@ export interface AgentLoopOptions {
   /** Called once an assistant message (streamed or not) is fully received —
    *  the UI uses this to stop appending to the current line. */
   onAssistantDone?: () => void;
-  onToolCall?: (name: string, args: string) => void;
+  onToolCall?: (name: string, args: string, callId?: string) => void;
   /** Fires once a SPECIFIC tool call has fully finished (success or
    *  failure), regardless of tool type. See its call sites' doc comment. */
-  onToolCallDone?: (name: string, args: string) => void;
+  onToolCallDone?: (name: string, args: string, diff?: string, callId?: string) => void;
   /** ANSI-colored diff for a file-mutating tool call, UI-only. */
   onDiff?: (path: string, diff: string) => void;
   /** Fires with a run_shell command's raw output — see its call site's doc
@@ -323,6 +326,8 @@ export interface AgentLoopOptions {
    *  previous process) already does this unconditionally — this extends the
    *  same behavior to a compaction that fires live, mid-session. */
   autoResume?: boolean;
+  /** 승인 게이트 — 파괴적 도구 호출을 통과시킨다. 없으면 게이트 없이 실행(테스트용). */
+  approvalGate?: ApprovalGate | null;
 }
 
 /**
@@ -756,7 +761,8 @@ export class AgentLoop {
             // thinking OFF gave 0 reasoning deltas and 362 tool_calls
             // deltas from the identical budget. Everything else in this
             // file's truncation handling is a safety net under this.
-            ...(this.opts.enableThinking ? {} : { chat_template_kwargs: { enable_thinking: false } }),
+            // Default ON (panel improvement 2026-10-01): only explicit false disables.
+            ...(this.opts.enableThinking === false ? { chat_template_kwargs: { enable_thinking: false } } : {}),
           },
           (chunk) => {
             // Defensive: `chunk.choices` isn't guaranteed non-empty/present
@@ -1139,16 +1145,17 @@ export class AgentLoop {
           return;
         }
 
-        this.opts.onToolCall?.(call.function.name, call.function.arguments);
+        this.opts.onToolCall?.(call.function.name, call.function.arguments, call.id);
 
         if (AGENT_STATE_TOOLS.has(call.function.name)) {
           const result = await this.applyStateTool(call.function.name, call.function.arguments);
           this.messages.push({ role: "tool", tool_call_id: call.id, content: result });
-          this.opts.onToolCallDone?.(call.function.name, call.function.arguments);
+          this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id);
           continue;
         }
 
         let content: string;
+        let doneDiff: string | undefined;
         if (isElidedContentWrite(call.function.name, call.function.arguments)) {
           content =
             "ERROR: refused — the content argument is the placeholder that replaces an earlier write's content in this " +
@@ -1162,11 +1169,37 @@ export class AgentLoop {
           });
           this.hasNewFailuresThisTurn = true;
           this.messages.push({ role: "tool", tool_call_id: call.id, content });
-          this.opts.onToolCallDone?.(call.function.name, call.function.arguments);
+          this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id);
           continue;
         }
         const editPath = EDIT_TOOLS.has(call.function.name) ? pathArg(call.function.arguments) : null;
         const editedExisting = editPath !== null && existsSync(editPath);
+        // 승인 게이트 통과 — 게이트가 있으면 파괴적 도구 호출을 차단한다.
+        // 자동 허용(auto) 도구는 바로 넘어가고(allowlist), ask 이상은
+        // gate.request() 로 사용자에게 확인한다. 거절/타임아웃이면 실행하지 않고
+        // 에러 결과를 돌려준다.
+        if (this.opts.approvalGate) {
+          const argsObj = JSON.parse(call.function.arguments || "{}");
+          const toolRequest: ToolRequest = {
+            tool: call.function.name,
+            summary: `${call.function.name}(${JSON.stringify(argsObj).slice(0, 120)})`,
+            ...(Object.keys(argsObj).length ? { args: argsObj } : {}),
+          };
+          const decision = await this.opts.approvalGate!.request(toolRequest);
+          if (decision !== "allow-once" && decision !== "allow-always") {
+            content = `승인되지 않았습니다 — ${decision}`;
+            logFailure({
+              timestamp: new Date().toISOString(),
+              summary: `tool ${call.function.name} blocked by approval gate`,
+              toolName: call.function.name,
+              errorMessage: `decision=${decision}`,
+            });
+            this.hasNewFailuresThisTurn = true;
+            this.messages.push({ role: "tool", tool_call_id: call.id, content });
+            this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id);
+            continue;
+          }
+        }
         try {
           const result = await executeTool(call.function.name, call.function.arguments, this.opts.projectRoot);
           content = result.lineRange
@@ -1178,6 +1211,7 @@ export class AgentLoop {
               )
             : capToolResult(result.content, this.opts.thresholds.contextWindowTokens);
           if (result.diff) {
+          doneDiff = result.diff;
             this.opts.onDiff?.(this.summarizeArgs(call.function.arguments), result.diff);
           }
           // Requested directly: a run_shell result (npm test, npm run
@@ -1258,7 +1292,7 @@ export class AgentLoop {
         // 명령어가 멀티 라인일 경우에는 해당 명령어가 끝나면 폴딩으로
         // 접어줘야해". Used by the TUI to auto-fold a multi-line tool-call
         // label once it's done (never while it's still running).
-        this.opts.onToolCallDone?.(call.function.name, call.function.arguments);
+        this.opts.onToolCallDone?.(call.function.name, call.function.arguments, doneDiff);
       }
     }
   }

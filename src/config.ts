@@ -73,26 +73,19 @@ export interface HarnessideConfig {
     enabled?: boolean;
   };
   /** Whether to let the model emit chain-of-thought (`reasoning_content`)
-   *  before its actual answer/tool call. Defaults to FALSE — measured
-   *  directly against the real backend, and it is the root cause behind a
-   *  long run of "the model never finished writing the file" failures:
+   *  before its actual answer/tool call. Defaults to TRUE (panel improvement
+   *  2026-10-01: Thinking 상시 · 사고 표시 기본 ON) — the old OFF default
+   *  left the panel blank ("no feature") even though the model was thinking.
    *
+   *  The measured risk behind the old default is still guarded, not removed:
    *    same 420-token budget, same prompt:
    *      thinking on  -> 420 reasoning_content deltas, 0 tool_calls deltas
    *      thinking off ->   0 reasoning_content deltas, 362 tool_calls deltas
    *
-   *  With it on, the model spent the ENTIRE max_tokens budget on thinking
-   *  and never even began the tool call — so nothing was written, nothing
-   *  could be salvaged (there were no tool_call deltas to recover), and
-   *  the UI showed nothing at all while it happened (harnesside renders
-   *  `content` deltas, not `reasoning_content`), which is what "it looks
-   *  stuck" actually was. llama-server itself warns about this at startup:
-   *  "chat template supports preserving reasoning, it is enabled by
-   *  default (may use more tokens, disable via --no-reasoning-preserve)".
-   *
-   *  Set true to opt back in (a model/task where visible deliberation is
-   *  worth the budget); harnesside then also streams the reasoning to the UI
-   *  rather than going silent. */
+   *  So ON is safe only with the budget cap (`agent.maxReasoningTokens`,
+   *  default 1024) + forced `tool_choice: "required"` switch on overrun
+   *  (see web/agent/think.ts `ingest` and server/agentService.ts
+   *  DEFAULT_THINK). Set false to opt out. */
   enableThinking?: boolean;
 
 }
@@ -111,6 +104,9 @@ export const DEFAULT_CONFIG: HarnessideConfig = {
   // so the overflow-retry safety net is rarely needed rather than routinely
   // relied on. Trades slightly more frequent compaction for that.
   compaction: { autoTriggerRatio: 0.7, autoResume: true },
+  // 패널 개선 정상 기본값: Thinking 상시 ON (web/agent/think.ts initialThink,
+  // server/agentService.ts DEFAULT_THINK, config/schema.ts 와 동일).
+  enableThinking: true,
   llama: {
     binPath: "llama-server",
     modelPath: "",
