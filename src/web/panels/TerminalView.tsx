@@ -184,25 +184,8 @@ export function TerminalView({
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       {/* nav bar removed 2026-10-04 (user): use left explorer or cd. */}
       {/* 세션이 생성되는 동안 빈 패널을 두지 않는다 — "연결 중" 을 말한다. */}
-      {tabs.length > 1 && (
-        <div role="tablist" aria-label="터미널 탭" style={{ display: "flex", gap: 2, padding: "2px 6px 0", flex: "0 0 auto", overflowX: "auto" }}>
-          {tabs.map((t) => (
-            <span key={t.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 6px", fontSize: 11, borderRadius: "4px 4px 0 0", background: t.id === session?.id ? "#161b22" : "transparent", color: t.id === session?.id ? FG : DIM, border: `1px solid ${t.id === session?.id ? "#30363d" : "transparent"}`, borderBottom: 0 }}>
-              <button type="button" role="tab" aria-selected={t.id === session?.id} onClick={() => { userActivated.current = true; setActiveId(t.id); }} title={t.cli ? `${t.title} — tmux 세션 ${t.cli.sessionName}\n폴더 ${t.cwd}\n※ 이 탭의 작업은 harnesside 승인 게이트 밖에서 실행됩니다.` : t.cwd} style={{ background: "none", border: 0, color: "inherit", cursor: "pointer", font: "inherit", padding: 0 }}>
-                {t.cli ? "◆ " : ""}{t.title}{t.state === "exited" ? " ✕" : ""}
-              </button>
-              {t.cli && (
-                <button type="button" aria-label={`${t.title} 탭 닫기(CLI 는 계속 실행)`} title="탭만 닫습니다 — tmux 안의 CLI 는 계속 실행됩니다 (/cli 로 다시 붙기)" onClick={() => { void client.post(`/api/terminal/${encodeURIComponent(t.id)}/close`, {}).catch(() => {}); setTabs((prev) => prev.filter((x) => x.id !== t.id)); setActiveId((cur) => (cur === t.id ? null : cur)); }} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", padding: 0 }}>×</button>
-              )}
-            </span>
-          ))}
-          {onToggleExpand && (
-            <button type="button" onClick={onToggleExpand} aria-pressed={expanded} title={expanded ? "셸 영역을 원래 높이(4줄)로 되돌립니다" : "셸 영역을 크게 키웁니다 — AI CLI 는 화면이 많이 필요합니다"} style={{ marginLeft: "auto", background: "none", border: `1px solid #30363d`, borderRadius: 4, color: DIM, cursor: "pointer", font: "inherit", fontSize: 10, padding: "0 8px", alignSelf: "center" }}>
-              {expanded ? "축소" : "확대"}
-            </button>
-          )}
-        </div>
-      )}
+      {/* 탭 막대는 없다(사용자 지정, 2026-10-04): AI CLI 사이의 이동은 **프롬프트 옆 모델 선택기로만** 한다.
+          탭을 눌러 옮기면 입력창 대상과 보이는 터미널이 어긋난다. 탭을 닫는 일도 없다 — 로컬을 고르면 숨겨질 뿐이다. */}
       {session ? (
         <XtermPane key={session.id} session={session} client={client} notice={notice} />
       ) : (

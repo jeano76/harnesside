@@ -34,7 +34,7 @@ import { planClone, clone, redactUrl, pull, push, summarize, currentBranch, comm
 import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
-import { formatCrashReport, writeCrashLogSync, readCrashTail } from "../crashHandler.js";
+import { formatCrashReport, writeCrashLogSync, readCrashTail, acknowledgeCrashLog, archiveHarmlessCrashLog } from "../crashHandler.js";
 import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
 import { ApprovalGate } from "./approval.js";
 import { SessionBridge } from "../session/bridge.js";
@@ -453,6 +453,8 @@ async function main(): Promise<number> {
       }
     }
   });
+  // 이전 실행의 크래시 기록이 **끊긴 파이프뿐**이면 배너 없이 보관 폴더로 옮긴다.
+  if (archiveHarmlessCrashLog(projectRoot)) emit("[info] 이전 실행의 크래시 기록은 끊긴 파이프(EPIPE)뿐이라 .harnesside/crash-archive/ 로 옮겼습니다.");
   let crashing = false;
   process.on("uncaughtException", (e) => {
     // 출력 쪽이 끊긴 것(EPIPE)은 서버가 죽을 이유가 아니다 — 처리기가 같은 stdout 에 다시 써서 무한히 되풀이되던 사고.
@@ -619,6 +621,8 @@ async function main(): Promise<number> {
           // M10 크래시 안내 — 이전 실행이 비정상 종료했으면 창이 그것을 말한다.
           // 없으면 present:false. 읽기 실패는 error 로 말하고 없음으로 덮지 않는다.
           .route("GET", "/api/crash", () => readCrashTail(projectRoot))
+          // 배너의 "닫기" — 기록을 지우지 않고 보관 폴더로 옮긴다(다음 실행에 같은 배너가 또 뜨지 않게).
+          .route("POST", "/api/crash/ack", () => ({ ok: true, ...acknowledgeCrashLog(projectRoot) }))
           .route("GET", "/api/bootstrap", () => ({
             steps: r.steps.map((s) => ({ n: s.n, name: s.name, ok: s.ok, detail: s.detail, pending: !!s.pending, tookSeconds: s.tookSeconds })),
             tuning: r.tuning?.rationale ?? [],

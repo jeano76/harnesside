@@ -5,8 +5,8 @@
  * 다음 실행의 창은 그것을 보여주고, 체크포인트가 있으면 `ResumeBanner` 가
  * 재개를 맡는다 — 여기서 재개 버튼을 중복하지 않는다 (같은 일을 두 곳에 두지 않는다).
  *
- * 닫기 버튼은 이번 화면에서만 숨긴다. 로그는 지우지 않는다 — 증거를
- * 조용히 지우면 "왜 죽었지" 에 답할 수 없게 된다.
+ * 닫기 버튼은 화면에서 숨기고, 서버가 기록을 `.harnesside/crash-archive/` 로 **옮긴다**(지우지 않는다 —
+ * 증거를 조용히 지우면 "왜 죽었지" 에 답할 수 없게 된다). 옮기지 않으면 같은 배너가 창을 열 때마다 뜬다.
  */
 import React from "react";
 import type { ApiClient } from "../api.js";
@@ -46,7 +46,11 @@ export function CrashBanner({ client }: { client: ApiClient }) {
         <span style={{ flex: 1 }} />
         <button
           type="button"
-          onClick={() => setHidden(true)}
+          onClick={() => {
+            // 숨기기만 하면 다음에 열 때 같은 배너가 또 뜬다 — 서버가 기록을 보관 폴더로 옮긴다(지우지 않는다).
+            setHidden(true);
+            void client.post("/api/crash/ack", {}).catch(() => { /* 못 옮겨도 이번 화면에선 숨겨졌다 */ });
+          }}
           aria-label="크래시 안내 닫기"
           style={{ background: "transparent", color: COLOR.DIM, border: 0, cursor: "pointer", font: "inherit", fontSize: FONT.AUX }}
         >

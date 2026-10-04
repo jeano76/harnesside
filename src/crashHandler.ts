@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeSync, readFileSync, statSync, renameSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -56,6 +56,46 @@ export function readCrashTail(
     return { present: true, tail, error: null };
   } catch (e) {
     return { present: false, tail: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * 크래시 기록이 **전부 "끊긴 파이프(EPIPE)"** 인가 — 출력 쪽이 닫혀서 난 소음이지 서버 버그가 아니다.
+ * 항목이 하나라도 다른 오류면 false(진짜 크래시를 숨기지 않는다).
+ */
+export function isOnlyBrokenPipe(text: string): boolean {
+  const entries = text.split(/harnesside fatal error \([^)]*\):\n/).slice(1);
+  if (entries.length === 0) return false;
+  return entries.every((e) => /^Error: write EPIPE/.test(e.trimStart()));
+}
+
+/**
+ * 크래시 기록을 **확인 처리**한다 — 지우지 않고 `.harnesside/crash-archive/` 로 옮긴다(증거 보존).
+ * 옮기고 나면 다음 실행에 "이전 실행이 비정상 종료되었습니다" 배너가 다시 뜨지 않는다.
+ * 닫기만 누르고 기록을 그대로 두면 **창을 열 때마다 같은 배너가 영원히 뜬다**(2026-10-04).
+ */
+export function acknowledgeCrashLog(projectRoot: string, now: () => Date = () => new Date()): { moved: boolean; to: string | null } {
+  const from = crashLogPath(projectRoot);
+  try {
+    statSync(from);
+  } catch {
+    return { moved: false, to: null };
+  }
+  const dir = join(projectRoot, ".harnesside", "crash-archive");
+  mkdirSync(dir, { recursive: true });
+  const to = join(dir, `crash-${now().toISOString().replace(/[:.]/g, "-")}.log`);
+  renameSync(from, to);
+  return { moved: true, to };
+}
+
+/** 기록이 **끊긴 파이프뿐**이면 자동으로 보관 폴더로 옮긴다 — 서버 버그가 아니라서 배너로 사용자를 놀라게 하지 않는다. */
+export function archiveHarmlessCrashLog(projectRoot: string): boolean {
+  try {
+    const text = readFileSync(crashLogPath(projectRoot), "utf8");
+    if (!isOnlyBrokenPipe(text.replace(/\n\(이후 같은 EPIPE[^\n]*\n?/g, "\n"))) return false;
+    return acknowledgeCrashLog(projectRoot).moved;
+  } catch {
+    return false;
   }
 }
 
