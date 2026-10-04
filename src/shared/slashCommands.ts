@@ -22,16 +22,16 @@ export interface SlashCommandDef {
   /** 한 줄 설명. */
   description: string;
   /** `tui` 는 터미널 제어라 웹 창에는 없다. */
-  where: "both" | "web" | "tui";
+  where: "both" | "web" | "tui";  // web = 웹에만 있다, tui = 콘솔에만 있다
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = [
-  { key: "help", label: "/help", description: "도움말 + 키보드 단축키 전체", where: "both" },
-  { key: "keys", label: "/keys", description: "키보드 단축키만 보기", where: "both" },
+  { key: "help", label: "/help", description: "도움말 + 키보드 단축키 전체", where: "tui" },
+  { key: "keys", label: "/keys", description: "키보드 단축키만 보기", where: "tui" },
   { key: "quit", label: "/quit", description: "정상종료 (창을 닫으면 함께 종료)", where: "both" },
   { key: "queue", label: "/queue", description: "대기열 보기", where: "both" },
   { key: "compact", label: "/compact", description: "지금 컨텍스트 압축 실행", where: "both" },
-  { key: "copy", label: "/copy [줄수]", description: "화면 로그 복사 (드래그 선택과 같은 클립보드)", where: "both" },
+  { key: "copy", label: "/copy", description: "화면 로그 복사 — /copy 20 처럼 줄 수 지정 (드래그 선택과 같은 클립보드)", where: "tui" },
   { key: "skills", label: "/skills", description: "불러온 스킬 목록", where: "both" },
   { key: "rules", label: "/rules", description: "불러온 룰 목록", where: "both" },
   { key: "improve", label: "/improve", description: "반복 실패 분석 → 룰 제안", where: "both" },
@@ -39,8 +39,13 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { key: "plan-clear", label: "/plan-clear", description: "멈춘 계획 표시 초기화", where: "both" },
   // 터미널 제어 — 웹 창에는 감지할 터미널도 제어할 터미널도 없다.
   // 조용히 없는 척 하지 않고 **이유를 말한다**(`where: "tui"`).
-  { key: "term", label: "/term", description: "감지된 터미널과 지원 기능 상태 (콘솔 전용)", where: "tui" },
-  { key: "mouse", label: "/mouse", description: "마우스 스크롤/클릭 켜기·끄기 (콘솔 전용)", where: "tui" },
+  { key: "term", label: "/term", description: "감지된 터미널과 지원 기능 상태 ", where: "both" },
+  { key: "mouse", label: "/mouse", description: "마우스 스크롤/클릭 켜기·끄기", where: "tui" },
+  // llamacli 의 서버 쪽 명령 — 웹 서버가 같은 내용을 실행한다(`server/slashService.ts`).
+  // 콘솔(TUI)에는 핸들러가 없어서 `web` 으로 둔다.
+  { key: "models", label: "/models", description: "이 PC에서 구동 가능한 로컬 모델 메트릭스 · 선택", where: "web" },
+  { key: "server", label: "/server", description: "모델 제공 서버 상태 확인 · restart 로 재시작(확인 후)", where: "web" },
+  { key: "reset", label: "/reset", description: "현재 GPU·VRAM·RAM에 맞는 모델/설정으로 다시 초기화", where: "web" },
 ];
 
 export const SLASH_BY_KEY: Record<string, SlashCommandDef> = Object.fromEntries(

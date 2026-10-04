@@ -16,7 +16,7 @@ import { resolveToken } from "./session.js";
 import { LogPanel } from "./panels/LogPanel.js";
 import { WorkspaceBar } from "./panels/WorkspaceBar.js";
 import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js";
-import { openView, toggleView, collapseView } from "../session/blocks.js";
+import { openView, toggleView, collapseView, addSlash, finishSlash, findSlash, toggleSlashFold, restartSlash } from "../session/blocks.js";
 import { ModelPanel } from "./panels/ModelPanel.js";
 import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
@@ -25,6 +25,7 @@ import { DiffPanel } from "./editor/DiffPanel.js";
 import { EditorView } from "./editor/EditorView.js";
 import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";
+import { webSlashCommands, parseSlash } from "../shared/slashCommands.js";
 import { CommitBox } from "./panels/CommitBox.js";
 import { ResumeBanner } from "./panels/ResumeBanner.js";
 import { CrashBanner } from "./panels/CrashBanner.js";
@@ -82,6 +83,25 @@ const TITLE_KEY: Record<string, string> = {
 };
 
 /** 2026-10-04: dead panel shells removed. See layout comment below. */
+
+/**
+ * 슬래시 버튼 툴팁 — 마우스를 올리면 **무엇을 하고, 무엇을 바꾸고, 어떻게 쓰는지** 를 말한다.
+ * 서버나 설정을 바꾸는 명령은 그 사실과 확인 절차를 반드시 적는다(모르고 누르지 않게).
+ */
+const SLASH_TIPS: Record<string, string> = {
+  quit: "/quit — 정상 종료\n체크포인트와 세션을 저장한 뒤 서버를 끕니다. 채택한 외부 llama-server는 그대로 둡니다.\n실수 방지: 15초 안에 한 번 더 눌러야 종료됩니다.",
+  queue: "/queue — 대기열 보기\n에이전트가 일하는 중에 보낸 메시지가 어떤 순서로 처리될지 보여줍니다.\n보기만 하며 아무것도 바꾸지 않습니다. (순서 변경·비우기는 입력창 위 대기 칩에서)",
+  compact: "/compact — 컨텍스트 압축\n지금 대화를 요약해 컨텍스트 사용량을 줄입니다. 임계치에 닿으면 자동으로도 실행됩니다.\n대화가 아직 없으면 압축할 것이 없다고 알려줍니다.",
+  skills: "/skills — 스킬 목록\n현재 작업 폴더에서 불러온 스킬(.harnesside/skills/*.md)의 이름과 트리거 설명을 보여줍니다.\n보기만 합니다.",
+  rules: "/rules — 룰 목록\n시스템 프롬프트에 적용 중인 룰 파일(.harnesside/rules/, .clinerules)의 경로를 보여줍니다.\n보기만 합니다.",
+  improve: "/improve — 자기개선 제안\n반복된 실패 패턴을 분석해 룰 제안을 만듭니다.\n제안만 보여주고 디스크에는 아무것도 쓰지 않습니다. 저장은 /improve-apply 로 합니다.",
+  "improve-apply": "/improve-apply — 제안 저장\n마지막 /improve 제안을 룰 파일로 저장합니다. 다음 세션부터 시스템 프롬프트에 자동 반영됩니다.\n저장할 제안이 없으면 먼저 /improve 를 실행하라고 알려줍니다.",
+  "plan-clear": "/plan-clear — 계획 표시 초기화\n멈춘 계획 진행 표시와 체크포인트를 지웁니다.\n작업 중이던 계획 정보가 사라지므로 계획이 멈춰 있을 때만 사용하세요.",
+  term: "/term — 터미널/브라우저 정보\n이 창의 브라우저, 플랫폼, 화면 크기·배율, 클립보드 사용 가능 여부를 보여줍니다.\n콘솔 전용 항목(제어문자·대체화면 등)은 웹 창에 해당이 없습니다.",
+  models: "/models — 구동 가능한 로컬 모델\n이 PC의 VRAM·RAM 기준으로 모델별 구동 가능 여부(✅ VRAM / ⚠️ RAM 스트리밍 / ❌)를 표로 보여줍니다.\n선택: 입력창에 /models <번호>. 실행 중인 서버를 바꾸려면 /models <번호> confirm 이 필요합니다(서버가 잠시 내려갑니다).",
+  server: "/server — 모델 서버 상태\n지금 떠 있는 llama-server의 포트·모델·빌드와 재시작 시 계획을 보여줍니다.\n재시작: 입력창에 /server restart (변경 내용 미리보기) → /server restart confirm 으로 확정. 확정하면 실행 중인 서버를 내렸다 올립니다.",
+  reset: "/reset — 설정 초기화\n현재 GPU·VRAM·RAM에 맞게 컨텍스트·스레드·오프로드 등 llama 설정을 다시 계산합니다.\n그냥 누르면 미리보기만 하며 아무것도 바꾸지 않습니다. 적용은 /reset confirm (설정 파일을 덮어쓰며, 실행 중인 서버에는 /server restart 로 따로 반영).",
+};
 
 export default function App() {
   // M9: 문자열은 여기서 키로 바꾼다. 훅이 **함수** 를 돌려주는 이유는 로케일이
@@ -185,6 +205,14 @@ export default function App() {
     const text = draft.trim();
     // 실행 중이어도 받는다 — 서버 대기열에 넣는다(거절하지 않는다, O4).
     if (!text) return;
+    // 슬래시 명령을 입력창에 직접 써도 된다(`/models 3`, `/copy 20`) — 모델로 보내지 않고
+    // 명령으로 실행한다. 등록된 명령이 아니면(`/home/...`) 평범한 문장이라 그대로 보낸다.
+    const sl = parseSlash(text);
+    if (sl && webSlashCommands().some((c) => c.key === sl.key)) {
+      setDraft("");
+      void runSlash(sl.key, sl.arg, false);
+      return;
+    }
     setTurnRunning(true);
     // 사용자 입력을 대화 기록에 **먼저** 남긴다. WS 가 늦게 와도 순서가 뒤집히지 않는다.
     // **사람이 보낸 말을 블록으로 남긴다** — 이것이 대화 묶음의 경계다(2026-10-01).
@@ -205,6 +233,91 @@ export default function App() {
       pushToast({ id: "turn:fail", kind: "error", title: "턴 요청이 실패했습니다", body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
     }
   }, [draft, pushToast]);
+
+  /**
+   * 슬래시 버튼 — llamacli(TUI)의 `onSlashCommand` 와 **같은 내용**을 웹에서 실행하고,
+   * 결과를 **대화 안 블록**(접고 펼 수 있음)으로 남긴다. 서버에 진입점이 없는
+   * 명령(`copy`·`quit`)과 콘솔 전용(`term`·`mouse`)은 버튼으로 만들지 않는다.
+   */
+  const quitArmedAt = useRef(0);
+  const runSlash = useCallback(async (key: string, arg = "", fromButton = true) => {
+    // `/quit` 는 두 번 눌러야 종료한다(llamacli 도 확인 없이 끝내지 않는다).
+    if (key === "quit") {
+      const at = Date.now();
+      const armed = at - quitArmedAt.current < 15_000;
+      const qid = `slash-${at}-quit`;
+      setBlocks((prev) => addSlash(prev, qid, key, at));
+      if (!armed) {
+        quitArmedAt.current = at;
+        setBlocks((prev) => finishSlash(prev, qid, "정상종료합니다 — 체크포인트와 세션을 저장한 뒤 서버가 꺼집니다.\n정말 종료하려면 15초 안에 /quit 를 한 번 더 누르세요.", true));
+        return;
+      }
+      quitArmedAt.current = 0;
+      try {
+        const r = await client.post<{ ok: boolean; detail: string }>("/api/system/quit", {});
+        setBlocks((prev) => finishSlash(prev, qid, r.detail, r.ok));
+      } catch (e) {
+        setBlocks((prev) => finishSlash(prev, qid, e instanceof ApiError ? e.message : String(e), false));
+      }
+      return;
+    }
+    // 같은 버튼을 다시 누르면 **새로 쌓지 않는다** — 열려 있으면 접고, 접혀 있으면
+    // 펼치면서 다시 실행한다(설정 버튼과 같은 규칙). 인자가 있는 입력(`/models 3`)은
+    // 매번 **새 대화**다 — 다른 요청이기 때문이다.
+    const existing = fromButton && !arg ? findSlash(blocksRef.current, key) : undefined;
+    let id: string;
+    if (existing) {
+      if (existing.view?.viewCollapsed !== true && existing.view?.slashState !== "running") {
+        setBlocks((prev) => toggleSlashFold(prev, existing.id));
+        return;
+      }
+      id = existing.id;
+      setBlocks((prev) => restartSlash(prev, id));
+    } else {
+      const at = Date.now();
+      id = `slash-${at}-${Math.random().toString(36).slice(2, 6)}`;
+      setBlocks((prev) => addSlash(prev, id, key, at));
+      // 인자가 있으면 사람이 보낸 말에도 인자가 보이게 한다(`/models 3`).
+      if (arg) setBlocks((prev) => prev.map((b) => (b.id === `${id}-user` ? { ...b, text: `/${key} ${arg}` } : b)));
+    }
+    const done = (text: string, ok = true) => setBlocks((prev) => finishSlash(prev, id, text, ok));
+    try {
+      if (key === "queue") {
+        const r = await client.get<{ items: string[] }>("/api/agent/queue");
+        done(r.items.length ? `Queue (${r.items.length}):\n${r.items.map((q, i) => `${i + 1}. ${q}`).join("\n")}` : "The queue is empty.");
+      } else if (key === "skills") {
+        const r = await client.get<{ skills: { name: string; trigger: string }[] }>("/api/agent/context-files");
+        done(r.skills.length ? `Loaded skills:\n${r.skills.map((x) => `- ${x.name}: ${x.trigger}`).join("\n")}` : "No skills registered (.harnesside/skills/*.md).");
+      } else if (key === "rules") {
+        const r = await client.get<{ rules: { path: string }[] }>("/api/agent/context-files");
+        done(r.rules.length ? `Loaded rules:\n${r.rules.map((x) => `- ${x.path}`).join("\n")}` : "No rules applied (.harnesside/rules/ or .clinerules).");
+      } else if (key === "improve") {
+        const r = await client.post<{ ok: boolean; detail: string; proposal: { summary: string; ruleMarkdown: string } | null }>("/api/agent/improve", {});
+        done(
+          r.proposal
+            ? [`[self-improvement proposal] ${r.proposal.summary}`, "", r.proposal.ruleMarkdown, "", "Run /improve-apply to apply it (nothing is written to disk until you do)."].join("\n")
+            : r.detail,
+          r.ok
+        );
+      } else if (key === "models" || key === "server" || key === "reset") {
+        // 서버가 오래 걸리는 일(내려받기·재시작)을 하므로 작업으로 돌리고 출력을 따라간다.
+        let job = await client.post<{ id: string; text: string; done: boolean; ok: boolean }>("/api/slash/run", { key, arg });
+        for (;;) {
+          setBlocks((prev) => (job.done ? finishSlash(prev, id, job.text, job.ok) : prev.map((b) => (b.id === id ? { ...b, text: job.text } : b))));
+          if (job.done) break;
+          await new Promise((r) => setTimeout(r, 800));
+          job = await client.get(`/api/slash/job/${encodeURIComponent(job.id)}`);
+        }
+      } else {
+        const path = { compact: "/api/agent/compact", "improve-apply": "/api/agent/improve/apply", "plan-clear": "/api/agent/plan/clear" }[key];
+        if (!path) return done("웹에서 지원하지 않는 명령입니다", false);
+        const r = await client.post<{ ok: boolean; detail: string }>(path, {});
+        done(r.detail, r.ok);
+      }
+    } catch (e) {
+      done(e instanceof ApiError ? e.message : String(e), false);
+    }
+  }, []);
 
   const loadTree = useCallback(async () => {
     try {
@@ -648,6 +761,7 @@ export default function App() {
         viewExtra={viewExtra}
         onToggleView={onToggleView}
         onCloseView={onCloseView}
+        onToggleBlock={(b: AgentBlock) => setBlocks((prev) => toggleSlashFold(prev, b.id))}
         overlay={approvalOverlay}
         running={turnRunning}
         // 상태바 — 이미 **앱 전체가 하나씩** 붙들고 있는 값을 **읽기만** 넘긴다.
@@ -865,7 +979,12 @@ export default function App() {
           style={{ flex: "0 0 auto", height: 6, cursor: "row-resize", background: "transparent" }}
         />
         <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: 0, borderTop: `1px solid ${BORDER}`, borderRadius: 0, margin: 0, background: "#161b22" }}>
+          <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
           <textarea ref={draftRef} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (draft.trim()) void sendTurn(); } }} placeholder="무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)" aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
+          <button type="button" disabled={!draft.trim()} onClick={() => void sendTurn()} style={{ flex: "0 0 auto", alignSelf: "stretch", margin: 6, padding: "0 16px", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
+            {turnRunning ? "대기열에 추가" : "보내기"}
+          </button>
+          </div>
           {/* O4 대기열 — 실행 중 들어온 입력과 순서 변경. 칩의 ↑↓로 순서를 바꾼다. */}
           {queueItems.length > 0 && (
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", padding: "2px 8px", borderTop: `1px solid ${BORDER}`, fontSize: 10 }}>
@@ -883,11 +1002,14 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
             <span style={{ fontSize: 11, color: FG, fontWeight: 700 }}>프롬프트</span>
             <button type="button" onClick={() => { clearDraft(typeof localStorage !== "undefined" ? localStorage : null); setDraft(""); }} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}>지우기</button>
-            <span style={{ fontSize: 10, color: DIM }}>Enter 전송 · Shift+Enter 줄바꿈</span>
-            <span style={{ flex: 1 }} />
-            <button type="button" disabled={!draft.trim()} onClick={() => void sendTurn()} style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "3px 10px", cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
-              {turnRunning ? "대기열에 추가" : "보내기"}
-            </button>
+            <span style={{ width: 1, alignSelf: "stretch", background: BORDER }} />
+            <div role="toolbar" aria-label="슬래시 명령" style={{ display: "flex", gap: 4, flex: 1, minWidth: 0, overflowX: "auto" }}>
+              {webSlashCommands().map((c) => (
+                <button key={c.key} type="button" title={SLASH_TIPS[c.key] ?? c.description} onClick={() => void runSlash(c.key)} style={{ flex: "0 0 auto", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 8px", cursor: "pointer", font: "inherit", fontSize: 11 }}>
+                  /{c.key}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>

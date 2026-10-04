@@ -36,7 +36,7 @@ export interface AgentBlock {
      * 별도 패널로 보내면 그 삭제가 **부분적으로 되돌아간다** — 화면 오른쪽에 목록이
      * 다시 붙고, "무엇을 검색하려다가 무엇을 봤나" 가 한 스크롤로 이어지지 않는다(§7.3).
      */
-    what: "settings" | "diff" | "file" | "dirs";
+    what: "settings" | "diff" | "file" | "dirs" | "slash";
     /** `file` 일 때 경로. 나머지는 무시. */
     path?: string;
     /**
@@ -48,6 +48,8 @@ export interface AgentBlock {
      * 한다. 세션 저장에도 그대로 남는다.
      */
     viewCollapsed?: boolean;
+    /** `slash` 일 때 실행 상태. 끝나기 전에 결과를 지어내지 않는다. */
+    slashState?: "running" | "ok" | "error";
   };
   /**
    * 도구 호출.
@@ -109,6 +111,49 @@ export function openView(
  * 닫힌 뷰 블록은 화면에 "접힘" 으로 남고, 같은 뷰를 다시 열면 그 자리에 펼쳐진다.
  * 기록이 사라지지 않으므로 스크롤로 되돌아갈 수 있다 — 세션 저장도 그대로다.
  */
+/**
+ * 슬래시 명령을 **하나의 대화**로 남긴다 — 사람이 보낸 말(`/help`) + 결과 블록.
+ * `user` 블록이 묶음 경계라서 일반 대화처럼 묶음 머리·접기가 그대로 적용된다.
+ * 결과는 `finishSlash` 가 채운다. 호출자가 정한 id 로 짝을 맞춘다(연속 클릭에도 안 섞인다).
+ */
+export function addSlash(blocks: AgentBlock[], id: string, key: string, at: number): AgentBlock[] {
+  return [
+    ...blocks,
+    { id: `${id}-user`, kind: "user", text: `/${key}`, at },
+    { id, kind: "view", text: "", view: { what: "slash", path: key, slashState: "running" }, at },
+  ];
+}
+
+/** `addSlash` 로 만든 블록에 결과를 채운다. */
+export function finishSlash(blocks: AgentBlock[], id: string, text: string, ok: boolean): AgentBlock[] {
+  return blocks.map((b) =>
+    b.id === id && b.view ? { ...b, text, view: { ...b.view, slashState: ok ? "ok" : "error" } } : b
+  );
+}
+
+/** 같은 명령의 가장 최근 결과 블록. 같은 버튼을 다시 누르면 새로 쌓지 않고 이것을 접고 편다. */
+export function findSlash(blocks: AgentBlock[], key: string): AgentBlock | undefined {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.kind === "view" && b.view?.what === "slash" && b.view.path === key) return b;
+  }
+  return undefined;
+}
+
+/** 슬래시 블록 하나의 접힘을 뒤집는다. 지우지 않는다. */
+export function toggleSlashFold(blocks: AgentBlock[], id: string): AgentBlock[] {
+  return blocks.map((b) =>
+    b.id === id && b.view ? { ...b, view: { ...b.view, viewCollapsed: !b.view.viewCollapsed } } : b
+  );
+}
+
+/** 접힌 슬래시 블록을 펼치면서 **다시 실행**한다 — 내용이 낡았을 수 있어서(대기열 등). */
+export function restartSlash(blocks: AgentBlock[], id: string): AgentBlock[] {
+  return blocks.map((b) =>
+    b.id === id && b.view ? { ...b, view: { ...b.view, viewCollapsed: false, slashState: "running" } } : b
+  );
+}
+
 /** 맨 뒤 뷰 블록이 요청한 뷰인가(닫혔는지와 무관하게 같은 뷰로 본다). */
 function isTargetView(b: AgentBlock | undefined, view: NonNullable<AgentBlock["view"]>): boolean {
   return !!b && b.kind === "view" && b.view?.what === view.what && b.view?.path === view.path;

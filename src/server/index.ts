@@ -51,6 +51,7 @@ import { startWatchdog, type Watchdog } from "./watchdog.js";
 import { issueToken } from "../auth/token.js";
 import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
+import { SlashService, SERVER_SLASH_KEYS, type ServerSlashKey } from "./slashService.js";
 import { homedir } from "node:os";
 import { join, isAbsolute, resolve, relative } from "node:path";
 import { mkdir, access, readdir, stat, readFile, writeFile, rm } from "node:fs/promises";
@@ -297,6 +298,16 @@ async function main(): Promise<number> {
           "server"
         );
       }
+    },
+  });
+  // `/models` · `/server` · `/reset` — llamacli 의 슬래시 명령을 그대로 서버에서 실행한다.
+  // 서버가 바뀌면 **세션도 새 서버에 맞춘다**(안 맞추면 옛 모델 이름으로 요청한다).
+  const slash = new SlashService({
+    projectRoot,
+    onModelSwitched: (modelPath) => {
+      if (boot) boot.model = { ...boot.model, path: modelPath, reason: "슬래시 명령으로 교체함" } as never;
+      agent.invalidate();
+      return [`세션이 새 서버에 연결되었습니다 — 모델 ${modelPath.split("/").pop()}`];
     },
   });
   const agent = new AgentService({ baseDir: () => workspace.baseDir(),
@@ -919,6 +930,24 @@ async function main(): Promise<number> {
           // ── §5.3 에이전트 턴 ────────────────────────────────────────────────
           // **이전엔 "보내기" 버튼이 죽어 있었다.** 도구·압축·자기보호 로직은 전부
           // 검증되어 있는데 서버에서 아무것도 호출하지 않았다. 이제 실제로 돈다.
+          .route("POST", "/api/slash/run", async (c) => {
+            const body = (await readBody(c.req)) as { key?: string; arg?: string };
+            const key = String(body.key ?? "");
+            if (!(SERVER_SLASH_KEYS as readonly string[]).includes(key)) {
+              throw Object.assign(new Error(`서버에서 실행하는 슬래시 명령이 아닙니다: ${key}`), { status: 400 });
+            }
+            return slash.start(key as ServerSlashKey, String(body.arg ?? ""));
+          })
+          .route("GET", "/api/slash/job/:id", (c) => {
+            const v = slash.get(c.params.id);
+            if (!v) throw Object.assign(new Error("없는 작업입니다"), { status: 404 });
+            return v;
+          })
+          .route("POST", "/api/system/quit", async () => {
+            // 응답을 먼저 돌려보낸 뒤 종료한다 — 안 그러면 화면이 "실패" 로 읽는다.
+            setTimeout(() => void shutdown("슬래시 /quit"), 200);
+            return { ok: true, detail: "종료합니다 (체크포인트·세션 저장 후)" };
+          })
           .route("GET", "/api/agent/state", () => ({ turn: agent.turn, thinking: agent.thinking, ready: agent.ready }))
           .route("POST", "/api/agent/thinking", async (c) => {
             const body = (await readBody(c.req)) as { enabled?: boolean };

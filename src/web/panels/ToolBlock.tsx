@@ -60,14 +60,45 @@ function isFileTool(name: string, args: Record<string, unknown> | undefined): bo
   return /file|read|write|edit|patch|grep|search|list|glob/i.test(name) || toolPath(args) !== null;
 }
 
+/** 슬래시 명령 결과 — 대화 안의 **접고 펼 수 있는** 블록. 실행 중이면 그렇다고 말한다. */
+function SlashBlock({ block, onToggle }: { block: AgentBlock; onToggle?: () => void }) {
+  const open = block.view?.viewCollapsed !== true;
+  const state = block.view?.slashState ?? "ok";
+  const color = state === "error" ? "#f85149" : state === "running" ? "#d29922" : DIM;
+  const body = state === "running" ? "실행 중…" : block.text || "(출력 없음)";
+  return (
+    <div style={{ margin: "2px 0" }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        title={open ? "접기" : "펼치기"}
+        style={{ background: "none", border: 0, color, cursor: "pointer", font: "inherit", fontSize: 11, padding: 0 }}
+      >
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span> /{block.view?.path}
+        {state === "running" && <span style={{ marginLeft: 6 }}>실행 중</span>}
+        {state === "error" && <span style={{ marginLeft: 6 }}>실패</span>}
+      </button>
+      {open && (
+        <pre style={{ margin: "2px 0 0", padding: "6px 8px", border: `1px solid ${BORDER}`, borderRadius: 6, background: "#0d1117", color: FG, fontFamily: FONT.MONO ?? "monospace", fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 360, overflow: "auto" }}>
+          {body}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export function ToolBlock({
   block,
   client,
   extra,
   onToggleView,
   onCloseView,
+  onToggleBlock,
 }: {
   block: AgentBlock;
+  /** 슬래시 블록 하나를 접고 편다(블록 id 로 찾는다 — 설정용 전역 토글과 별개). */
+  onToggleBlock?: () => void;
   client?: ApiClient;
   /** 뷰를 접었다/펼쳤다 — 헤더 ⚙ 아이콘과 **같은 규칙**(`toggleView`)을 탄다.
    *  경로마다 따로 만들면 "아이콘에서는 닫히는데 블록에서는 쌓인다" 가 된다. */
@@ -87,6 +118,7 @@ export function ToolBlock({
   // 설정 · 변경 검토 · 파일 미리보기가 **대화 안에** 열린다. 별도 패널이 없어진
   // 이유가 이것이고, 되돌리려면 이 분기를 없애고 패널을 다시 만들어야 한다.
   if (block.kind === "view") {
+    if (block.view?.what === "slash") return <SlashBlock block={block} onToggle={onToggleBlock} />;
     if (block.view?.what === "file" && block.view.path && client) {
       return (
         <div style={{ margin: "2px 0" }}>

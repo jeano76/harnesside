@@ -277,6 +277,7 @@ export function AgentPanel({
   // 뷰 열기/닫기 — 헤더 ⚙ 아이콘과 **같은 규칙**(`toggleView`)을 블록 안에서도 쓴다.
   onToggleView,
   onCloseView,
+  onToggleBlock,
   // 설정은 상단 우측 ⚙ 아이콘(셸 헤더)으로 연다 — 측면 아이콘은 두지 않는다.
   // 열 곳이 하나뿐이므로 "어느 쪽이 진짜인가" 가 생기지 않는다.
   // 승인 게이트처럼대화 위에 떠야 하는 것(§8.2) — 별도 패널이 아니라 대화 본문 위에서만 그린다.
@@ -314,6 +315,8 @@ export function AgentPanel({
   onToggleView?: () => void;
   /** 특정 뷰 블록을 접는다(블록 안의 ✕). 메시지를 지우지 않는다 — 되돌릴 수 있어야 한다. */
   onCloseView?: (block: AgentBlock) => void;
+  /** 슬래시 결과 블록 하나를 접고 편다. */
+  onToggleBlock?: (block: AgentBlock) => void;
   // 승인 게이트처럼대화 위에 떠야 하는 것 (§8.2). 별도 패널이 아니라 대화 본문 위에서만 그린다.
   // Ide 로 그대로 넘긴다 — 흐름을 가리되 스크롤로 이어지게.
   overlay?: React.ReactNode;
@@ -336,7 +339,7 @@ export function AgentPanel({
   /** 접은 묶음의 인덱스. **마지막 묶음은 항상 펼친다** — 진행 중인데 접으면 안 된다. */
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   const turns = useMemo(() => groupTurns(blocks), [blocks]);
-  const toggle = (i: number) => setCollapsed((c) => ({ ...c, [i]: c[i] !== false }));
+  const toggle = (i: number) => setCollapsed((c) => ({ ...c, [i]: c[i] !== true }));
   /**
    * **전체 접기 / 펼치기**(2026-10-01).
    *
@@ -536,7 +539,7 @@ export function AgentPanel({
           //
           // **기본은 펼침**이어야 한다 — 대화는 사용자가 쌓아온 것이고, 처음부터 접혀
           // 있으면 "내 대화가 어디 갔나" 를 해결하려면 **전부 펼치기** 를 눌러야 한다.
-          const open = last ? true : collapsed[ti] !== true;
+          const open = last && running ? true : collapsed[ti] !== true;
           return (
             <div
               key={turn.at + "-" + ti}
@@ -610,6 +613,7 @@ export function AgentPanel({
                         viewExtra={viewExtra}
                         onToggleView={onToggleView}
                         onCloseView={onCloseView ? () => onCloseView(b) : undefined}
+                        onToggleBlock={onToggleBlock ? () => onToggleBlock(b) : undefined}
                       />
                     </div>
                   ))}
@@ -654,12 +658,14 @@ function BlockBody({
   viewExtra,
   onToggleView,
   onCloseView,
+  onToggleBlock,
 }: {
   block: AgentBlock;
   client?: ApiClient;
   viewExtra?: { settings?: React.ReactNode };
   onToggleView?: () => void;
   onCloseView?: () => void;
+  onToggleBlock?: () => void;
 }) {
   if (b.kind === "user") {
     return (
@@ -706,6 +712,7 @@ function BlockBody({
       extra={viewExtra}
       onToggleView={onToggleView}
       onCloseView={onCloseView}
+      onToggleBlock={onToggleBlock}
     />
   );
 }

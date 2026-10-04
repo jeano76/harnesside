@@ -18,7 +18,7 @@ export interface SlashMenuItem {
 // 슬래시로 같은 명령을 쓰게). 예전엔 이 배열만 TUI 에 있었고 웹엔 아무것도
 // 없었는데, **화면에 보이는 목록**이라 두 곳에 두면 반드시 하나가 뒤처진다.
 // 여기서는 TUI 모양(`key/label/description`)으로 바꿔 **읽기만** 한다.
-export const SLASH_MENU_ITEMS: SlashMenuItem[] = SLASH_COMMANDS.map((c) => ({
+export const SLASH_MENU_ITEMS: SlashMenuItem[] = SLASH_COMMANDS.filter((c) => c.where !== "web").map((c) => ({
   key: c.key,
   label: c.label,
   description: c.description,
