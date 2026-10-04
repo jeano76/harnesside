@@ -110,6 +110,7 @@ codebase, and each is documented at its call site and covered by a test. The
 | Backend | `src/backend/` | llama-server process management, OpenAI-compatible client |
 | Tools | `src/tools/` | `read_file` / `write_file` / `edit_file` / `run_shell` / `browser_*` |
 | Skills & rules | `src/skills/` | Always-on rules, lazily-loaded skills |
+| Agent system prompt | `src/agent/systemPrompt.ts` | Identity, workspace root, approval gate, rule files — **and the answer-format contract** (2026-10-05) |
 | Update | `src/server/updateService.ts` | GitHub Releases check, hash-verified slot swap, boot check, rollback (one path — Q-7) |
 | Crash handling | `src/crashHandler.ts` | Synchronous crash log + terminal restore |
 
@@ -156,8 +157,6 @@ src/
                 and security skills that are always loaded
   tools/        read_file / write_file / edit_file / run_shell + ANSI-colored
                 diff rendering + browser_* (remote CDP control)
-  tui/          Ink-based bottom-anchored UI: input box, status bar, spinner,
-                slash popup (§6)
 .harnesside/
   config.yaml   Backend/model/compaction settings
   rules/        Always-applied project rules
@@ -165,25 +164,76 @@ src/
   state/        Runtime checkpoint (git-ignored)
 ```
 
+> `src/tui/` 는 여기에 없다 — 2026-10-04 에 삭제되었다(Q-2). 이 표가 그 사실을
+> 모른 채 3개월을 더 나를 수 있었던 이유가 이것이고, 그래서 지웠다.
+> 되살리려면 `git log -- src/legacy-tui`.
+
 > ## 구조
 >
 > ```
 > src/
 >   backend/      llama.cpp 프로세스 관리 + OpenAI 호환 HTTP 클라이언트
->   agent/        도구 호출 루프 (컴팩션·자가치유 연동)
+>   agent/        도구 호출 루프 (컴팩션·자가치유 연동) + 시스템 프롬프트 정본
+>                 (`agent/systemPrompt.ts` — 출력 형식 규칙 포함, 2026-10-05)
 >   compaction/   체크포인트 기록/재개, 컨텍스트 요약 (PROMPT.md §2)
 >   hermes/       자가 치유 회로차단기, 실패 로그, 자가 개선 제안 루프 (§3)
 >   skills/       skill 지연 로딩 + rule 상시 로딩, 기존 CLI 컨벤션 재사용 (§5);
 >                 skills/builtin/에 아키텍처·기획·구현·리뷰·테스트·정적분석·보안
 >                 스킬이 있어 프로젝트 상태와 무관하게 항상 로드됨
 >   tools/        read_file / write_file / edit_file / run_shell 도구 + ANSI 컬러 diff 렌더링 + browser_* (원격 CDP 제어)
->   tui/          Ink 기반 하단 고정 UI: 입력창, 상태바, 스피너, 슬래시 팝업 (§6)
 > .harnesside/
 >   config.yaml   백엔드/모델/컴팩션 설정
 >   rules/        항상 적용되는 프로젝트 규칙
 >   skills/       트리거 기반 지연 로딩 skill 문서
 >   state/        런타임 체크포인트 (git ignore 대상)
 > ```
+
+## Answer format — the material the renderer draws
+
+The web UI has always rendered markdown properly: `Markdown.tsx` styles headings,
+lists, tables and code fences (`PROMPT_UX_COMMERCIAL.md` §3.7 · §3.12 · §3.13).
+On 2026-10-05 a user pasted a real answer back at us: a single blob of four
+paragraphs where a 17-module directory tree was one comma-separated clause. Every
+fact was correct and nobody could read it. **The renderer was fine. The material
+was a wall.**
+
+The renderer cannot fix prose — only the agent can. So the system prompt
+(`src/agent/systemPrompt.ts`, 8 numbered rules) now states the contract: one idea
+per paragraph, ≤120 characters, conclusion first, lists for three or more items,
+tables for comparisons, code fences for paths and commands, visible truncation,
+and `미측정` for anything unverified.
+
+**A prompt rule is a request, not a guarantee** — so it ships with a measurement:
+`readabilityFlags()` scores the *shape* of an answer (run-on paragraph, inline
+enumeration, no structure at all), and `scripts/readability-report.ts` scores the
+machine's own session history against it. Baseline on this machine
+(2026-10-05, 32 sessions): **724 of 815** long assistant blocks (88.8%) tripped at
+least one signal. Most of that history predates the rules, so it is a **baseline,
+not a before/after measurement** — the honest after-number has to come from asking
+the model again, which is not something this repository does automatically.
+
+It also cannot claim credit it has not earned: an early live A/B attempt
+(2026-10-05) asked the local model to describe the repository *without tools
+wired up*, and the model emitted raw `tool_call` text that degenerated into a
+repeated loop. That experiment measured tool-call degeneration, **not
+readability**, and is recorded here so nobody reads it as evidence either way.
+
+### What the A/B actually said (2026-10-05)
+
+Same question, same machine, local model `Ornith 1.5-35B-A3B`, `temperature 0.7`,
+**n = 3 per arm**, scored by `readabilityFlags()`:
+
+| Arm | Answers with a signal | Mean longest paragraph | Worst paragraph |
+|---|---:|---:|---:|
+| Old prompt (no format rules) | 2/3 | **563 chars** | 1,365 chars |
+| New prompt (8 format rules) | 2/3 | **202 chars** | 263 chars |
+
+Read honestly, that is a **partial** effect: sentences got ~64% shorter, but the
+*rate* at which an answer turns into a wall did not move. So the next lever is
+**not** more prompt rules — it is a layer that forces structure at render time, or
+one that pulls tool results into their own blocks. Which layer is not decided yet,
+and this is where the next number belongs. n = 3, one model, one question: do not
+generalize it.
 
 ## Skill / Rule — reusing existing AI CLI conventions
 

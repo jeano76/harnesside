@@ -57,19 +57,39 @@ async function snapshotTree(dir: string): Promise<string[]> {
   return out.sort();
 }
 
-/** listening 포트 집합. `ss` 가 없으면 **null** — 빈 배열(미측정)이 아니다. */
-function listeningPorts(): string[] | null {
+/**
+ * `doctor` 가 **보는 세 포트**의 listening 상태. `ss` 가 없으면 **null** —
+ * 빈 배열(미측정)이 아니다.
+ *
+ * 왜 머신 전체 포트를 비교하지 않는가 — **실측으로 배운 결함** (2026-10-05):
+ * 처음엔 `ss -ltnH` 전체를 전후로 비교했다. 그랬더니 이 테스트가 **혼자
+ * 흔들렸다.** 비교 창(수 초) 사이에 **doctor 와 무관한 프로세스**가 ephemeral
+ * 포트를 열고 닫으면(측치 순간에는 `127.0.0.1:36339` 가 새로 나왔다) red 가 된다.
+ * 검사하려는 주장은 "doctor 가 자기 포트를 열고 닫지 않는다" 이므로 **그 세 포트만**
+ * 보면 충분하고, 머신 전체를 보는 것은 이 검사 밖의 잡음이다.
+ *
+ * 조용히 좁히지 않는다 — 좁힌 이유와 그 계기가 여기 적혀 있다. 다음 사람이
+ * "왜 전체를 안 보지" 하고 넓히면 같은 흔들림이 돌아온다.
+ */
+function listeningPorts(ports: number[]): string[] | null {
   for (const [file, args] of [
     ["ss", ["-ltnH"]],
     ["netstat", ["-an"]],
   ] as const) {
     const r = spawnSync(file, [...args], { encoding: "utf8" });
     if (r.status === 0 && r.stdout) {
-      return r.stdout.split("\n").map((l) => l.trim()).filter(Boolean).sort();
+      return r.stdout
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && ports.some((p) => new RegExp(`[:.]${p}\\s`).test(l)))
+        .sort();
     }
   }
   return null;
 }
+
+/** `doctor` 가 실제로 보는 세 포트 — `doctorChecks.ts` 의 판정 대상과 같은 숫자다. */
+const INSPECTED_PORTS = [7317, 8080, 9222];
 
 /**
  * 비교 대상: **프로젝트 트리** 와 **`~/.harnesside`(우리가 쓰는 상태 디렉터리)**.
@@ -88,7 +108,7 @@ async function snapshot(project: string, home: string): Promise<Snapshot> {
       ...(await snapshotTree(project)),
       ...(await snapshotTree(join(home, ".harnesside"))),
     ],
-    ports: listeningPorts(),
+    ports: listeningPorts(INSPECTED_PORTS),
   };
 }
 
@@ -146,6 +166,7 @@ test("doctor 는 **아무것도 바꾸지 않는다** — 파일시스템 전후
   );
 
   // 포트는 **비교가 가능할 때만** 한다. `ss`/`netstat` 이 없으면 조용히 통과시키지 않는다.
+  // (그리고 `doctor` 가 보는 세 포트만 본다 — 위 주석의 실측 계기를 읽을 것.)
   if (before.ports === null) {
     // 미측정 — 이 저장소 규칙상 "미측정"이라고 말해야 한다.
     assert.match(stdout, /미확인|판단 불가/, "포트 조회 실패를 말하지 않는다");

@@ -36,6 +36,8 @@ import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
 import { formatCrashReport, writeCrashLogSync, readCrashTail, acknowledgeCrashLog, archiveHarmlessCrashLog } from "../crashHandler.js";
 import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
+// 시스템 프롬프트 정본(출력 형식 규칙 포함). 여기서 문자열을 두지 않는다 — 2026-10-05.
+import { buildSystemPrompt } from "../agent/systemPrompt.js";
 import { ApprovalGate } from "./approval.js";
 import { SessionBridge } from "../session/bridge.js";
 import { searchHub, recommend, fillSizes } from "../models/hub.js";
@@ -185,21 +187,16 @@ async function main(): Promise<number> {
   // §5.3: 에이전트 시스템 프롬프트. 워크스페이스의 **규칙 파일**을 여기에 싣는다 —
   // 규칙을 읽어놓고 프롬프트에 안 넣으면 "규칙이 적용됐다" 고 말할 수 없다.
   // **함수**로 둔다: 턴마다 읽어야 전환이 반영된다. 상수로 두면 규칙이 옛 폴더 것만 남는다.
-  const systemPrompt = (): string => {
-    const base = [
-      "당신은 로컬 코딩 에이전트입니다. 파일은 현재 워크스페이스 루트 기준 상대경로로 다룹니다.",
-      `현재 작업 루트: ${workspace.root()}`,
-      "파괴적인 도구(삭제·덮어쓰기·셸)는 승인 게이트를 거칩니다. 승인 없이는 실행되지 않습니다.",
-    ];
-    const rules = workspace.rules();
-    if (rules.length === 0) {
-      // **없다고 말한다.** 조용히 비면 "규칙이 적용됐다" 고 오해한다.
-      base.push("이 폴더에는 규칙 파일(CLAUDE.md 등)이 없습니다.");
-    } else {
-      base.push(`규칙 파일 ${rules.length}개가 적용 중입니다: ${rules.map((r) => r.path).join(", ")}`);
-    }
-    return base.join("\n");
-  };
+  //
+  // 프롬프트 **정본은 `agent/systemPrompt.ts`** 다. 여기서 문자열을 직접 만들면
+  // (1) 출력이 어떤 규칙을 담는지 확인할 방법이 없고, (2) 규칙이 두 벌이 된다.
+  // 2026-10-05 까지만 여기 4줄짜리 프롬프트가 있었고, 출력 형식에 관한 단 한 줄도
+  // 없었다 — 그래서 답이 쉼표로 이어진 한 문단 벽으로 나왔다(사용자가 실측으로 신고).
+  const systemPrompt = (): string =>
+    buildSystemPrompt({
+      workspaceRoot: workspace.root(),
+      ruleFiles: workspace.rules().map((r) => r.path),
+    });
 
   // §5.2: 워크스페이스 파일 변경 감지. 자기 쓰기는 `self:true` 로 표시되어
   // 사용자가 자기 저장을 "외부 변경" 으로 오해하지 않는다.
