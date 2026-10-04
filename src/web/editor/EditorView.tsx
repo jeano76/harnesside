@@ -14,6 +14,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiClient, ApiError } from "../api.js";
 import { planOpen, formatBytes } from "./model.js";
+// 하이라이트 정본(`highlight.ts`) + 겹침 기법의 규칙(`colorOverlay.ts`).
+// 렌더러가 두 벌이 되지 않게 여기서만 가져온다.
+import { languageFor } from "./highlight.js";
+import {
+  EDITOR_CARET_LAYER,
+  EDITOR_TEXT_METRICS,
+  colorFor,
+  editorOverlayPlan,
+} from "./colorOverlay.js";
 import {
   planSave,
   saveLocalDraft,
@@ -60,6 +69,13 @@ export function EditorView({
   // 디바운스가 영영 끝나지 않는다 — 그래서 "자동 저장이 안 된다" 는 버그가 된다.
   const buf = useRef<Buffer>({ path: info.path, content: info.content, baseVersion: info.version, dirtySince: null });
   const [text, setText] = useState(info.content);
+  // **잘라냈거나 색칠하지 못하는 이유** — 헤더 아래에 한 줄로 말한다(조용히 하면 사용자가
+  // "파일에 없던 줄" 을 찾는다). 규칙은 `colorOverlay.ts` 가 판단하고, **지금 있는 글**을
+  // 본다 — 열었을 때의 길이를 말하면 편집 중에는 거짓말이 된다.
+  const overlayNote = useMemo(
+    () => editorOverlayPlan({ text, lang: languageFor(info.path), path: info.path }).note,
+    [text, info.path],
+  );
   const [state, setState] = useState<SaveState>({ kind: "clean" });
   const [restore, setRestore] = useState<{ content: string; baseVersion: number } | null>(null);
 
@@ -196,21 +212,94 @@ export function EditorView({
 
       {state.kind === "conflict" && <ConflictBar server={state.server} mine={buf.current.content} onResolve={resolve} />}
 
+      <ColoredEditor
+        text={text}
+        lang={languageFor(info.path)}
+        path={info.path}
+        onEdit={onEdit}
+      />
+      {overlayNote && (
+        <div style={{ padding: "2px 8px 4px", color: "#d29922", fontSize: 10, flex: "0 0 auto" }}>{overlayNote}</div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 겹침(overlay) 편집기 — 규칙은 `colorOverlay.ts`, 렌더는 여기.
+ *
+ * 두 층이 **같은 `EDITOR_TEXT_METRICS`** 를 쓰는 것이 이 컴포넌트의 전부다.
+ * 한쪽만 바꾸면 색이 밀린다 — 그래서 리터럴을 두 곳에 적지 않는다.
+ *
+ * 스크롤 동기화는 **ref 로 직접** 한다(`setState` 로 재렌더하면 스크롤마다
+ * 토큰 2천 줄을 다시 만든다). 재렌더 없이 `transform` 만 움직인다.
+ */
+function ColoredEditor({
+  text,
+  lang,
+  path,
+  onEdit,
+}: {
+  text: string;
+  lang: ReturnType<typeof languageFor>;
+  path: string;
+  onEdit: (next: string) => void;
+}) {
+  const plan = useMemo(() => editorOverlayPlan({ text, lang, path }), [text, lang, path]);
+  const overlayRef = useRef<HTMLPreElement | null>(null);
+  // 스크롤은 `translate` 로만 옮긴다 — textarea 는 스스로 스크롤되고, 아래 층이 따라간다.
+  const onScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
+    const el = overlayRef.current;
+    if (el) el.style.transform = `translateY(${-e.currentTarget.scrollTop}px)`;
+  }, []);
+
+  return (
+    <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
+      {plan.colorable && (
+        <pre
+          ref={overlayRef}
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: 0,
+            margin: 0,
+            pointerEvents: "none",
+            overflow: "hidden",
+            color: "#c9d1d9",
+            ...EDITOR_TEXT_METRICS,
+          }}
+        >
+          {plan.lines.map((l) => (
+            <div key={l.n} style={{ minHeight: "1.5em" }}>
+              {l.tokens.map((t, i) => (
+                <span key={i} style={{ color: colorFor(t.kind) }}>
+                  {t.text}
+                </span>
+              ))}
+            </div>
+          ))}
+        </pre>
+      )}
       <textarea
         value={text}
         onChange={(e) => onEdit(e.target.value)}
+        onScroll={onScroll}
         spellCheck={false}
+        wrap="soft"
         style={{
-          flex: "1 1 auto",
-          minHeight: 0,
+          position: "relative",
+          display: "block",
+          width: "100%",
+          height: "100%",
           margin: 0,
-          padding: "6px 8px",
           border: 0,
           resize: "none",
-          background: "transparent",
-          color: FG,
-          font: "11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace",
           outline: "none",
+          overflow: "auto",
+          // 두 층의 문자 모양·여백은 **같은 객체**다. 여기서 리터럴을 적지 않는다.
+          ...EDITOR_TEXT_METRICS,
+          // 글자는 투명하게 — 아래 층이 색을 그린다. caretColor 로 커서는 되살린다.
+          ...EDITOR_CARET_LAYER,
         }}
       />
     </div>
@@ -294,7 +383,9 @@ function ReadOnlyView({ plan, path, size }: { plan: { language: string; reason: 
         <span style={{ color: DIM, fontSize: 10 }}>{formatBytes(size)}</span>
       </div>
       {plan.reason && <div style={{ padding: "4px 8px", color: "#d29922", fontSize: 11 }}>{plan.reason}</div>}
-      <pre style={{ margin: 0, padding: "6px 8px", font: "11px/1.5 ui-monospace, Menlo, monospace", whiteSpace: "pre-wrap", overflow: "auto", flex: "1 1 auto", minHeight: 0, color: FG }}>
+      {/* 글자 모양은 **편집창과 같은 객체**다 — 같은 영역의 다른 층인데 다른 폰트로 보이면
+          "편집창과 미리보기가 다른 프로그램" 이라고 느끼게 된다. */}
+      <pre style={{ margin: 0, overflow: "auto", flex: "1 1 auto", minHeight: 0, color: FG, ...EDITOR_TEXT_METRICS }}>
         {plan.content}
       </pre>
     </div>
