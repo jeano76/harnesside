@@ -3,18 +3,25 @@
   "version": "0.1.0",
   "description": "Local llama.cpp coding agent: a daemon that drives a CDP-launched browser IDE (OpenAI-compatible, self-healing, memory-compaction with auto-resume)",
   "repository": "https://github.com/jeano76/harnesside",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "harnesside": "./dist/server/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build:server": "tsc -p tsconfig.server.json",
     "build:web": "vite build",
     "build": "npm run build:server && npm run build:web && node scripts/pack-web-assets.mjs",
+    "prepublishOnly": "npm run build",
     "dev": "concurrently \"tsx watch src/server/index.ts\" \"vite\"",
     "start": "node dist/server/index.js",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "test:e2e": "tsx scripts/e2e_check.ts",
+    "test:e2e": "node scripts/verify-window.mjs && node scripts/verify-terminal.mjs",
     "typecheck": "tsc --noEmit",
     "rename:check": "node scripts/rename-identifiers.mjs --dry",
     "coverage": "node scripts/coverage-floor.mjs",

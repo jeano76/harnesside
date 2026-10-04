@@ -679,3 +679,23 @@ MoE/speculative 항목 포함). `slashService.ts` import 17개를 새 경로로.
 **되돌리는 법**: `git tag q1-before-localstack-removal`(= `1e4a0a2`) — `git checkout q1-before-localstack-removal -- src/localstack src/legacy-tui`.
 **§9 미측정 표**: 줄어든 칸 없음(이 라운드는 삭제·통일이라 호환성·배포 항목을 판정하지 않았다).
 **발견했으나 고치지 않은 것**: CLI 대상 화면 캡처에서 헤더의 `…gguf 부팅 12/12` 일부가 붉은 배경으로 칠해짐(터미널 오버레이와 겹침 의심) — 미조사.
+
+## 2026-10-04 — 라운드 A 끝: Q-4 (배포 산출물 좁히기 · npm 배포 가능)
+
+**지표**: `dist` **26MB → 2.3MB**, 파일 **115개**, 그중 `*.test.js` **85 → 0** (`tsconfig.server.json` 이 `src/**/*.test.ts`·`src/testSupport.ts`
+제외). `npm pack --dry-run` **118개 파일 · 727kB**, 테스트 파일 0.
+- **문제 3(만들고 검사하지만 아무도 안 쓰는 `dist/packaged-web`)** → 복사를 없애고 `pack-web-assets.mjs` 가 **서버가 실제로 제공하는
+  `dist/web`** 을 그 자리에서 검사한다(index.html·#root·비밀 패턴). 스크립트 이름은 build/CI 가 부르는 이름이라 유지.
+- `package.json`: `files: [dist, README.md, LICENSE]` · `prepublishOnly: npm run build` · `license: MIT` · `test:e2e` →
+  실제로 있는 `verify-window.mjs && verify-terminal.mjs`(없는 `e2e_check.ts` 대신). `LICENSE`(MIT · jeano76 — **사용자가 정함**).
+- `dist/` 는 이미 `.gitignore` 에 있었다. `scripts/update-bin.mjs` 의 없는 `dist/index.js` 를 `dist/server/index.js` 로 고쳤고,
+  npm script 에 묶을지는 업데이트 경로를 하나로 정하는 **Q-7** 에서 정한다.
+
+**실측**: `rm -rf dist && npm run build` → `node dist/server/index.js`(tsx 가 아니라 빌드 산출물)로 부팅, 스텝 9
+"dist/web 준비됨" · `node dist/server/index.js --help` exit 0 · `verify-window.mjs` **기존 18개 + 800px 1개 PASS**.
+**발견한 결함**: `verify-window.mjs` 의 800px 블록이 Puppeteer API(`page.setViewport`)로 쓰여 **18개 검사 뒤 매번 TypeError 로 죽고
+있었다** — 그래서 그 뒤의 검사들이 한 번도 돌지 않았다. CDP 로 다시 썼더니 처음 실행된 휴리스틱 검사 2개가 **실패**한다:
+"긴 경로 줄임 표시"(화면에 `…` 텍스트가 있어야 통과 — 상태 의존), "검색 기능 상한"(지워진 검색 입력창을 찾음). **판정 기준을
+바꿔 통과시키지 않았다** — 검사 자체가 낡았는지는 Q-6(검사를 게이트로 올리기)에서 판단한다. 지금 `npm run test:e2e` 는 **21/23** 이다.
+**§9 미측정 표**: #10 "`dist` 를 지우고 처음부터 빌드하면 부팅한다" → **검증됨**(위). #11 "`npm pack` 산출물로 전역 설치된다" → **미측정**(전역 설치는 하지 않았다).
+**되돌리는 법**: `git revert` (설정·스크립트 변경뿐).

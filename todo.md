@@ -147,7 +147,7 @@
 | 1 | Q-2 legacy-tui 제거 | ✅ 코드·README 화면 교체 | `PROGRESS.md` 2026-10-04 라운드 A |
 | 2 | Q-3 backend 강한 쪽으로 | ✅ | 동일 |
 | 3 | Q-1 localstack 제거 | ✅ `/models`·`/server`·`/reset` 실측 | 동일 |
-| 4 | Q-4 dist 좁히기·npm 배포 | ☐ 다음 — **LICENSE 소유자는 사용자가 정한다**(기획서 Q-4-4) | — |
+| 4 | Q-4 dist 좁히기·npm 배포 | ✅ dist 26MB→2.3MB · 테스트 산출물 0 · LICENSE MIT(jeano76) | `PROGRESS.md` Q-4 · `test:e2e` 21/23(휴리스틱 2건 Q-6 판단) |
 | 5 | Q-8 문서-코드 드리프트 CI | ☐ | README 의 `## Terminal capability detection` 이하가 여전히 TUI 기준(Q-12 와 겹침) |
 | 6~ | Q-5·Q-6·Q-7 → Q-9·Q-10 → Q-11·Q-12·Q-13 | ☐ | — |
 

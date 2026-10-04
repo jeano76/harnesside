@@ -1,5 +1,10 @@
 /**
- * 웹 자산을 서버가 읽을 수 있는 위치로 모은다.
+ * 웹 자산 검사 — **서버가 실제로 제공하는 `dist/web` 을 그 자리에서** 검사한다.
+ *
+ * Q-4(2026-10-04): 예전에는 `dist/packaged-web/` 으로 **복사한 뒤** 검사했는데, 서버는 그 복사본이 아니라
+ * `dist/web` 을 제공한다(`src/server/index.ts` 부팅 스텝 9). "만들고 검사하지만 아무도 쓰지 않는" 사본이었다 —
+ * 검사가 통과해도 제공되는 파일은 검사받지 않은 셈이다. 그래서 복사를 없애고 제공 경로를 직접 본다.
+ * 파일 이름은 CI·build 스크립트가 부르는 이름이라 유지한다.
  *
  * 왜 이 단계가 필요한가: `vite build` 는 `dist/web/` 에 산출물을 만든다. 서버는
  * `src/web/` 를 정적 루트로 사용하고 있으므로, **개발 중에는 소스** 를, **배포에서는
@@ -12,15 +17,13 @@
  *     (요구: 토큰은 URL 에서 제거되고 앱 셸에만 존재한다)
  */
 
-import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
-const SRC_WEB = join(here, "src", "web");
 const DIST_WEB = join(here, "dist", "web");
-const OUT = join(here, "dist", "packaged-web");
 
 /**
  * 산출물에 **박혀 있으면 안 되는 것** = 토큰 같은 **값**.
@@ -54,21 +57,17 @@ async function listFiles(dir, base = dir) {
 }
 
 async function main() {
-  const source = existsSync(DIST_WEB) ? DIST_WEB : SRC_WEB;
-  const label = source === DIST_WEB ? "dist/web (빌드 산출물)" : "src/web (개발 소스 — 빌드된 산출물이 없습니다)";
-
-  if (source === SRC_WEB && !existsSync(join(SRC_WEB, "index.html"))) {
-    // 둘 다 없다. 이 상태로 서버를 띄우면 **빈 화면** 이 나온다.
-    throw new Error(`웹 자산을 찾을 수 없습니다: dist/web 도 src/web/index.html 도 없습니다. 'npm run build:web' 를 먼저 실행하십시오.`);
+  // 제공 경로는 하나다 — 빌드 산출물이 없으면 실패한다(src/web 로 대신하지 않는다: 서버도 대신하지 않는다).
+  if (!existsSync(DIST_WEB)) {
+    throw new Error(`dist/web 이 없습니다 — 'npm run build:web' 를 먼저 실행하십시오. 서버는 이 경로를 제공합니다.`);
   }
-
-  await mkdir(OUT, { recursive: true });
-  await cp(source, OUT, { recursive: true });
+  const OUT = DIST_WEB;
+  const label = "dist/web (서버가 제공하는 빌드 산출물)";
 
   // 검증 1: index.html 이 **실제로** 있다. 산출물이 비어 있으면 여기서 걸린다.
   const index = join(OUT, "index.html");
   if (!existsSync(index)) {
-    throw new Error(`패키징된 웹 자산에 index.html 이 없습니다: ${OUT}`);
+    throw new Error(`웹 자산에 index.html 이 없습니다: ${OUT}`);
   }
   const html = await readFile(index, "utf8");
   if (!/<div id="root"|id="root"/.test(html)) {
@@ -86,17 +85,11 @@ async function main() {
     for (const re of SECRET_LITERAL) {
       const m = body.match(re);
       if (m) {
-        throw new Error(`패키징된 자산 ${f} 에 비밀 값으로 보이는 패턴이 들어 있습니다: ${m[0].slice(0, 12)}…`);
+        throw new Error(`웹 자산 ${f} 에 비밀 값으로 보이는 패턴이 들어 있습니다: ${m[0].slice(0, 12)}…`);
       }
     }
   }
-
-  await writeFile(
-    join(OUT, "BUILD_INFO.json"),
-    JSON.stringify({ source: label, files: files.length, at: new Date().toISOString() }, null, 2),
-    "utf8",
-  );
-  console.log(`웹 자산 패키징 완료: ${label} → ${OUT} (${files.length}개 파일)`);
+  console.log(`웹 자산 검사 통과: ${label} (${files.length}개 파일)`);
 }
 
 main().catch((e) => {

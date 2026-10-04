@@ -35,7 +35,9 @@ const sha256 = createHash("sha256").update(archiveContent).digest("hex");
 // Same vYYYYMMDD shape as banner.ts's buildVersionString, computed the same
 // way (dist/index.js's own mtime) — so the manifest's version always
 // matches what the running CLI's own startup banner would show.
-const mtime = statSync(join(distDir, "index.js")).mtime;
+// Q-4(2026-10-04): 진입점은 `dist/server/index.js` 다(`package.json` bin). 예전 `dist/index.js` 는 없는 파일이었다.
+// 이 스크립트를 어떤 npm script 에 묶을지(또는 지울지)는 업데이트 경로를 하나로 정하는 Q-7 에서 정한다.
+const mtime = statSync(join(distDir, "server", "index.js")).mtime;
 const pad = (n) => String(n).padStart(2, "0");
 const version = `v${mtime.getFullYear()}${pad(mtime.getMonth() + 1)}${pad(mtime.getDate())}`;
 

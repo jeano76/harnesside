@@ -398,19 +398,26 @@ check("패널 머리에 내부 식별자가 노출되지 않음 (§5.8)", leaked
  * 크기는 창 크기에 따라 흔들리므로 **절대 임계값**(넘침/스크롤)으로만 본다.
  */
 {
-  await page.setViewport({ width: 800, height: 900, deviceScaleFactor: 1 });
-  await new Promise((r) => setTimeout(r, 250));
-  const header = await page.$("header");
-  const shellFrame = await page.$("[data-shell], .shell-frame, #terminal, [class*=shell]");
-  let ok = true; let detail = "800px에서 헤더·하단 셸이 영역을 가리지 않고 스크롤 없음";
-  if (header) {
-    const b = await header.boundingBox();
-    if (b.width > 802 || b.y + b.height > 900 - 4) { ok = false; detail = `헤더 과대 (${Math.round(b.width)}x${Math.round(b.height)}, x=${Math.round(b.x)}, y=${Math.round(b.y)})`; }
-  }
-  if (shellFrame) {
-    const sb = await shellFrame.boundingBox();
-    if (sb.width > 802 || sb.y > 900 * 0.9) { ok = false; detail += ` | 하단 셸 과대 (${Math.round(sb.width)}x${Math.round(sb.height)}, y=${Math.round(sb.y)})`; }
-  }
+  // 이 블록은 Puppeteer API(`page.setViewport`·`page.$`)로 쓰여 있었지만 이 스크립트의 `page` 는 CDP 타깃 정보일 뿐이라
+  // 18개 검사 뒤에서 **매번 TypeError 로 죽었다**(Q-4 실측, 2026-10-04). 같은 판정을 CDP 로 한다.
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 800, height: 900, deviceScaleFactor: 1, mobile: false });
+  await new Promise((r) => setTimeout(r, 400));
+  const geo = await cdp.eval(`(() => {
+    const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
+    return {
+      header: r(document.querySelector("header")),
+      // 하단 셸 창은 없다(2026-10-04 제거) — 대신 프롬프트 입력 영역을 본다.
+      prompt: r(document.querySelector("textarea")),
+      scrollX: document.documentElement.scrollWidth > window.innerWidth + 1,
+    };
+  })()`);
+  await cdp.send("Emulation.clearDeviceMetricsOverride");
+  let ok = true; let detail = "800px에서 헤더·입력창이 영역을 가리지 않고 가로 스크롤 없음";
+  const b = geo?.header;
+  if (b && (b.width > 802 || b.y + b.height > 900 - 4)) { ok = false; detail = `헤더 과대 (${Math.round(b.width)}x${Math.round(b.height)}, x=${Math.round(b.x)}, y=${Math.round(b.y)})`; }
+  const pb = geo?.prompt;
+  if (pb && (pb.width > 802 || pb.y > 900 * 0.95)) { ok = false; detail += ` | 입력창 화면 밖 (${Math.round(pb.width)}x${Math.round(pb.height)}, y=${Math.round(pb.y)})`; }
+  if (geo?.scrollX) { ok = false; detail += " | 가로 스크롤 발생"; }
   report(ok ? "PASS" : "FAIL", `800px 좁은 창 — 요소 겹침/스크롤 없음`, ok, detail);
 }
 
