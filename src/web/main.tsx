@@ -269,7 +269,7 @@ export default function App() {
   }, [draft, pushToast, toCli, cliTarget]);
 
   /**
-   * 슬래시 버튼 — llamacli(TUI)의 `onSlashCommand` 와 **같은 내용**을 웹에서 실행하고,
+   * 슬래시 버튼 — 구 TUI(2026-10-04 삭제)의 `onSlashCommand` 와 **같은 내용**을 웹에서 실행하고,
    * 결과를 **대화 안 블록**(접고 펼 수 있음)으로 남긴다. 서버에 진입점이 없는
    * 명령(`copy`·`quit`)과 콘솔 전용(`term`·`mouse`)은 버튼으로 만들지 않는다.
    */
@@ -449,7 +449,7 @@ export default function App() {
     // harnesside 명령의 결과는 대화창에 쌓인다 — 터미널이 그 자리를 덮고 있으면(CLI 대상에서 `/cli …` 를 친 경우)
     // 대상을 로컬로 돌려 결과가 보이게 한다. `/cli <이름>` 처럼 CLI 를 여는 명령은 끝에서 다시 CLI 대상으로 바꾼다.
     setPromptTo("agent");
-    // `/quit` 는 두 번 눌러야 종료한다(llamacli 도 확인 없이 끝내지 않는다).
+    // `/quit` 는 두 번 눌러야 종료한다(구 TUI도 확인 없이 끝내지 않는다).
     if (key === "quit") {
       const at = Date.now();
       const armed = at - quitArmedAt.current < 15_000;

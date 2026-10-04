@@ -1,13 +1,13 @@
 /**
- * 슬래시 명령 **정본** — TUI(콘솔)와 웹 프롬프트가 **같은 목록**을 쓴다.
+ * 슬래시 명령 **정본** — 웹 프롬프트가 이 목록을 쓴다.
  *
  * 왜 공유하나 (사용자 요구: 프롬프트에서 슬래시로 콘솔의 쉘 기능을 쓰고 싶다):
- *   TUI(`legacy-tui/SlashMenu.tsx`)만 명령 목록을 갖고 있었고, 웹 프롬프트에는
- *   **아무것도 없었다.** 두 곳에 같은 목록을 두면 반드시 하나가 뒤처진다 — 이
+ *   구 Ink TUI 의 슬래시 메뉴(2026-10-04 삭제, Q-2)만 명령 목록을 갖고 있었고,
+ *   웹 프롬프트에는 **아무것도 없었다.** 두 곳에 같은 목록을 두면 반드시 하나가 뒤처진다 — 이
  *   저장소가 가장 많이 기록한 실패 유형이다("같은 일을 두 곳에 두지 않는다").
  *   특히 **화면에 보이는 목록**이라 어긋나면 사용자가 없는 명령을 찾게 된다.
  *
- * 그래서 목록과 파싱 규칙을 `shared/`(import 0개)에 두고 양쪽이 읽기만 한다.
+ * 그래서 목록과 파싱 규칙을 `shared/`(import 0개)에 두고 웹이 읽기만 한다.
  * Ink·React 는 여기 없다 — 서버/웹 어느 쪽에서도 안전한 순수 데이터다.
  *
  * `where` 는 **어디서 되는지** 다. `tui` 명령을 웹에서 조용히 무시하지 않는다 —
@@ -41,7 +41,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   // 조용히 없는 척 하지 않고 **이유를 말한다**(`where: "tui"`).
   { key: "term", label: "/term", description: "감지된 터미널과 지원 기능 상태 ", where: "both" },
   { key: "mouse", label: "/mouse", description: "마우스 스크롤/클릭 켜기·끄기", where: "tui" },
-  // llamacli 의 서버 쪽 명령 — 웹 서버가 같은 내용을 실행한다(`server/slashService.ts`).
+  // 구 TUI(2026-10-04 삭제)의 서버 쪽 명령 — 웹 서버가 같은 내용을 실행한다(`server/slashService.ts`).
   // 콘솔(TUI)에는 핸들러가 없어서 `web` 으로 둔다.
   // tmux 위의 AI CLI 탭 — 프로바이더 목록의 정본은 `shared/cliProviders.ts`.
   { key: "cli", label: "/cli", description: "AI CLI(claude·gemini·codex)를 tmux 탭으로 열기 · 목록 · 종료", where: "web" },
@@ -61,7 +61,7 @@ export const SLASH_BY_KEY: Record<string, SlashCommandDef> = Object.fromEntries(
  *  - `slash` 로 시작해야 한다.
  *  - 공백 **뒤는 전부 인자**다 — `/copy 20` 의 `20` 은 명령명이 아니다.
  *  - 등록된 명령이 아니면 `null`. 경로(`/home/...`)처럼 슬래시로 시작하는
- *    평범한 문장을 명령으로劫하지 않는다 — **모델에게 그대로 보낸다**.
+ *    평범한 문장을 명령으로 가로채지 않는다 — **모델에게 그대로 보낸다**.
  */
 export function parseSlash(text: string): { key: string; arg: string } | null {
   const trimmed = text.trim();

@@ -65,17 +65,16 @@ test("**집합 평균** — 파일 평균이면 파일 수로 수치를 오른�
   assert.ok(padded.line < agg.line, `파일 추가로 커버리지가 올랐다: ${padded.line}`);
 });
 
-test("제외는 **순수 스타일만** — 웹 로직과 레거시·테스트를 뺀다", () => {
+test("제외는 **순수 스타일만** — 웹 로직과 테스트를 뺀다", () => {
   assert.equal(isExcluded("src/web/main.tsx"), true, "렌더 컴포넌트를 서버로 셌다");
-  assert.equal(isExcluded("src/legacy-tui/App.tsx"), true, "레거시 TUI 를 셌다");
   assert.equal(isExcluded("src/server/watchdog.test.ts"), true, "테스트 파일을 셌다");
   // **웹 로직은 반드시 센다.** 통째로 빼면 `api.ts` 가 "오류 body 를 버리는 버그" 를
   // 아무도 못 보는 상태로 돌아간다 — 실제로 그 버그가 있었다.
   assert.equal(isExcluded("src/web/api.ts"), false, "웹 로직을 제외했다 (은폐)");
   assert.equal(isExcluded("src/web/wsClient.ts"), false, "재연결 로직을 제외했다");
   assert.equal(isExcluded("src/server/watchdog.ts"), false);
-  // 기본 목록은 **다섯 칸** — 늘리지 않는다.
-  assert.equal(EXCLUDES.length, 5, `제외가 늘었다: ${EXCLUDES.join(", ")}`);
+  // 기본 목록은 **네 칸** — 늘리지 않는다.
+  assert.equal(EXCLUDES.length, 4, `제외가 늘었다: ${EXCLUDES.join(", ")}`);
 });
 
 test("실제 표로 판정한다 — 하한선을 **지키고 있으면** 통과해야 한다", () => {

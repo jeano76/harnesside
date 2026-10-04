@@ -8,5 +8,5 @@
     "types": ["node"]
   },
   "include": ["src"],
-  "exclude": ["src/web/**/*", "src/legacy-tui/**/*"]
+  "exclude": ["src/web/**/*"]
 }

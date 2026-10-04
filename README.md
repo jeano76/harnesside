@@ -9,141 +9,15 @@ fully compatible with the OpenAI Chat Completions API. See
 
 ## Screens
 
-Every frame below is a real capture: `scripts/capture_screens.py` forks a pty,
-runs the built binary, replays keystrokes at human speed, and interprets the
-VT100 output back into the visible screen. Nothing is mocked and no frame is
-hand-drawn — which is how a status bar that came out 41 columns wide on a
-40-column terminal was caught. The raw captures live in
-[`docs/screenshots/`](./docs/screenshots/).
+![harnesside 웹 창 — 로컬 모델 대상](./docs/screenshots/web-local.png)
 
-### Startup
+실제 창의 캡처다(2026-10-04, 1400×860). 서버가 띄운 Chrome 창에서 CDP `Page.captureScreenshot` 으로
+찍었다 — `scripts/capture-window.mjs` 와 같은 방법이며, **README 의 화면은 이 방법으로만 만든다**.
+사람이 그린 그림은 넣지 않는다.
 
-The banner, a discoverability hint, the input box, and the status bar:
-
-```text
-█   █  ███  ████  █   █ █████  ████  ████
-█   █ █   █ █   █ ██  █ █     █     █
-█████ █████ ████  █ █ █ ████   ███   ███
-█   █ █   █ █  █  █  ██ █         █     █
-█   █ █   █ █   █ █   █ █████ ████  ████
-                        CLI  v20260928  ⡀
-      https://github.com/jeano76/harnesside
-  /help 키보드 단축키 · PageUp/Dn 로그 스크롤 · Esc 강제종료 · /quit 정상종료
-────────────────────────────────────────────────────────────────────────────
-────────────────────────────────────────────────────────────────────────────
- /home/jeano/harnesside    │ …5-35B-A3B-Q4_K_M.gguf                    ░░░░░░░░░░░░   0%
-```
-
-Three things are doing work here. The hint line is the only guidance a new
-user gets, so it names the three things they need in the first ten seconds. The
-status bar's right end is `[context gauge][N%]`, which turns yellow at 70% and
-red at 90% — the one number that predicts an imminent automatic compaction. And
-`│` is a spinner while a turn is in flight, not a static divider.
-
-### Slash menu
-
-Type `/`. The menu sizes itself to the available space and to what matched:
-
-```text
-╭──────────────────────────────────────────────────────────────────────────╮
-│ ❯ /help           도움말 + 키보드 단축키 전체                                 │
-│   /keys           키보드 단축키만 보기                                        │
-│   /quit           Quit                                                    │
-│   /queue          Add a message to the queue                              │
-│   /compact        Run context compaction now                              │
-│   /term           감지된 터미널과 지원 기능 상태                              │
-│   /mouse          마우스 스크롤/클릭 켜기·끄기                                │
-│   /skills         List loaded skills                                      │
-│   /rules          List loaded rules                                       │
-│   /improve        Analyze repeated failures → propose a rule              │
-│   /improve-apply  Save the last proposal as a rule file                   │
-│   /plan-clear     Clear a stuck plan-progress indicator                   │
-│   ↓ 아래 항목 있음                                                          │
-╰──────────────────────────────────────────────────────────────────────────╯
-```
-
-Note the last line. The menu used to be a fixed 13 rows tall regardless of what
-matched, so `/q` drew one command and twelve blank rows, and on a 24-row
-terminal the popup left three rows of conversation — you could not read the
-transcript you were picking a command *from*. It is now bounded to half the
-available height, scrolls to keep the selection visible, and says when there is
-more above or below.
-
-### `/help` — every keybinding
-
-The single most-requested thing and the longest-standing gap: previously `/help`
-printed slash commands only, so every *keyboard* interaction was undocumented.
-This is rendered from `src/tui/keybindings.ts`, which is the same data the
-handler uses, so the two cannot drift.
-
-```text
-입력 편집
-  Esc                      강제종료 (체크포인트 저장 후 즉시 종료)
-  ↑ / ↓                    입력 히스토리 (셸처럼 동작)
-  Ctrl+←/→ (Alt+←/→)        단어 단위 이동
-  Ctrl+A / Ctrl+E          줄의 처음 / 끝으로
-  Ctrl+U / Ctrl+K          커서 앞 / 뒤 지우기
-  Ctrl+W                   직전 단어 지우기
-  ...
-로그 탐색
-  PageUp / PageDown        한 화면씩 스크롤
-  Ctrl+O                   접힌 블록 전부 펼치기/접기 (추론·diff·붙여넣기)
-  Shift+T                  스크롤 중 새 출력 도착 표시로 이동
-  마우스 휠 / 클릭           스크롤 · 접힌 블록 토글 (필요시 /mouse 로 켜기)
-...
-```
-
-`Ctrl+O` matters more than it looks. Folding a reasoning block or a diff was
-**mouse-only**, and the compatibility work below deliberately turns mouse
-reporting *off* by default — so on any terminal that needed those fallbacks,
-the only way to read a folded block had quietly disappeared. `Ctrl+O` is the
-keyboard equivalent, and the persona harness now asserts it exists.
-
-### `/term` — what was detected, and why
-
-The most useful command when a terminal misbehaves, because it replaces
-guesswork with the actual detection result and the reason for it:
-
-```text
-터미널      : GNOME VTE / gnome-terminal
-판정 근거   : ok (TERM=xterm-256color, GNOME VTE / gnome-terminal)
-멀티플렉서  : 아니오
-
-제어문자    : 켜짐
-색상        : 진짜색(24bit)
-유니코드    : 켜짐
-대체화면    : 켜짐
-동기화 출력 : 꺼짐
-하이퍼링크  : 꺼짐
-마우스(SGR) : 꺼짐 (지원되지만 /mouse 로 켜짐)
-
-강제로 바꾸려면 환경변수로 실행: HARNESSIDE_FORCE_ANSI=1, HARNESSIDE_NO_ANSI=1,
-HARNESSIDE_COLOR_DEPTH=0|4|8|24, HARNESSIDE_ASCII=1, HARNESSIDE_MOUSE=1, NO_COLOR=1
-```
-
-Every row is a capability that used to differ *silently* between terminals —
-see [Terminal capability detection](#terminal-capability-detection).
-
-### Responsive layout, down to 40 columns
-
-Same menu at 80×24 and 40×16. The layout never overflows its terminal, and the
-expensive chrome is dropped before anything wraps:
-
-```text
-# 40x16
- ╭──────────────────────────────────────╮
- │ ❯ /help           도움말 + 키보드    │
- │   /keys           키보드 단축키만    │
- │   /quit           Quit               │
- │   /queue          Add a message to   │
- │   /compact        Run context        │
- │ ↓ 아래 항목 있음                      │
- ╰──────────────────────────────────────╯
-────────────────────────────────────────
-  /
-────────────────────────────────────────
- …macli   │ ….gguf    ░░░░░░░░░░░░   0%
-```
+예전 이 절은 구 Ink TUI 를 `scripts/capture_screens.py`(pty 재생)로 찍은 텍스트 프레임이었다.
+TUI 가 삭제되면서(Q-2, 2026-10-04) 그 스크립트가 실행하던 바이너리가 없어져 **다시 만들 수 없는**
+캡처가 됐으므로, 스크립트와 `docs/screenshots/*.txt` 를 함께 지웠다. 되살리려면 `git log -- scripts/capture_screens.py`.
 
 ## Terminal capability detection
 

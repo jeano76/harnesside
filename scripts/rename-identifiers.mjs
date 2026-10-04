@@ -21,7 +21,7 @@ const RULES = [
   ['llamacli', 'harnesside'],
 ];
 
-const SKIP = new Set(['node_modules', 'dist', '.git', '.harnesside', 'legacy-tui']);
+const SKIP = new Set(['node_modules', 'dist', '.git', '.harnesside']);
 /** 이 스크립트 자신과 진행 기록은 치환에서 제외한다(규칙 문자열/원본 프로젝트 참조 보존). */
 const SKIP_FILES = new Set(['scripts/rename-identifiers.mjs', 'PROGRESS.md']);
 

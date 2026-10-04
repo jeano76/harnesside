@@ -9,7 +9,7 @@
  * 원문의 체크박스도 그대로였다.
  *
  * 이 스크립트가 정직해야 하는 지점 — 세 가지:
- *  1. **제외 규칙을 그대로 따른다**: `src/legacy-tui/` 와 `src/web/**` 순수 스타일은
+ *  1. **제외 규칙을 그대로 따른다**: `src/web/**` 순수 스타일은(구 Ink TUI 제외 규칙은 Q-2 로 TUI 와 함께 삭제)
  *     원문에서 명시적으로 뺀다. 임의로 늘리지 않는다(수치를 올리려고 제외를 늘리는 순간
  *     그 수치는 거짓이 된다 — 원문도 그렇게 경고한다).
  *  2. **하한선은 파일 평균이 아니라 집합(line) 평균** 다. 파일 평균이면 파일 수를 늘려
@@ -39,7 +39,7 @@ const has = (name) => argv.includes(`--${name}`);
 export const FLOOR_BY_PHASE = { P0: 60, P11: 70, P17: 80 };
 
 /**
- * 제외 규칙 (§10.6: `src/legacy-tui/`, `src/web/**` **순수 스타일**).
+ * 제외 규칙 (§10.6: `src/web/**` **순수 스타일** — 구 Ink TUI 항목은 Q-2 로 삭제).
  *
  * "순수 스타일" 을 **`.tsx`** 로 읽는다. 이 저장소의 관례가 그 때문이다: 로직은 옆의
  * `.ts` 모듈로 빼고(`.logic.test.ts` 가 그 증거), `.tsx` 는 렌더만 한다. 그래서 `*.ts`
@@ -52,7 +52,6 @@ export const FLOOR_BY_PHASE = { P0: 60, P11: 70, P17: 80 };
 export const EXCLUDES = [
   "**/node_modules/**",
   "/usr/share/nodejs/**",
-  "**/legacy-tui/**",
   "**/*.tsx",
   "**/*.test.ts",
 ];

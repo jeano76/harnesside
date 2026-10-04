@@ -307,7 +307,7 @@ async function main(): Promise<number> {
   // 웹에서 tmux 로 AI CLI(claude·gemini·codex) 쓰기 — `PROMPT_TMUX_CLI.md`.
   // 서버를 내려도 tmux 세션(`hs-*`)은 죽이지 않는다 — `terminal.shutdown` 은 attach PTY 만 끊는다.
   const cliSessions = new CliSessions({ terminal, root: () => workspace.root(), warn: (m) => emit(`[cli] ${m}`) });
-  // `/models` · `/server` · `/reset` — llamacli 의 슬래시 명령을 그대로 서버에서 실행한다.
+  // `/models` · `/server` · `/reset` — 구 TUI(2026-10-04 삭제)의 슬래시 명령을 그대로 서버에서 실행한다.
   // 서버가 바뀌면 **세션도 새 서버에 맞춘다**(안 맞추면 옛 모델 이름으로 요청한다).
   const slash = new SlashService({
     projectRoot,
@@ -463,7 +463,7 @@ async function main(): Promise<number> {
     if (crashing) return;
     crashing = true;
     // M10: 죽기 전에 디스크에 남긴다 — 다음 실행의 창이 이것을 보여준다.
-    // `legacy-tui` 의 installCrashHandlers 와 같은 기록 함수(정본은 한 곳).
+    // 구 Ink TUI(2026-10-04 삭제, Q-2)의 installCrashHandlers 와 같은 기록 함수(정본은 한 곳).
     writeCrashLogSync(projectRoot, formatCrashReport("uncaughtException", e));
     emit(`[fatal] 처리되지 않은 예외: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
     void shutdown("uncaughtException");
@@ -1001,8 +1001,8 @@ async function main(): Promise<number> {
           })
           .route("POST", "/api/agent/cancel", async () => agent.cancel())
           // ── 슬래시 명령의 서버 경로 (사용자 요구) ────────────────────────────
-          // TUI(`legacy-tui`)는 이 작업을 루프에 직접 있었다. 웹 창에는 루프가 없고
-          // 라우트만 있다 — 없으면 명령이 **조용히 아무것도 안 하고** 끝난다.
+          // 구 Ink TUI(2026-10-04 삭제, Q-2)는 이 작업을 루프에 직접 있었다.
+          // 웹 창에는 루프가 없고 라우트만 있다 — 없으면 명령이 **조용히 아무것도 안 하고** 끝난다.
           // 라우트가 부를 **이름 있는 진입점** 을 만들고, 못 하면 그 사실을 돌려준다.
           .route("POST", "/api/agent/compact", async () => agent.forceCompact())
           .route("POST", "/api/agent/improve", async () => agent.proposeImprovement())
