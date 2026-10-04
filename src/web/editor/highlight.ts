@@ -181,6 +181,15 @@ const RULES: Record<Language, Rule[]> = {
  * **원문을 그대로 보존한다** — 토큰을 이어 붙인 결과가 입력과 정확히 같아야 한다.
  * 여기서 한 글자라도 잃으면 "하이라이터가 코드를 망가뜨렸다" 가 되며, 그건
  * 하이라이트보다 훨씬 나쁜 실패다.
+ *
+ * ── 실제로 한 번 깨졌던 지점 (2026-10-05 실측) ──────────────────────────────
+ * 무한 루프 방어용 반복 상한(`MAX_TOKEN_PASSES`)이 **상한에 닿으면 남은 글자를
+ * 버리고 반환**했다. 그래서 압축된 한 줄 CSS 에서 **12,800자가 조용히 사라졌다**
+ * (14,290자 중). 사용자는 "파일에 없던 내용" 을 보게 되고, 그 원인은 아무데도
+ * 적혀 있지 않았다.
+ *
+ * 지금은 상한에 닿아도 **남은 글자를 `plain` 으로 붙여 돌려준다.** 반복 상한은
+ * 무한 루프(빈 문자열 매칭)만 막는 안전장치일 뿐, **내용을 줄일 권한이 없다.**
  */
 export function tokenizeLine(line: string, lang: Language): Token[] {
   const rules = RULES[lang];
@@ -189,7 +198,7 @@ export function tokenizeLine(line: string, lang: Language): Token[] {
   let rest = line;
   let guard = 0;
   // 무한 루프 방어: 규칙이 빈 문자열을 매칭하면 여기서 멈추지 않는다.
-  while (rest.length > 0 && guard++ < 500) {
+  while (rest.length > 0 && guard++ < MAX_TOKEN_PASSES) {
     let best: { idx: number; len: number; kind: TokenKind } | null = null;
     for (const r of rules) {
       const m = r.re.exec(rest);
@@ -200,14 +209,29 @@ export function tokenizeLine(line: string, lang: Language): Token[] {
     }
     if (!best || best.len === 0) {
       out.push({ kind: "plain", text: rest });
+      rest = "";
       break;
     }
     if (best.idx > 0) out.push({ kind: "plain", text: rest.slice(0, best.idx) });
     out.push({ kind: best.kind, text: rest.slice(best.idx, best.idx + best.len) });
     rest = rest.slice(best.idx + best.len);
   }
+  // ★ 반복 상한에 닿아서 **남은 글자가 있으면 반드시 붙인다.** 버리면 코드가 조용히 잘린다.
+  if (rest.length > 0) out.push({ kind: "plain", text: rest });
   return out.length ? out : [{ kind: "plain", text: line }];
 }
+
+/**
+ * 한 줄 안에서 토큰 매칭을 반복할 수 있는 횟수 상한 — **안전장치**다.
+ *
+ * 왜 상한이 필요한가: 규칙 중 하나라도 빈 문자열을 매칭하면(앞으로 실수로 추가해도)
+ * `rest` 가 줄어들지 않아 무한 루프가 된다. 브라우저가 멈추는 것이 하이라이트보다
+ * 나쁘므로 상한은 둔다.
+ *
+ * 왜 상한이 **내용을 잘라낼 근거는 아닌가**: 위 주석의 실측 참조. 상한에 닿으면
+ * 남은 글자를 `plain` 으로 붙인다 — **화면에는 항상 전부 보인다.**
+ */
+export const MAX_TOKEN_PASSES = 500;
 
 export function colorFor(kind: TokenKind): string {
   return (C as Record<string, string>)[kind] ?? C.plain;
