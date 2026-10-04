@@ -114,7 +114,7 @@ test("대화 본문이 **더 이상 `pre` 원문이 아니다** — 그게 원�
 });
 
 test("**사용자 발화**는 원문 그대로 — 사람이 쓴 글에 마크다운을 씌우면 원본이 사라진다", () => {
-  const userBranch = /if \(b\.kind === "user"\) \{[\s\S]{0,240}?\n  \}/.exec(panel);
+  const userBranch = /if \(b\.kind === "user"\) \{[\s\S]{0,600}?\n  \}/.exec(panel);
   assert.ok(userBranch, "user 분기를 찾지 못했다");
   assert.match(userBranch[0], /\{b\.text\}/, "사용자 발화가 변환된다 — 원문이 아니게 된다");
   assert.doesNotMatch(userBranch[0], /<Markdown/, "사용자 발화에 마크다운 렌더를 적용했다");
@@ -152,4 +152,16 @@ test("파서와 컴포넌트가 **같은 설정**을 쓴다 — 어긋나면 검
 test("**렌더에 실패하면 원문을 둔다** — 빈 화면이 결함이다", () => {
   assert.match(src, /catch[\s\S]{0,200}return ""/, "파싱 실패 처리가 없다");
   assert.match(src, /html \? toReact\(html\) : text/, "실패하면 빈 화면만 남는다");
+});
+
+test("표 머리글은 `th` 로 — `td` 로 내리면 머리인지 모른다", () => {
+  assert.match(src, /if \(el\.type === "th"\)/, "th 분기가 없다 — 머리가 일반 셀로 그려진다");
+  assert.match(src, /<th key=\{key\}/, "th 엘리먼트가 없다");
+  assert.match(src, /fontWeight: 700/, "머리 강조가 없다");
+});
+
+test("표 구조(thead/tbody/tr)를 살린다 — 줄만 있고 선이 없으면 깨져 보인다", () => {
+  for (const tag of ['"thead"', '"tbody"', '"tr"']) {
+    assert.ok(src.includes(`el.type === ${tag}`), `${tag} 분기가 없다`);
+  }
 });

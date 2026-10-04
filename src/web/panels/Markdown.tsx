@@ -32,25 +32,26 @@
 import React, { useMemo } from "react";
 import { marked } from "marked";
 import { colorFor, tokenizeLine, languageFor } from "../editor/highlight.js";
+import { COLOR, FONT, RADIUS } from "../theme/tokens.js";
 
 // ── 색 (GitHub Dark 계열 — 파일 미리보기와 **같은 계열**로 맞춘다) ────────────
-const FG = "#c9d1d9";
-const DIM = "#8b949e";
-const BLUE = "#79c0ff";
-const GREEN = "#7ee787";
-const YELLOW = "#d29922";
-const PURPLE = "#d2a8ff";
-const RED = "#ff7b72";
-const BORDER = "#30363d";
-const CODE_BG = "#161b22";
+const FG = COLOR.FG;
+const DIM = COLOR.DIM;
+const BLUE = COLOR.BLUE;
+const GREEN = COLOR.GREEN;
+const YELLOW = COLOR.YELLOW;
+const PURPLE = COLOR.PURPLE;
+const RED = COLOR.RED;
+const BORDER = COLOR.BORDER;
+const CODE_BG = COLOR.CODE_BG;
 
 /** 인라인 코드 배경 — 파일 미리보기와 같은 값이어야 한 화면처럼 보인다. */
 const inlineCodeStyle: React.CSSProperties = {
   background: CODE_BG,
   border: `1px solid ${BORDER}`,
-  borderRadius: 4,
+  borderRadius: RADIUS.S,
   padding: "0 4px",
-  font: "0.92em ui-monospace, monospace",
+  font: `0.92em ${FONT.MONO}`,
   color: GREEN,
 };
 
@@ -64,14 +65,14 @@ function renderFence(code: string, langHint: string | undefined, key: string): R
   const lang = langHint && /^[a-z0-9+#-]+$/i.test(langHint) ? languageFor(`x.${langHint === "sh" || langHint === "bash" ? "sh" : langHint}`) : "text";
   const lines = code.replace(/\n$/, "").split("\n");
   return (
-    <div key={key} style={{ margin: "6px 0", border: `1px solid ${BORDER}`, borderRadius: 6, background: "#0d1117", overflow: "hidden" }}>
+    <div key={key} style={{ margin: "6px 0", border: `1px solid ${BORDER}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", borderBottom: `1px solid ${BORDER}`, color: DIM, fontSize: 10 }}>
         {/* **언어 표기** — 무엇으로 칠해졌는지 말한다. 지어내지 않는다. */}
         <span>{lang === "text" ? "코드" : lang}</span>
         <span style={{ flex: 1 }} />
         <span>{lines.length}줄</span>
       </div>
-      <pre style={{ margin: 0, padding: "6px 8px", overflow: "auto", font: "11px/1.5 ui-monospace, monospace", tabSize: 2 }}>
+      <pre style={{ margin: 0, padding: "6px 8px", overflow: "auto", font: `${FONT.AUX}px/${FONT.LINE_CODE} ${FONT.MONO}`, tabSize: FONT.TAB_SIZE }}>
         {lines.map((l, i) => (
           <div key={i}>
             {tokenizeLine(l, lang).map((t, ti) => (
@@ -146,7 +147,7 @@ function styleNode(node: React.ReactNode, key: number): React.ReactNode {
     if (!href) {
       // **삭제하지 않고 글자로 보여준다** — 링크가 왜 눌리지 않는지 알 수 있어야 한다.
       return (
-        <span key={key} style={{ color: YELLOW, borderBottom: "1px dotted #6e7681", cursor: "not-allowed" }} title={`허용되지 않는 주소입니다: ${el.props.href ?? ""}`}>
+        <span key={key} style={{ color: YELLOW, borderBottom: `1px dotted ${COLOR.DIM_SUBTLE}`, cursor: "not-allowed" }} title={`허용되지 않는 주소입니다: ${el.props.href ?? ""}`}>
           {kids}
         </span>
       );
@@ -203,12 +204,30 @@ function styleNode(node: React.ReactNode, key: number): React.ReactNode {
   }
   if (el.type === "table") {
     return (
-      <div key={key} style={{ overflow: "auto", margin: "6px 0" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 12, color: FG }}>{kids}</table>
+      <div key={key} style={{ overflow: "auto", margin: "6px 0", border: `1px solid ${BORDER}`, borderRadius: 6 }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12, color: FG, width: "100%" }}>{kids}</table>
       </div>
     );
   }
-  if (el.type === "th" || el.type === "td") {
+  if (el.type === "thead") {
+    return <thead key={key} style={{ background: CODE_BG }}>{kids}</thead>;
+  }
+  if (el.type === "tbody") {
+    return <tbody key={key}>{kids}</tbody>;
+  }
+  if (el.type === "tr") {
+    return (
+      <tr key={key} style={{ borderBottom: `1px solid ${BORDER}` }}>{kids}</tr>
+    );
+  }
+  if (el.type === "th") {
+    return (
+      <th key={key} style={{ border: `1px solid ${BORDER}`, padding: "4px 8px", color: FG, fontWeight: 700, textAlign: "left", background: CODE_BG }}>
+        {kids}
+      </th>
+    );
+  }
+  if (el.type === "td") {
     return (
       <td key={key} style={{ border: `1px solid ${BORDER}`, padding: "3px 8px", color: FG }}>
         {kids}

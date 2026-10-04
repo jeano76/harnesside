@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatCrashReport, writeCrashLogSync, installCrashHandlers } from "./crashHandler.js";
+import { formatCrashReport, writeCrashLogSync, installCrashHandlers, readCrashTail } from "./crashHandler.js";
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "harnesside-crash-test-"));
@@ -71,4 +71,21 @@ test("installCrashHandlers: an uncaughtException calls onBeforeExit, writes the 
       process.removeAllListeners("uncaughtException");
       process.removeAllListeners("unhandledRejection");
     }
+  }));
+
+test("readCrashTail: 로그가 없으면 present:false (없음을 말한다)", () =>
+  withTempDir(async (dir) => {
+    assert.deepEqual(readCrashTail(dir), { present: false, tail: null, error: null });
+  }));
+
+test("readCrashTail: 있으면 꼬리를 주고, 넘치면 앞에서 자르고 표시한다", () =>
+  withTempDir(async (dir) => {
+    writeCrashLogSync(dir, `${"x".repeat(5000)}\nTAIL\n`);
+    const r = readCrashTail(dir, 100);
+    assert.equal(r.present, true);
+    assert.equal(r.error, null);
+    assert.match(r.tail!, /생략/);
+    assert.match(r.tail!, /TAIL/);
+    // 뒤집으면 실패해야 한다: 자름 표시 없이 잘리면 유실 은폐다
+    assert.ok(!r.tail!.includes("x".repeat(5000)));
   }));

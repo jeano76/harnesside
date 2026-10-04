@@ -250,3 +250,19 @@ test("M8: 필수 키 커버리지를 **검사한다** — 빠진 키를 말해�
   // 대소문자는 무시한다 (Shift 가 붙으면 문자열이 달라진다)
   assert.equal(describeKeyCoverage(REQUIRED_KEYS.map((k) => k.toUpperCase())).ok, true);
 });
+
+test("toastView: 만료된 것은 live 에서 빠진다 — 팝업이 영원히 남지 않는다", () => {
+  const base = 1_700_000_000_000;
+  const items = [
+    makeToast("a", "info", "t", "b", base - 20_000, { ttlMs: 5_000, requiresAck: false, source: "t" }),
+  ];
+  assert.deepEqual(toastView(items, base).live, [], "만료된 토스트가 live 에 남았다");
+});
+
+test("toastView: 다음 만료 시각을 안다 — 스윕 타이머가 걸린다", () => {
+  const base = 1_700_000_000_000;
+  const items = [
+    makeToast("a", "info", "t", "b", base, { ttlMs: 5_000, requiresAck: false, source: "t" }),
+  ];
+  assert.equal(toastView(items, base).nextExpiry, base + 5_000);
+});

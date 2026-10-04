@@ -118,10 +118,12 @@ test("**LANG 이 아예 없으면** UTF-8 로 채운다 — 없는 게 깨짐의
   assert.match(env.LANG!, /UTF-?8/i, "로캘이 비어 있으면 프로그램이 UTF-8 이 아닌 것으로 본다");
 });
 
-test("**LC_ALL** 은 비워 둔다 — 상위 로캘보다 우선하므로, 옛 값을 물려받으면 위에서 고친 게 무시된다", () => {
-  // 실측: `LC_ALL=C` 를 물려받으면 `LANG` 을 UTF-8 로 맞춰도 **LC_ALL 이 이긴다.**
+test("**LC_ALL** 은 삭제한다 — 빈 문자열도 UTF-8 을 깨뜨린다", () => {
+  // 실측 1: `LC_ALL=C` 를 물려받으면 `LANG` 을 UTF-8 로 맞춰도 **LC_ALL 이 이긴다.**
+  // 실측 2(2026-10-04): 빈 문자열("")로 둬도 glibc 가 UTF-8 로 보지 않아 `ls` 가
+  // 한글을 `$'\\345...'` 8진 이스케이프로 찍는다. unset 일 때만 정상.
   const env = ptyEnv({ LANG: "ko_KR.UTF-8", LC_ALL: "C" });
-  assert.equal(env.LC_ALL, "", "비어 있지 않으면 LANG 을 고친 의미가 없다");
+  assert.ok(!("LC_ALL" in env), "LC_ALL 이 남았다 — 빈 문자열도 깨뜨린다");
 });
 
 test("TERM 은 색이 나오는 값으로 — PTY 이름과 같아야 줄바꿈이 어긋나지 않는다", () => {

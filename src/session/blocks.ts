@@ -28,6 +28,14 @@ export interface AgentBlock {
    * 보여준다". 별도 패널이 없어진 이유는 이것이다.
    */
   view?: {
+    /**
+     * 무엇을 여는지. **`search` · `files` 도 대화 안의 블록**이다 (S-5).
+     *
+     * 왜 이것도 블록인가: 2026-10-01 에 탐색기 패널을 **삭제**했고, 사용자가 명시한
+     * 대체가 "각 메뉴 선택시 대화창 처럼 출력화면 안에 블럭화" 였다. 검색 결과를
+     * 별도 패널로 보내면 그 삭제가 **부분적으로 되돌아간다** — 화면 오른쪽에 목록이
+     * 다시 붙고, "무엇을 검색하려다가 무엇을 봤나" 가 한 스크롤로 이어지지 않는다(§7.3).
+     */
     what: "settings" | "diff" | "file" | "dirs";
     /** `file` 일 때 경로. 나머지는 무시. */
     path?: string;
@@ -245,13 +253,20 @@ export function appendToBlock(
   //
   // **합치는 조건은 "진행 중인 같은 도구" 다.** 완료(`done: true`)된 블록 뒤의 새 호출은
   // **새 블록이어야 한다** — 그렇지 않으면 연속된 서로 다른 명령이 하나로 뭉친다.
+  //
+  // 2026-10-04: 시간 창은 **도구에만** 건다. `text`/`reasoning` 은 모델의 한 발언이라
+  // 사이가 벌어져도 이어 붙인다 — 35B 모델의 델타 간격(실측 2529ms)이 창(2500ms)을
+  // 넘어 표가 "1" 과 ",569" 두 블록으로 찢어져 렌더가 깨졌다(실측). 사이에 다른
+  // 종류(status·tool)가 끼면 kind 불일치로 어차피 새 블록이 되므로, 시간으로
+  // 자를 이유가 없다. 도구만 오래된 호출을 엉뚱한 블록에 붙이지 않게 창으로 막는다.
   const streamable = kind === "text" || kind === "reasoning" || kind === "tool";
   const sameTool =
     kind !== "tool" ||
     // **아직 끝나지 않은** 같은 도구일 때만 합친다. `last` 가 `done: true` 면 끝난
     // 것이므로 다음 호출은 새 블록이 되어야 한다.
     (!!last && last.tool?.name === tool?.name && last.tool?.done !== true);
-  if (streamable && last && last.kind === kind && sameTool && at - last.at < MERGE_WINDOW_MS) {
+  const withinWindow = kind !== "tool" || !last || at - last.at < MERGE_WINDOW_MS;
+  if (streamable && last && last.kind === kind && sameTool && withinWindow) {
     return [
       ...blocks.slice(0, -1),
       {
@@ -316,7 +331,7 @@ export function blockLabel(b: AgentBlock): string {
           ? "변경 검토"
           : b.view?.what === "file"
             ? `파일 ${b.view.path ?? ""}`
-            : "디렉터리";
+              : "디렉터리";
     case "error":
       return `오류: ${b.text.slice(0, 60)}`;
   }

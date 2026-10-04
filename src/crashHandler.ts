@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -28,6 +28,36 @@ export function formatCrashReport(kind: "uncaughtException" | "unhandledRejectio
 }
 
 const CRASH_LOG_RELATIVE_PATH = join(".harnesside", "crash.log");
+
+/** 크래시 로그 경로. 서버·웹이 같은 곳을 본다(두 곳에 두면 어긋난다). */
+export function crashLogPath(projectRoot: string): string {
+  return join(projectRoot, CRASH_LOG_RELATIVE_PATH);
+}
+
+/**
+ * 마지막 크래시 꼬리 읽기 (웹 M10 배너용).
+ * 없으면 `{ present: false }` — "없음" 을 말한다. 읽기 실패는 `error` 로
+ * 말하고 present:false 로 덮지 않는다 (모름을 없음으로 말하지 않는다).
+ */
+export function readCrashTail(
+  projectRoot: string,
+  maxChars = 4000
+): { present: boolean; tail: string | null; error: string | null } {
+  let exists = true;
+  try {
+    statSync(crashLogPath(projectRoot));
+  } catch {
+    exists = false;
+  }
+  if (!exists) return { present: false, tail: null, error: null };
+  try {
+    const full = readFileSync(crashLogPath(projectRoot), "utf8");
+    const tail = full.length > maxChars ? `…(앞 ${full.length - maxChars}자 생략)\n${full.slice(-maxChars)}` : full;
+    return { present: true, tail, error: null };
+  } catch (e) {
+    return { present: false, tail: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 /** Best-effort: a failure to write the crash log must never prevent the
  *  crash message itself from still reaching stderr, and never throw

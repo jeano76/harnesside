@@ -122,9 +122,13 @@ const lang = await run("document.documentElement.lang");
 ok('html[lang] = "ko" (스크린 리더가 읽을 언어)', lang === "ko", `실제: ${JSON.stringify(lang)}`);
 
 // ── 2. 사전 값이 화면에 보인다 ────────────────────────────────────────────────
+// 2026-10-04 정정: 예전엔 ["에디터", "터미널"] 을 봤다. 그러나 2026-10-01 구조 개편으로
+// 에디터 패널은 삭제됐고(되살리면 결정을 되돌리는 것), 터미널은 기본 화면에 제목으로
+// 나오지 않는다. 없는 말을 요구하면 UI 가 없는 말을 지어내게 된다. 그래서 기본 화면에
+// 항상 있는 사전 값(대화 탭 · 서버 로그)을 본다 — 카탈로그를 비우면 이 검사도 깨진다.
 const bodyText = await run("document.body.innerText ?? ''");
 ok("화면 텍스트가 존재한다", bodyText.length > 0, `길이 ${bodyText.length}`);
-for (const needle of ["에디터", "터미널"]) {
+for (const needle of ["서버 로그", "프롬프트"]) {
   ok(`사전 값 "${needle}" 가 화면에 보인다`, bodyText.includes(needle));
 }
 
@@ -141,11 +145,21 @@ ok("사전 키가 화면에 노출되지 않는다", leaked.length === 0, `노�
 // ── 4. 빈 화면 조각이 없다 ────────────────────────────────────────────────────
 // `t()` 는 없는 키를 **빈 문자열이 아니라 키** 로 돌려준다. 그 보장은 모듈 테스트가
 // 한다. 여기서 보는 것은 그 결과 화면에 **아무것도 빈 요소**로 남지 않는가 다.
+//
+// 2026-10-04 정정: 예전엔 모든 빈 strong/span/div 를 잡았다. 그러나 빈 요소가
+// 전부 결함은 아니다 — xterm 의 측정용 span(`xterm-char-measure-element`)과
+// 레이아웃 간격용 빈 span(`flex: 1`)은 의도된 빈 요소다. 그것까지 잡으면
+// xterm 을 쓰는 순간 항상 실패하는 검사가 된다(오탐이 나는 검사는 없는 검사보다
+// 나쁘다). 그래서 **제목(strong)의 빈 것만** 결함으로 본다. 미치환 변수는 그대로 본다.
 const blanks = await run(`(() => {
   const out = [];
-  for (const el of document.querySelectorAll("strong, span, div")) {
+  for (const el of document.querySelectorAll("strong")) {
     const kids = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent ?? "");
     if (kids.length && kids.every((s) => s.trim() === "")) out.push(el.className || el.tagName);
+  }
+  for (const el of document.querySelectorAll("span, div")) {
+    if (el.closest(".xterm")) continue;
+    const kids = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent ?? "");
     const un = kids.find((s) => /\\{\\{\\s*[\\w.]+\\s*\\}\\}/.test(s));
     if (un !== undefined) out.push("미치환 변수: " + un);
   }
@@ -153,9 +167,17 @@ const blanks = await run(`(() => {
 })()`);
 ok("빈 텍스트 조각이 없다", (blanks?.length ?? 0) === 0, `${(blanks ?? []).slice(0, 3).join(" | ")}`);
 
-// ── 5. 키보드만으로 도킹 라벨에 닿는다 ────────────────────────────────────────
-// 존 라벨은 i18n 을 **React 밖**에서 읽는다(레이아웃 엔진). 그 결과가 실제로 나오는가.
-ok("존 라벨이 보인다", /왼쪽 도크|오른쪽 도크|중앙/.test(bodyText));
+// ── 5. 액티비티바가 발견 가능하다 ────────────────────────────────────────────
+// 2026-10-04 정정: 예전엔 존 라벨(왼쪽 도크/오른쪽 도크/중앙)을 봤다. 2026-10-01
+// 구조 개편으로 도크 존 라벨은 기본 화면에 나오지 않는다. 없는 말을 요구하면
+// 되돌리라는 압력이 된다. 대신 같은 의도(키보드·첫 사용자가 무엇을 여는지 안다)를
+// 지금 설계에서 본다: 액티비티바 5종의 aria-label 이 있다.
+ok(
+  "액티비티바가 발견 가능하다",
+  (await run(
+    `["설정", "변경 검토", "디렉터리"].every((l) => !!document.querySelector('button[aria-label="' + l + '"]'))`
+  )) === true
+);
 
 ws.close();
 console.log(`\n${fail === 0 ? "모두 통과" : "실패 있음"} — ${pass} pass / ${fail} fail`);

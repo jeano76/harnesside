@@ -192,7 +192,13 @@ export function draftAfterSend(sent: boolean, d: Draft | null): Draft | null {
 export interface Command {
   id: string;
   title: string;
-  /** 접두사 라벨 — 로그/에이전트/설정/모Delimiter */
+  /** 접두사 라벨 — 화면 왼쪽의 묶음 이름.
+   *
+   * **닫힌 목록**(`union`)이다. 새 종류를 넣으면 여기에도 추가해야 하는데, 그게
+   * **의도된 비용**이다 — 무슨 분류가 있는지 정해져 있지 않으면 팔레트가 라벨 없는
+   * 목록으로 늘어난다.
+   *
+   * `찾기` 는 2026-10-04 에 검색·빠른 이동과 함께 제거됐다(사용자 명시). */
   category: "파일" | "에이전트" | "보기" | "설정" | "기타";
   keys: string[];
   when?: string;

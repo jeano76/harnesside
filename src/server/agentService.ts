@@ -10,16 +10,20 @@
  * 기록한다. 판단(압축·도구 선택·자기 보호)은 전부 이미 검증된 `AgentLoop` 안에 있다 —
  * 여기서 다시 판단하면 두 개의 진실원이 된다.
  *
- * 특히 **deliberately 하지 않은 것**:
- *  - thinking 을 켜지 않는다. 기본 OFF(§5.3). 실측: 예산을 전부 쓰고 tool_call 이
- *    하나도 안 나온다. 켜려면 설정에서 명시해야 한다.
+ * 특히 **deliberately 하지 않은 것** (2026-10-04 변경: 사용자 명시로 기본 ON):
+ *  - thinking 기본 ON. 예산 폭주 우려는 `maxReasoningTokens` 상한+강제 전환이
+ *    그대로 받는다. 표시(UI)는 항상 Thinking 으로 고정(체크박스·선택기 삭제).
  *  - 도구 승인 게이트를 우회하지 않는다. 위험한 도구는 `approval` 모듈이 막는다.
  */
 
 import { AgentLoop } from "../agent/loop.js";
+import type { ApprovalGate } from "./approval.js";
 import { OpenAICompatibleClient } from "../backend/openaiClient.js";
-import type { ModelBackend } from "../backend/types.js";
+import type { ChatMessage, ModelBackend } from "../backend/types.js";
 import type { CompactionThresholds } from "../compaction/compactor.js";
+import type { CompactionDetail } from "../compaction/compactor.js";
+import { estimateTokens } from "../compaction/compactor.js";
+import { activeToolDefs } from "../tools/index.js";
 import { applyEvent, normalizeTool, type AgentBlock } from "../session/blocks.js";
 import { resumeInfo, type ResumeInfo } from "../compaction/checkpoint.js";
 
@@ -32,12 +36,28 @@ import { resumeInfo, type ResumeInfo } from "../compaction/checkpoint.js";
 export const DEFAULT_THRESHOLDS: CompactionThresholds = { autoTriggerRatio: 0.6, contextWindowTokens: 32_768 };
 
 export interface AgentEvent {
-  type: "agent.delta" | "agent.reasoning" | "agent.done" | "agent.error" | "agent.tool" | "agent.status";
+  type: "agent.delta" | "agent.reasoning" | "agent.done" | "agent.error" | "agent.tool" | "agent.status" | "agent.queue" | "agent.compaction" | "agent.thinking";
   /** `agent.reasoning` 은 사고 델타, `agent.delta` 는 답변 델타다. */
   text?: string;
-  tool?: { name: string; args?: string; done?: boolean; ok?: boolean };
+  tool?: { name: string; args?: string; done?: boolean; ok?: boolean; /** edit/write/append 결과 diff (성공 시만). 같은 블록에서 보여준다. */ diff?: string; /** 호출·완료를 묶는 id — 같으면 시간 창과 무관하게 합친다. */ callId?: string };
+  /** `agent.queue` 의 대기 목록. `agent.done` 에는 남은 개수. */
+  thinking?: { enabled: boolean; forcedToolChoice: boolean };
+  queue?: string[] | number;
+  /** `agent.compaction` 의 단계와 상세 (시작·진행·완료·실패). */
+  compaction?: {
+    phase: "running" | "complete" | "failed";
+    droppedCount?: number;
+    droppedTokens?: number;
+    keptCount?: number;
+    keptTokens?: number;
+    summary?: string;
+    droppedPreview?: string[];
+  };
   at?: number;
 }
+
+/** 대기열 상한 — 무한히 쌓으면 서버가 turnRunning 을 영영 못 끈다. */
+export const MAX_QUEUE = 20;
 
 /**
  * 턴 하나에 대한 진행 상태.
@@ -85,6 +105,8 @@ export interface AgentServiceOptions {
   /** 턴이 끝났을 때(성공/실패/취소 무관) — 세션 저장 훅이 이걸 듣는다(§5.10). */
   onTurnEnd?: (s: TurnState) => void;
   now?: () => number;
+  /** 승인 게이트 — 파괴적 도구 호출을 통과시킨다(테스트용이면 null/미설정). */
+  approvalGate?: ApprovalGate | null;
 }
 
 /** §5.3 Think — 서버가 강제하는 기본 정책. 웹의 상태 머신과 **값이 달라지면 안 된다.** */
@@ -93,7 +115,7 @@ export interface ThinkPolicy {
   maxReasoningTokens: number;
 }
 
-export const DEFAULT_THINK: ThinkPolicy = { enabled: false, maxReasoningTokens: 1024 };
+export const DEFAULT_THINK: ThinkPolicy = { enabled: true, maxReasoningTokens: 1024 };
 
 export class AgentService {
   private loop: AgentLoop | null = null;
@@ -111,8 +133,25 @@ export class AgentService {
   /** 채택한 서버를 쓰고 있는가 — **교체 대상이 아니다**(사용자의 것이라 §6.2). */
   private adoptedServer = false;
   private think: ThinkPolicy = { ...DEFAULT_THINK };
+  /** 마지막 실측 컨텍스트 — 턴 중 `onContextUsage` 로 갱신, 유휴 시는 부팅 시 1회 계산. */
+  private lastUsage: { usedTokens: number; totalTokens: number } | null = null;
+  /** 실행 중 들어온 입력 — 순차 처리한다(거절하지 않는다, O4). */
+  private queue: string[] = [];
+  /** estimateTokens 에 쓰는 백엔드 (ensureLoop 이 만든 것과 같은 인스턴스). */
+  private backend: ModelBackend | null = null;
 
-  constructor(private opts: AgentServiceOptions) {}
+  constructor(private opts: AgentServiceOptions) {
+    // 명시 옵션이 있으면 기본값보다 우선한다 (테스트·임베딩용).
+    if (typeof opts.enableThinking === "boolean") this.think.enabled = opts.enableThinking;
+  }
+
+  /** 게이트 설정 — HTTP/WS 가 준비된 후 부른다. */
+  setApprovalGate(gate?: ApprovalGate | null): void {
+    this.opts.approvalGate = gate;
+    // 루프가 아직 안 만들어졌거나, 만들어졌더라도 다음 턴에서 새로운 옵션을 본다.
+    // `ensureLoop()`는 게이트가 있는 새 옵션으로 루프를 재만든다.
+    this.invalidate();
+  }
 
   get turn(): TurnState {
     return { ...this.state };
@@ -245,6 +284,7 @@ export class AgentService {
       typeof this.opts.backend === "function"
         ? this.opts.backend()
         : (this.opts.backend ?? new OpenAICompatibleClient(this.opts.baseUrl(), this.modelName));
+    this.backend = backend;
     const loop = new AgentLoop({
       // `baseDir()` 를 **호출 시점에** 읽는다 — 전환된 뒤의 값을 본다.
       projectRoot: this.opts.baseDir(),
@@ -254,15 +294,23 @@ export class AgentService {
       // 상수를 캡처해서는 안 된다.
       systemPrompt: typeof this.opts.systemPrompt === "function" ? this.opts.systemPrompt() : this.opts.systemPrompt,
       thresholds: this.opts.thresholds ?? DEFAULT_THRESHOLDS,
-      // §5.3: 기본 OFF. 실측 근거가 think.ts 주석에 있다.
+      // 기본 ON(사용자 명시). 예산 폭주는 상한+강제 전환이 받는다.
       enableThinking: this.think.enabled,
       now,
       onTurnStart: () => {
         this.state = { ...this.state, running: true, startedAt: now(), cancelled: false, lastError: null };
         this.toolCalls = 0;
         this.reasoningTokens = 0;
+        // 강제 OFF였으면 매 턴 시작에 ON 으로 되돌린다(Thinking 상시).
+        // 예산을 넘기면 그 턴 안에서 다시 꺼진다 — 매 턴 예산이 리셋되는 셈이다.
+        // invalidate 로 다음 턴의 루프가 새 값을 보게 한다(실행 중인 루프는 로컬 참조로 돈다).
+        const wasForced = this.forcedToolChoice;
         this.forcedToolChoice = false;
         this.hiddenReasoningNotified = false;
+        if (wasForced && !this.think.enabled) {
+          this.think = { ...this.think, enabled: true };
+          this.invalidate();
+        }
         this.emit({ type: "agent.status", text: "모델이 응답 중입니다", at: now() });
       },
       onReasoningDelta: (text) => {
@@ -296,11 +344,11 @@ export class AgentService {
       },
       onAssistantDelta: (text) => this.emit({ type: "agent.delta", text, at: now() }),
       onAssistantDone: () => undefined,
-      onToolCall: (name, args) => {
+      onToolCall: (name, args, callId) => {
         this.toolCalls++;
-        this.emit({ type: "agent.tool", tool: { name, args, done: false }, at: now() });
+        this.emit({ type: "agent.tool", tool: { name, args, done: false, callId }, at: now() });
       },
-      onToolCallDone: (name, args) => this.emit({ type: "agent.tool", tool: { name, args, done: true }, at: now() }),
+      onToolCallDone: (name, args, diff, callId) => this.emit({ type: "agent.tool", tool: { name, args, done: true, diff, callId }, at: now() }),
       onToolResult: (command, output) => this.opts.logger?.(`[tool] ${command}: ${output.slice(0, 200)}`),
       onDiff: (path, diff) => {
         this.opts.diff?.(path, diff);
@@ -308,8 +356,35 @@ export class AgentService {
       },
       onStatus: (status) => this.emit({ type: "agent.status", text: status, at: now() }),
       onPlanProgress: (done, total) => this.emit({ type: "agent.status", text: `계획 ${done}/${total}`, at: now() }),
-      onCompactionStatus: (s) => this.emit({ type: "agent.status", text: `압축 ${s}`, at: now() }),
-      onContextUsage: (used, total) => this.emit({ type: "agent.status", text: `컨텍스트 ${used}/${total}`, at: now() }),
+      onCompactionStatus: (s) => {
+        // 시작·진행을 전용 이벤트로도 흘린다 — 상태 줄 텍스트만으로는
+        // "지금 압축 중인가 끝났나" 를 화면이 알 수 없다.
+        this.emit({ type: "agent.compaction", compaction: { phase: s }, at: now() });
+        this.emit({ type: "agent.status", text: `압축 ${s}`, at: now() });
+      },
+      onCompactionDetail: (d: CompactionDetail) => {
+        // 요약 본문까지 보여준다 — "무엇이 잊혀지고 무엇이 강조됐는지" 가 없으면
+        // 압축은 블랙박스다. 요약 자체가 대화에 남으므로 길이는 자르지 않고 접는다.
+        this.emit({
+          type: "agent.compaction",
+          compaction: {
+            phase: "complete",
+            droppedCount: d.droppedCount,
+            droppedTokens: d.droppedTokens,
+            keptCount: d.keptCount,
+            keptTokens: d.keptTokens,
+            summary: d.summary,
+            droppedPreview: d.droppedPreview,
+          },
+          at: now(),
+        });
+      },
+      onContextUsage: (used, total) => {
+        // 실측값을 들고 있는다 — 계측기(1Hz)가 읽는다. 텍스트 상태 줄도 유지한다.
+        this.lastUsage = { usedTokens: used, totalTokens: total };
+        this.emit({ type: "agent.status", text: `컨텍스트 ${used}/${total}`, at: now() });
+      },
+      approvalGate: this.opts.approvalGate ?? undefined,
     });
     this.loop = loop;
     return loop;
@@ -321,13 +396,100 @@ export class AgentService {
   }
 
   /**
+   * 마지막 실측 컨텍스트. 턴 중에는 `onContextUsage` 가 갱신하고,
+   * 유휴 시에는 부팅 시 `refreshContext()` 가 1회 계산한다.
+   * 둘 다 없으면 null — "모름" 을 0 으로 말하지 않는다.
+   */
+  contextUsage(): { usedTokens: number; totalTokens: number } | null {
+    return this.lastUsage;
+  }
+
+  /**
+   * 유휴 시 1회 계산 — 복원된 대화가 있으면 그 토큰 수를 잰다.
+   * live 턴과 같은 추정(`estimateTokens` + 도구 스키마)을 써서 기준이 갈리지 않는다.
+   * 백엔드가 없어도 글자 기반 근사로 답한다(모른다고 비워두지 않는다).
+   */
+  async refreshContext(): Promise<void> {
+    try {
+      const loop = this.ensureLoop();
+      const msgs = (loop as unknown as { messages?: ChatMessage[] }).messages;
+      if (!msgs || msgs.length <= 1) return;
+      const backend = this.backend;
+      const tools = activeToolDefs();
+      const used = await estimateTokens(msgs, backend ?? undefined, JSON.stringify(tools), tools);
+      const total = this.opts.thresholds?.contextWindowTokens ?? DEFAULT_THRESHOLDS.contextWindowTokens;
+      this.lastUsage = { usedTokens: used, totalTokens: total };
+    } catch {
+      // 계산 실패는 조용히 둔다 — 다음 턴의 실측이 덮는다. 빈 화면보다 낫지 않으므로
+      // 실패를 배너로 띄우지 않는다.
+    }
+  }
+
+  /** 대기열 보기 (읽기 전용 복사). */
+  queueView(): string[] {
+    return this.queue.slice();
+  }
+
+  private emitQueue(): void {
+    this.emit({ type: "agent.queue", queue: this.queue.slice(), at: (this.opts.now ?? Date.now)() });
+  }
+
+  /**
+   * 대기열을 비운다 (실행 중인 턴은 건드리지 않는다).
+   * 취소와 분리한 이유: "지금 것만 멈추고 다음은 이어간다" 가 있어야 한다.
+   */
+  clearQueue(): { cleared: number } {
+    const n = this.queue.length;
+    this.queue = [];
+    if (n > 0) this.emitQueue();
+    return { cleared: n };
+  }
+
+  /**
+   * 대기열 순서 변경 — "급한 것을 먼저" (사용자 요구).
+   * 실행 중인 턴은 건드리지 않고 대기 중인 것만 재배열한다.
+   * 범위를 벗어나면 false (400 으로 알린다).
+   */
+  moveQueue(from: number, to: number): boolean {
+    if (!Number.isInteger(from) || !Number.isInteger(to)) return false;
+    if (from < 0 || from >= this.queue.length || to < 0 || to >= this.queue.length) return false;
+    if (from === to) return true;
+    const [item] = this.queue.splice(from, 1);
+    this.queue.splice(to, 0, item!);
+    this.emitQueue();
+    return true;
+  }
+
+  /**
    * 턴을 시작한다. **중복으로 겹치지 않는다** — 겹치면 두 턴이 같은 대화 기록을
    * 고치므로 메시지가 뒤섞인다(사용자가 보기에 "모델이 두 개" 처럼 보인다).
+   *
+   * 실행 중에 들어온 입력은 **거절하지 않고 대기열에** 넣는다(O4).
+   * 대기열은 이 턴이 끝나면 순서대로 돈다. 항목 사이에는 await 이 없으므로
+   * 다른 send 가 끼어들 수 없다(직렬 보장).
    */
-  async send(text: string): Promise<{ ok: boolean; detail: string }> {
+  async send(text: string): Promise<{ ok: boolean; detail: string; queued?: boolean }> {
     const body = text.trim();
     if (!body) return { ok: false, detail: "보낼 문장이 없습니다" };
-    if (this.state.running) return { ok: false, detail: "이전 턴이 아직 진행 중입니다" };
+    if (this.state.running) {
+      if (this.queue.length >= MAX_QUEUE) {
+        return { ok: false, detail: `대기열이 찼습니다(${MAX_QUEUE}개) — 끝난 뒤 보내십시오` };
+      }
+      this.queue.push(body);
+      this.emitQueue();
+      return { ok: true, detail: `대기열 ${this.queue.length}번째에 넣었습니다 — 지금 턴이 끝나면 돕니다`, queued: true };
+    }
+    const r = await this.runOne(body);
+    // 대기열 비우기 — 항목 사이 await 없음 (직렬 보장, 위 주석).
+    while (this.queue.length > 0) {
+      const next = this.queue.shift()!;
+      this.emitQueue();
+      await this.runOne(next);
+    }
+    return r;
+  }
+
+  private async runOne(body: string): Promise<{ ok: boolean; detail: string }> {
     const now = (this.opts.now ?? Date.now)();
     this.state = { running: true, startedAt: now, cancelled: false, lastError: null };
     try {
@@ -341,13 +503,14 @@ export class AgentService {
             ? // 도구를 한 번도 안 불렀다 — 조용히 끝내면 "왜 파일을 안 고쳤지?" 가 된다.
               "답변만 왔고 도구 호출은 없었습니다"
             : `도구 ${this.toolCalls}회 사용`,
+        queue: this.queue.length,
         at: (this.opts.now ?? Date.now)(),
       });
       return { ok: true, detail: cancelled ? "취소됨" : "완료" };
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       this.state = { ...this.state, lastError: detail };
-      this.emit({ type: "agent.error", text: detail, at: (this.opts.now ?? Date.now)() });
+      this.emit({ type: "agent.error", text: detail, queue: this.queue.length, at: (this.opts.now ?? Date.now)() });
       return { ok: false, detail };
     } finally {
       this.state = { ...this.state, running: false, startedAt: null };
@@ -359,9 +522,14 @@ export class AgentService {
   async cancel(): Promise<{ ok: boolean; detail: string }> {
     if (!this.state.running) return { ok: false, detail: "진행 중인 턴이 없습니다" };
     this.state = { ...this.state, cancelled: true };
+    // 취소는 전부 멈춤이다 — 대기열까지 비운다. "다음 것만" 이어가려면
+    // 취소 대신 끝까지 두면 된다. 비운 개수를 말하지 않으면 조용히 사라진다.
+    const dropped = this.queue.length;
+    this.queue = [];
+    if (dropped > 0) this.emitQueue();
     await this.loop?.cancelCurrentTurn();
     this.emit({ type: "agent.status", text: "취소 요청됨", at: (this.opts.now ?? Date.now)() });
-    return { ok: true, detail: "취소했습니다" };
+    return { ok: true, detail: dropped > 0 ? `취소했습니다 (대기열 ${dropped}개도 비웠습니다)` : "취소했습니다" };
   }
 }
 

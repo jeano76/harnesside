@@ -143,6 +143,27 @@ test("reject 이면 파괴적 도구가 **통과하지 못해 실행되지 않�
   assert.equal(existsSync(target), false, "거절된 도구라도 파일이 만들어졌다 — 게이트가 뚫렸다");
 });
 
+test("allow-always 는 **세션을 넘지 않는다** — 새 게이트는 다시 묻는다", async () => {
+  // 게이트는 서버 기동 시 1회 생성된다(`index.ts` — 프로세스당 1개).
+  // allowlist 가 디스크에 남으면 재시작 후에도 파괴적 도구가 묻지 않고 돈다.
+  // 이 검사는 그 회귀를 막는다: 새 인스턴스 == 새 세션 == 다시 묻는다.
+  const oldGate = new ApprovalGate();
+  oldGate.allow("write_file"); // 이전 세션에서 "항상 허용"된 상태
+  assert.equal(await oldGate.request({ tool: "write_file", summary: "old" }), "allow-once");
+
+  const newGate = new ApprovalGate(); // 서버 재시작
+  let settled = false;
+  const p = newGate.request({ tool: "write_file", summary: "new" }).then((d) => {
+    settled = true;
+    return d;
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(settled, false, "새 세션인데 묻지 않고 통과했다 — allowlist 가 세션을 넘었다");
+  assert.equal(newGate.pendingCount, 1, "새 세션은 대기 항목을 만들어야 한다");
+  newGate.rejectAll();
+  assert.equal(await p, "reject");
+});
+
 test("allow-always 는 **한 번** 승인하면 다음 요청을 묻지 않고 지어난다", async () => {
   const dir = await sandbox();
   const backend = fakeBackend({ name: "write_file", args: JSON.stringify({ path: join(dir, "a.txt"), content: "1" }) });

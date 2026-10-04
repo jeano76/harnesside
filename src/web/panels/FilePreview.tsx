@@ -23,7 +23,7 @@
  * 상한을 넘으면 "N줄 중 M줄만 표시" 라고 **말하고** 잘라야 한다.
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiClient } from "../api.js";
 import {
   colorFor,
@@ -33,9 +33,11 @@ import {
   MAX_HIGHLIGHT_LINES,
   tokenizeLine,
 } from "../editor/highlight.js";
+import { extractSymbols } from "../../shared/symbols.js";
+import { COLOR, FONT, RADIUS } from "../theme/tokens.js";
 
-const DIM = "#6e7681";
-const BORDER = "#30363d";
+const DIM = COLOR.DIM_SUBTLE;
+const BORDER = COLOR.BORDER;
 
 export interface FilePreviewProps {
   client: ApiClient;
@@ -78,22 +80,35 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
   const gutter = gutterWidthFor(lines.length);
   const truncated = lines.length > MAX_HIGHLIGHT_LINES;
   const shown = truncated ? lines.slice(0, MAX_HIGHLIGHT_LINES) : lines;
+  /** 기호 아웃라인 — 텍스트 기준(타입 해석 없음). 클릭하면 그 줄로 스크롤한다. */
+  const outline = useMemo(
+    () => (content === null ? { symbols: [], truncated: false } : extractSymbols(path, content)),
+    [content, path]
+  );
+  const [jumpLine, setJumpLine] = useState<number | null>(null);
+  const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  useEffect(() => {
+    if (jumpLine === null) return;
+    lineRefs.current.get(jumpLine)?.scrollIntoView({ block: "nearest" });
+    const t = setTimeout(() => setJumpLine(null), 1500);
+    return () => clearTimeout(t);
+  }, [jumpLine, content]);
 
   return (
-    <div className="elev-1" style={{ border: `1px solid ${BORDER}`, borderRadius: 6, background: "#0d1117", overflow: "hidden" }}>
+    <div className="elev-1" style={{ border: `1px solid ${BORDER}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1, overflow: "hidden" }}>
       <div
         style={{
           display: "flex",
           gap: 8,
           alignItems: "center",
           padding: "3px 8px",
-          background: "#161b22",
+          background: COLOR.SURFACE_2,
           borderBottom: `1px solid ${BORDER}`,
           boxShadow: "inset 0 1px 0 rgba(255,255,255,0.045)",
-          fontSize: 10,
+          fontSize: FONT.META,
         }}
       >
-        <span style={{ color: "#c9d1d9" }}>{path.split("/").pop()}</span>
+        <span style={{ color: COLOR.FG }}>{path.split("/").pop()}</span>
         <span style={{ color: DIM, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
         <span style={{ marginLeft: "auto", color: DIM, whiteSpace: "nowrap" }}>
           {LANGUAGE_LABEL[lang]}
@@ -104,14 +119,14 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
       {/* **미지원 형식을 말한다.** 조용히 칠하지 않으면 사용자는 화면만 보고
           "왜 색이 안치지" 를 프로그램 버그로 여긴다. */}
       {lang === "text" && (
-        <div style={{ padding: "3px 8px", fontSize: 10, color: "#d29922", borderBottom: `1px solid ${BORDER}` }}>
+        <div style={{ padding: "3px 8px", fontSize: FONT.META, color: COLOR.YELLOW, borderBottom: `1px solid ${BORDER}` }}>
           이 형식은 색칠하지 않습니다 (미지원 확장자) — 내용은 그대로 보입니다.
         </div>
       )}
 
-      {loading && <div style={{ padding: "6px 8px", fontSize: 11, color: DIM }}>읽는 중…</div>}
+      {loading && <div style={{ padding: "6px 8px", fontSize: FONT.AUX, color: DIM }}>읽는 중…</div>}
       {error && (
-        <div style={{ padding: "6px 8px", fontSize: 11, color: "#f85149" }}>
+        <div style={{ padding: "6px 8px", fontSize: FONT.AUX, color: COLOR.ERROR }}>
           읽지 못했습니다: {error}
         </div>
       )}
@@ -119,8 +134,31 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
       {content !== null && (
         <>
           {truncated && (
-            <div style={{ padding: "3px 8px", fontSize: 10, color: "#d29922", borderBottom: `1px solid ${BORDER}` }}>
+            <div style={{ padding: "3px 8px", fontSize: FONT.META, color: COLOR.YELLOW, borderBottom: `1px solid ${BORDER}` }}>
               {lines.length.toLocaleString("ko-KR")}줄 중 {MAX_HIGHLIGHT_LINES.toLocaleString("ko-KR")}줄만 표시합니다 — 나머지는 **자르지 않았습니다**.
+            </div>
+          )}
+          {/* 기호 아웃라인 (§7.1 1단계 — 텍스트 기준, 타입 해석 없음). */}
+          {outline.symbols.length > 0 && (
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", padding: "3px 8px", borderBottom: `1px solid ${BORDER}`, fontSize: FONT.META }}>
+              <span style={{ color: DIM }}>기호</span>
+              {outline.symbols.slice(0, 24).map((s) => (
+                <button
+                  key={`${s.line}:${s.name}`}
+                  type="button"
+                  title={`${s.kind} · ${s.line}줄 (텍스트 기준)`}
+                  onClick={() => setJumpLine(s.line)}
+                  style={{
+                    background: jumpLine === s.line ? COLOR.SURFACE_3 : "transparent",
+                    color: jumpLine === s.line ? COLOR.FG : COLOR.BLUE,
+                    border: 0, cursor: "pointer", font: "inherit", padding: "0 2px", textDecoration: "underline",
+                  }}
+                >
+                  {s.name}
+                </button>
+              ))}
+              {outline.symbols.length > 24 && <span style={{ color: DIM }}>+{outline.symbols.length - 24}개</span>}
+              {outline.truncated && <span style={{ color: COLOR.YELLOW }}>잘림</span>}
             </div>
           )}
           <div style={{ maxHeight: 420, overflow: "auto", padding: "4px 0" }}>
@@ -134,7 +172,18 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
               }}
             >
               {shown.map((line, i) => (
-                <div key={i} style={{ display: "flex", paddingRight: 8 }}>
+                <div
+                  key={i}
+                  ref={(el) => {
+                    if (el) lineRefs.current.set(i + 1, el);
+                    else lineRefs.current.delete(i + 1);
+                  }}
+                  style={{
+                    display: "flex",
+                    paddingRight: 8,
+                    background: jumpLine === i + 1 ? COLOR.SURFACE_3 : "transparent",
+                  }}
+                >
                   <span
                     aria-hidden
                     style={{
@@ -142,13 +191,13 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
                       flex: "0 0 auto",
                       textAlign: "right",
                       paddingRight: 8,
-                      color: "#484f58",
+                      color: COLOR.LINE_NUM,
                       userSelect: "none",
                     }}
                   >
                     {i + 1}
                   </span>
-                  <span style={{ whiteSpace: "pre", color: "#c9d1d9" }}>
+                  <span style={{ whiteSpace: "pre", color: COLOR.FG }}>
                     {tokenizeLine(line, lang).map((tok, k) => (
                       <span key={k} style={{ color: colorFor(tok.kind) }}>
                         {tok.text}

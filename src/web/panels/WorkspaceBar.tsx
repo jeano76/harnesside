@@ -127,7 +127,7 @@ export function WorkspaceBar({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ width: 560, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 8, padding: 12, display: "grid", gap: 10 }}
+            style={{ width: 560, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, padding: 12, display: "grid", gap: 10 }}
           >
             <div>
               <strong>워크스페이스 전환</strong>
@@ -144,13 +144,13 @@ export function WorkspaceBar({
                   if (e.key === "Enter" && !preview) void plan();
                 }}
                 placeholder="/home/jeano/내-프로젝트"
-                style={{ flex: 1, background: BG, color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "4px 8px", font: "inherit", outline: "none" }}
+                style={{ flex: 1, background: BG, color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "4px 8px", font: "inherit", outline: "none" }}
               />
               <button
                 type="button"
                 onClick={() => void plan()}
                 disabled={busy || !path.trim()}
-                style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "2px 10px", cursor: busy ? "default" : "pointer", font: "inherit" }}
+                style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 10px", cursor: busy ? "default" : "pointer", font: "inherit" }}
               >
                 무엇이 바뀌나
               </button>
@@ -183,7 +183,7 @@ export function WorkspaceBar({
                     type="button"
                     onClick={() => void apply()}
                     disabled={busy}
-                    style={{ background: "#238636", color: "#fff", border: 0, borderRadius: 5, padding: "3px 12px", cursor: busy ? "default" : "pointer", font: "inherit" }}
+                    style={{ background: "#238636", color: "#fff", border: 0, borderRadius: 4, padding: "3px 12px", cursor: busy ? "default" : "pointer", font: "inherit" }}
                   >
                     전환하기
                   </button>

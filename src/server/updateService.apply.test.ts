@@ -203,3 +203,64 @@ test("롤백 정책이 꺼져 있으면 grace 도 **무시** 된다 — 기다�
     await s.cleanup();
   }
 });
+
+test("rollback() 은 가장 최근 슬롯으로 되돌린다", async () => {
+  const s = await sandbox();
+  try {
+    await fakeBin(join(s.dir, "harnesside"), "#!/bin/sh\necho 'new'\n");
+    const up = svc(s.dir);
+    // 슬롯 만들기: 현재 파일을 슬롯에 복사한다
+    await up.makeSlot();
+    await fakeBin(join(s.dir, "harnesside"), "#!/bin/sh\necho 'broken'\n");
+    const r = await up.rollback();
+    assert.equal(r.ok, true, r.detail);
+    assert.equal(await readFile(join(s.dir, "harnesside"), "utf8"), "#!/bin/sh\necho 'new'\n", "슬롯 내용이 돌아오지 않았다");
+    assert.equal((await stat(join(s.dir, "harnesside"))).mode & 0o111, 0o111, "실행 권한이 없다");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("rollback() 은 슬롯이 없으면 시도하지 않는다", async () => {
+  const s = await sandbox();
+  try {
+    const up = svc(s.dir);
+    const r = await up.rollback();
+    assert.equal(r.ok, false);
+    assert.match(r.detail, /슬롯이 없습니다/);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("rollback() 은 슬롯 범위 밖의 경로를 거부한다", async () => {
+  const s = await sandbox();
+  try {
+    const up = svc(s.dir);
+    const evil = join(s.dir, "..", "outside");
+    const r = await up.rollback(evil);
+    assert.equal(r.ok, false);
+    assert.match(r.detail, /범위 밖/);
+    // 뒤집으면 실패해야 한다: 거부 없이 통과하면 임의 파일 복사가 된다
+    assert.equal(r.path, undefined);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("stageSwap() 은 슬롯을 먼저 만들고 교체한다 (순서 고정)", async () => {
+  const s = await sandbox();
+  try {
+    await fakeBin(join(s.dir, "harnesside"), "#!/bin/sh\necho 'old'\n");
+    await fakeBin(join(s.dir, "new"), "#!/bin/sh\necho 'new'\n");
+    const up = svc(s.dir);
+    const r = await up.stageSwap(join(s.dir, "new"));
+    assert.equal(r.ok, true, r.detail);
+    assert.ok(r.slot, "슬롯 경로가 없다 — 교체 전에 되돌릴 곳을 만들어야 한다");
+    assert.equal(await readFile(join(s.dir, "harnesside"), "utf8"), "#!/bin/sh\necho 'new'\n");
+    // 슬롯에는 교체 전 내용이 있다
+    assert.equal(await readFile(r.slot!, "utf8"), "#!/bin/sh\necho 'old'\n");
+  } finally {
+    await s.cleanup();
+  }
+});

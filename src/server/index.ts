@@ -23,22 +23,26 @@ import { LlamaLauncher } from "./llamaLauncher.js";
 import { resolveBrowserIntent } from "./browserIntent.js";
 import { acquireInstanceLock, type InstanceLock } from "./bootstrap.js";
 import { portOwner } from "../instanceGuard.js";
-import { HttpServer, readBody } from "./httpServer.js";
+import { HttpServer, readBody, clampInt } from "./httpServer.js";
 import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type DaemonMode } from "./daemon.js";
 import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
 import { safeListDir, safeReadFile, safeWriteFile, safeResolve } from "../fs/safePath.js";
+import { searchFiles, listFiles, isSearchFailure } from "../fs/search.js";
 import { gitStatus, gitShowHead } from "./gitDiff.js";
 import { planClone, clone, redactUrl, pull, push, summarize, currentBranch, commit } from "../git/sync.js";
 import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { WorkspaceService } from "./workspaceService.js";
+import { formatCrashReport, writeCrashLogSync, readCrashTail } from "../crashHandler.js";
 import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
+import { ApprovalGate } from "./approval.js";
 import { SessionBridge } from "../session/bridge.js";
 import { searchHub, recommend, fillSizes } from "../models/hub.js";
 import { ModelDownloader, modelPathFor } from "../models/download.js";
 import { planSwap } from "../models/manage.js";
 import { UpdateService } from "./updateService.js";
+import { NoticeService } from "./update/noticeService.js";
 import { TerminalManager, exitLabel } from "./terminal.js";
 import type { UpdateChannel, ApplyGuard } from "./update/pipeline.js";
 import { BrowserLauncher } from "./browserLauncher.js";
@@ -48,8 +52,8 @@ import { issueToken } from "../auth/token.js";
 import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
 import { homedir } from "node:os";
-import { join, isAbsolute, resolve } from "node:path";
-import { mkdir, access, readdir, stat, readFile } from "node:fs/promises";
+import { join, isAbsolute, resolve, relative } from "node:path";
+import { mkdir, access, readdir, stat, readFile, writeFile, rm } from "node:fs/promises";
 import stripAnsi from "strip-ansi";
 
 const argv = process.argv.slice(2);
@@ -122,10 +126,19 @@ async function main(): Promise<number> {
    * 계측기에 물린다. "측정 불가" 를 "0" 으로 바꾸면 사용자는 "컨텍스트가 안 찼다" 고
    * 읽는데 실제로는 100 임을 알지 못한다 — 그래서 **0 이 아니라 null** 이 옳다.
    */
-  let lastContext: { usedTokens: number; totalTokens: number } | null = null;
-
+  // lastContext 삭제됨(2026-10-04): 값을 넣는 코드가 없어 항상 null 이었다.
+  // 실측은 AgentService 가 들고 있다(턴 중 onContextUsage + 부팅 시 refreshContext).
+  // eslint-disable-next-line prefer-const
+  let agentRef: AgentService | null = null;
+  const agentContextUsage = (): { usedTokens: number; totalTokens: number } | null => {
+    try {
+      return agentRef?.contextUsage() ?? null;
+    } catch {
+      return null;
+    }
+  };
   const metrics = new MetricsSampler(undefined, {
-    context: () => lastContext,
+    context: () => agentContextUsage(),
   });
   // §8.3 워크스페이스 — **살아 있는 루트** 를 들고 있다. 경로 API 는 상수를 쓰지 않고
   // 여기서 읽는다. 전환은 확인을 거치고, 전이는 실패해도 이전 상태를 보존한다.
@@ -237,10 +250,12 @@ async function main(): Promise<number> {
   });
   session.start();
   // §9.1 업데이트. GitHub 를 **실제로** 본다. 네트워크 주입은 테스트에만 쓴다.
+  const updateSlotsDir = join(stateDir(projectRoot), "update-slots");
+  const updateMarker = join(stateDir(projectRoot), "update-pending.json");
   const updates: UpdateService = new UpdateService({
     currentVersion: String((await readFile(join(projectRoot, "package.json"), "utf8").then(JSON.parse).catch(() => ({} as { version?: string }))).version ?? "0.0.0"),
     channel: (process.env.HARNESSIDE_UPDATE_CHANNEL as UpdateChannel) ?? "stable",
-    slotsDir: join(stateDir(projectRoot), "update-slots"),
+    slotsDir: updateSlotsDir,
     selfPath: process.argv[1] ?? join(projectRoot, "dist", "server", "index.js"),
     onPhase: (p) => {
       hub?.publish({ type: "update.phase", phase: p } as never);
@@ -260,6 +275,17 @@ async function main(): Promise<number> {
       assetBytes: 8 * 1024 * 1024,
     }),
   });
+  // M13 추천 알림 (§5.13.2). 판단 로직은 `update/notify.ts` 에 있었으나
+  // 라우트·UI 가 없어 실행되지 않았다(◐). 서비스는 여기서 1회 생성 —
+  // 프로세스당 1개이므로 dismiss 는 세션을 넘지 않고 silence 만 디스크에 남는다.
+  const notices = new NoticeService(join(stateDir(projectRoot), "notices.json"));
+  try {
+    await notices.load();
+  } catch (e) {
+    // 깨진 silence 파일은 알리고 빈 채로 시작 — 깨진 것 때문에 알림이
+    // 영원히 안 뜨는 쪽이 더 나쁘다.
+    ring.warn("notice", `무시 목록을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`, "server");
+  }
   // §7.4 다운로드. 진행 상황은 WS 로 흘린다 — 라우트가 기다리는 동안 화면이 얼면 안 된다.
   const downloader = new ModelDownloader({
     onProgress: (item) => {
@@ -273,7 +299,7 @@ async function main(): Promise<number> {
       }
     },
   });
-  const agent = new AgentService({    baseDir: () => workspace.baseDir(),
+  const agent = new AgentService({ baseDir: () => workspace.baseDir(),
     baseUrl: () => `http://127.0.0.1:${boot?.ports?.llamaPort ?? 8080}`,
     // 모델 이름도 **호출 시점**에 읽는다 — 부팅이 끝나야 정해진다(`boot` 이 아직 없다).
     model: () => boot?.model?.path ?? process.env.HARNESSIDE_MODEL ?? "",
@@ -301,6 +327,7 @@ async function main(): Promise<number> {
       hub?.publish({ type: "agent.diff", path, diff: stripAnsi(diff) } as never);
     },
   });
+  agentRef = agent;
 
   let lock: InstanceLock | null = null;
   let launcher: LlamaLauncher | null = null;
@@ -308,6 +335,15 @@ async function main(): Promise<number> {
   let http: HttpServer | null = null;
   let browser: BrowserLauncher | null = null;
   let hub: WsHub | null = null;
+  /**
+   * 승인 게이트 (S-6 §8.2).
+   *
+   * **왜 `null` 로 시작하나**: 게이트는 WS 허브가 만들어진 뒤에 이벤트 큐를 달아야
+   * 한다. 부팅 전에 만들어두면 `hub` 가 `null` 인 동안 생긴 요청이 **아무도 모른다** —
+   * 조용히 실패하는 것이 가장 나쁘다. 그래서 허브 다음에 만들고, 라우트는
+   * **게이트가 없으면 503 을 말한다**(아래).
+   */
+  let approvalGate: ApprovalGate | null = null;
   let watchdog: Watchdog | null = null;
   let adoptedProbe: (() => boolean) | null = null;
   /** 창을 띄우려 한 적이 있는가. `never-opened` 판정의 전제다. */
@@ -400,10 +436,14 @@ async function main(): Promise<number> {
     }
   });
   process.on("uncaughtException", (e) => {
+    // M10: 죽기 전에 디스크에 남긴다 — 다음 실행의 창이 이것을 보여준다.
+    // `legacy-tui` 의 installCrashHandlers 와 같은 기록 함수(정본은 한 곳).
+    writeCrashLogSync(projectRoot, formatCrashReport("uncaughtException", e));
     emit(`[fatal] 처리되지 않은 예외: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
     void shutdown("uncaughtException");
   });
   process.on("unhandledRejection", (e) => {
+    writeCrashLogSync(projectRoot, formatCrashReport("unhandledRejection", e));
     emit(`[fatal] 처리되지 않은 Promise 거부: ${String(e)}`);
   });
 
@@ -499,6 +539,27 @@ async function main(): Promise<number> {
         // 링에 새 항목이 들어올 때마다 WS 로 보낸다(중간 계층 없이).
         ring.onEntry((e) => hub!.publish({ type: "log.append", entry: e } as never));
         ring.onStatus((st) => hub!.publish({ type: "log.status", status: st } as never));
+
+        // ── S-6 승인 게이트를 **여기서** 살린다 ─────────────────────────────────
+        //
+        // **왜 허브 다음인가**: 게이트는 "승인 요청이 생겼다" 를 WS 로 **밀어**야 한다.
+        // 폴링으로 받으면 사용자는 요청이 이미 타임아웃된 뒤에야 화면에서 보게 된다 —
+        // 게이트가 60초 뒤 스스로 거절하면서 화면은 아무것도 모른다.
+        //
+        // **양쪽 다 보낸다**: 요청이 생났을 때(`approval.request`)와 결정됐을 때
+        // (`approval.done`). 결정 이벤트에는 **무엇을 허용했는지** 를 실어 로그에도
+        // 남긴다 — 나중에 "누가 이걸 승인했나" 를 확인할 수 있는 유일한 자리다.
+        approvalGate = new ApprovalGate({}, {
+          onRequest: (req) => {
+            hub?.publish({ type: "approval.request", request: req } as never);
+            ring.warn("approval", `승인 대기: ${req.summary}`, "server");
+          },
+          onDecision: (req, decision, by) => {
+            hub?.publish({ type: "approval.done", id: req.id, tool: req.tool, decision, by } as never);
+            // **거절도 기록한다.** 승인만 남기면 "이 도구는 아무도 안 쓰는가" 를 알 수 없다.
+            ring.info("approval", `승인 결정: ${req.tool} → ${decision}${by ? ` (${by})` : ""}`, "server");
+          },
+        });
         // §5.5: 계측 시작. 1Hz 로 한 번만 재고 WS 로 브로드캐스트한다.
         // 라우트는 **계측하지 않고** 마지막 샘플만 읽는다(요청당 계측 금지).
         metrics.start();
@@ -531,6 +592,9 @@ async function main(): Promise<number> {
             startedAt: STARTED_AT,
           }))
           .route("GET", "/api/gpu", () => ({ ...r.gpu, llama: r.ports?.llamaPort, ide: port }))
+          // M10 크래시 안내 — 이전 실행이 비정상 종료했으면 창이 그것을 말한다.
+          // 없으면 present:false. 읽기 실패는 error 로 말하고 없음으로 덮지 않는다.
+          .route("GET", "/api/crash", () => readCrashTail(projectRoot))
           .route("GET", "/api/bootstrap", () => ({
             steps: r.steps.map((s) => ({ n: s.n, name: s.name, ok: s.ok, detail: s.detail, pending: !!s.pending, tookSeconds: s.tookSeconds })),
             tuning: r.tuning?.rationale ?? [],
@@ -575,6 +639,77 @@ async function main(): Promise<number> {
               });
             }
             return r.value;
+          })
+          // ── S-6 승인 게이트 (§8.2) ────────────────────────────────────────────
+          //
+          // **왜 여기서 처음 배선인가**: `ApprovalGate` 는 완성되어 있고 테스트도
+          // 통과하지만(무응답=거절 · 무한 대기 방지 · 창 닫으면 거절) **라우트도 UI 도
+          // 없었다**. 즉 "돌면 되지만 아무도 호출하지 않는다" — `PROGRESS.md` 가
+          // `◐` 라고 부르는 그 상태다. 게이트가 없으면 `rm -rf` 가 확인 없이 돈다.
+          //
+          // **게이트가 아직 없을 때 503 을 말한다** — 빈 목록을 주면 사용자는
+          // "승인 대기 중인 것이 없다" 고 읽는데 실제로는 **아직 시작도 안 됐다**.
+          .route("GET", "/api/approval/pending", () => {
+            if (!approvalGate) throw Object.assign(new Error("승인 게이트가 아직 준비되지 않았습니다"), { status: 503 });
+            // **대기 중인 것만.** 이미 결정된 것을 다시 보여주면 사용자가
+            // "내가 이미 눌렀는데 왜 뜨지" 한다(조용히 중복되는 UI).
+            return { pending: approvalGate.pending };
+          })
+          .route("POST", "/api/approval/:id", async (c) => {
+            if (!approvalGate) throw Object.assign(new Error("승인 게이트가 아직 준비되지 않았습니다"), { status: 503 });
+            const body = (await readBody(c.req)) as { decision?: string };
+            const decision = body.decision;
+            // **결정의 종류를 먼저 검사한다.** 모르는 문자열이 들어오면
+            // `settle` 이 조용히 아무 일도 하지 않고 `false` 를 돌려준다 — 사용자는
+            // "누른 것 같다" 고 여긴다(조용히 실패하는 것이 가장 나쁘다).
+            const allowed = ["allow-once", "allow-always", "reject"] as const;
+            if (!decision || !(allowed as readonly string[]).includes(decision)) {
+              throw Object.assign(new Error(`결정이 올바르지 않습니다: ${String(decision)}`), { status: 400 });
+            }
+            const ok = approvalGate.decide(c.params.id, decision as (typeof allowed)[number], "web");
+            // **이미 결정되었거나 없는 id 라면 404** — "처리했다" 고 말하면 안 된다.
+            // 사용자는 자신이 승인한 줄 알지만 실제로는 아무 일도 일어나지 않았다.
+            if (!ok) throw Object.assign(new Error("이미 결정되었거나 존재하지 않는 승인 요청입니다"), { status: 404 });
+            return { ok: true, decided: decision };
+          })
+          .route("GET", "/api/approval/policy", () => {
+            if (!approvalGate) throw Object.assign(new Error("승인 게이트가 아직 준비되지 않았습니다"), { status: 503 });
+            return approvalGate.getPolicy();
+          })
+          // ── S-5 찾기 — 저장소 전체 검색 · 빠른 이동 ────────────────────────────
+          //
+          // **왜 라우트인가**: 화면이 저장소를 직접 훑을 수는 없다(브라우저엔 디스크가
+          // 없다). 그리고 이 라우트가 **루트 경계**를 enforcement 하는 자리다 —
+          // `searchFiles` 안에서만 밖으로 못 나가므로, 여기서 경로를 다시 확인할 필요는
+          // 없다. **규칙이 한 곳에 있다**(부록 B 6).
+          .route("GET", "/api/fs/search", async (c) => {
+            const pattern = c.query.get("q") ?? "";
+            // **플래그를 명시적으로 해석한다.** `?regex=1` 과 `?regex=true` 를 다른
+            // 것으로 취급하면 어느 쪽이 켜졌는지 사용자가 알 수 없다.
+            const regex = c.query.get("regex") === "true";
+            const caseSensitive = c.query.get("case") === "true";
+            const maxHits = clampInt(c.query.get("max"), 1, 2000, 200);
+            const r = await searchFiles(workspace.root(), { pattern, regex, caseSensitive }, { maxHits });
+            // **깨진 정규식·빈 검색어는 400** 이다. 200 으로 빈 결과를 주면 사용자는
+            // "이 저장소에 없다" 고 믿는다 — 실제로는 **자기 입력이 틀렸다**(§9.3).
+            if (isSearchFailure(r)) throw Object.assign(new Error(r.detail), { status: 400 });
+            return {
+              hits: r.hits,
+              truncated: r.truncated,
+              truncatedReason: r.truncatedReason,
+              report: r.report,
+              // **무엇으로 검색했는지** 돌려준다. 이것이 없으면 화면은
+              // "결과 N건" 만 말하고, 재현은 불가능하다(§7.2).
+              query: { pattern: pattern.trim(), regex, caseSensitive },
+            };
+          })
+          .route("GET", "/api/fs/files", async (c) => {
+            const r = await listFiles(workspace.root());
+            const q = (c.query.get("q") ?? "").trim();
+            // **서버에서 한 번 더 순위를 매기지 않는다.** 순위 규칙은 `rankFiles` 한
+            // 곳에 있고(부록 B 6), 화면이 같은 함수를 쓴다. 여기서 다시 매기면 두 곳에
+            // 규칙이 생겨 어긋난다.
+            return { files: r.files, truncated: r.truncated, total: r.total, query: q };
           })
           // §5.5 계측. **계측하지 않는다** — 마지막 샘플만 돌려준다.
           .route("GET", "/api/metrics", () => ({
@@ -703,8 +838,8 @@ async function main(): Promise<number> {
             return r;
           })
           .route("POST", "/api/terminal", async (c) => {
-            const body = (await readBody(c.req)) as { cwd?: string; cols?: number; rows?: number; title?: string };
-            const r = terminal.create({ cwd: body.cwd, cols: body.cols, rows: body.rows, title: body.title });
+            const body = (await readBody(c.req)) as { cwd?: string; cols?: number; rows?: number; title?: string; shell?: string; init?: string };
+            const r = terminal.create({ cwd: body.cwd, cols: body.cols, rows: body.rows, title: body.title, shell: body.shell, init: body.init });
             // **열지 못했으면 성공으로 돌려주지 않는다.** 가짜 세션을 만들면 화면은
             // 열린 것처럼 그리고 사용자는 아무 것도 안 보이는 탭을 붙잡는다.
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: 409 });
@@ -790,6 +925,16 @@ async function main(): Promise<number> {
             return agent.setThinking(body.enabled === true);
           })
           .route("POST", "/api/agent/cancel", async () => agent.cancel())
+          // O4 메시지 큐 — 실행 중에 들어온 입력은 거절하지 않고 순서대로 돈다.
+          .route("GET", "/api/agent/queue", () => ({ items: agent.queueView() }))
+          .route("POST", "/api/agent/queue/clear", () => agent.clearQueue())
+          .route("POST", "/api/agent/queue/move", async (c) => {
+            const body = (await readBody(c.req)) as { from?: number; to?: number };
+            if (!agent.moveQueue(Number(body.from), Number(body.to))) {
+              throw Object.assign(new Error("대기열 범위를 벗어났습니다"), { status: 400 });
+            }
+            return { ok: true, items: agent.queueView() };
+          })
           // M3 재개. 취소한 턴은 체크포인트에 남고 **다음 턴에서 자동으로** 이어진다.
           // 문제는 그것이 눈에 보이지 않는다는 점이다 — 그래서 "있나?" 를 묻는 라우트로
           // 화면이 정직해진다(없음/있음 을 구분해서 반환한다).
@@ -1019,9 +1164,94 @@ async function main(): Promise<number> {
             const asset = st.assets[Number(body.index ?? -1)];
             if (!asset) throw Object.assign(new Error("자산이 없습니다 — 먼저 확인하십시오"), { status: 400 });
             return updates.downloadAsset(asset, body.expectHash);
+          })
+          // P13 apply route (see PROMPT phases) — swap + marker, no auto-restart.
+          .route("POST", "/api/update/apply", async (c) => {
+            const body = (await readBody(c.req)) as { asset?: string; confirm?: boolean };
+            if (body.confirm !== true) {
+              throw Object.assign(new Error("적용하려면 confirm:true 로 명시적으로 확인하십시오"), { status: 400 });
+            }
+            const { decision } = await updates.planApply();
+            if (!decision.ok) {
+              throw Object.assign(new Error("APPLY_GUARD: " + decision.blockers.join(" / ")), { status: 409 });
+            }
+            const asset = String(body.asset ?? "");
+            const resolved = resolve(asset);
+            const rel = relative(updateSlotsDir, resolved);
+            if (asset === "" || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+              throw Object.assign(new Error("슬롯 안의 다운로드된 자산 경로만 적용할 수 있습니다"), { status: 400 });
+            }
+            try {
+              await stat(resolved);
+            } catch {
+              throw Object.assign(new Error("자산 파일이 없습니다 — 먼저 다운로드하십시오"), { status: 400 });
+            }
+            const staged = await updates.stageSwap(resolved);
+            if (!staged.ok) throw Object.assign(new Error(staged.detail), { status: 500 });
+            const marker = { swappedAt: Date.now(), asset: resolved, slot: staged.slot ?? null };
+            await writeFile(updateMarker, JSON.stringify(marker, null, 2), "utf8");
+            ring.info("update", "update-applied-pending-restart", "server");
+            return {
+              ok: true,
+              slot: staged.slot,
+              next: "서버를 재시작하면 새 버전으로 기동합니다. 부팅이 적용을 확인하고, 실패하면 /api/update/rollback 으로 되돌리십시오.",
+            };
+          })
+          .route("POST", "/api/update/rollback", async (c) => {
+            const body = (await readBody(c.req)) as { confirm?: boolean };
+            if (body.confirm !== true) {
+              throw Object.assign(new Error("적용하려면 confirm:true 로 명시적으로 확인하십시오"), { status: 400 });
+            }
+            const r = await updates.rollback();
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.detail.includes("SLOT_MISSING") || r.detail.includes("슬롯이 없습니다") ? 409 : 500 });
+            ring.info("update", "update-rolled-back", "server");
+            return r;
+          })
+          .route("GET", "/api/update/verify", async () => {
+            let marker: unknown = null;
+            try {
+              marker = JSON.parse(await readFile(updateMarker, "utf8"));
+            } catch {
+              marker = null;
+            }
+            return { marker, slots: updates.get().slots };
+          })
+          // ── M13 추천 알림 (§5.13.2) ────────────────────────────────────
+          //
+          // 판단(`notify.ts`)은 있었으나 닿는 경로가 없었다. 목록은 보이는 것만,
+          // 결정(dismiss/silence)은 없는 id 면 404 — "처리했다" 고 말하지 않는다.
+          .route("GET", "/api/notices", () => ({ notices: notices.list() }))
+          .route("POST", "/api/notices/refresh", async () => {
+            const { readdir } = await import("node:fs/promises");
+            return notices.refreshModels(modelsDir, (p) => readdir(p), boot?.model?.path ?? null);
+          })
+          .route("POST", "/api/notices/:id/dismiss", async (c) => {
+            const id = decodeURIComponent(c.params.id ?? "");
+            if (!notices.dismiss(id)) throw Object.assign(new Error("이미 처리되었거나 존재하지 않는 알림입니다"), { status: 404 });
+            return { ok: true, id };
+          })
+          .route("POST", "/api/notices/:id/silence", async (c) => {
+            const id = decodeURIComponent(c.params.id ?? "");
+            if (!(await notices.silence(id))) throw Object.assign(new Error("이미 처리되었거나 존재하지 않는 알림입니다"), { status: 404 });
+            return { ok: true, id };
           });
         const { port: actual } = await http.start();
+        // P13 적용 마커 소비 — 여기까지 부팅됐다는 것이 곧 새 실행 파일의 기동 확인이다.
+        // 마커를 지우고 그 사실을 말한다. 슬롯은 남긴다(수동 롤백용).
+        // 주의: 새 바이너리가 부팅 전에 죽으면 이 코드는 실행되지 않는다 —
+        // 그 경우 슬롯 경로로 수동 복구한다. 완전 자동 복구는 상위 감시기의 몫이다.
+        try {
+          const pending = JSON.parse(await readFile(updateMarker, "utf8")) as { asset?: string; slot?: string | null; swappedAt?: number };
+          await rm(updateMarker, { force: true });
+          ring.info("update", `업데이트 적용 확인됨: ${pending.asset ?? "?"} · 슬롯 ${pending.slot ?? "-"}`, "server");
+          emit(`[update] 적용 확인됨 — 실패하면 /api/update/rollback 으로 되돌리십시오 (슬롯: ${pending.slot ?? "-"})`);
+        } catch {
+          // 마커 없음 = 일반 부팅. 깨진 마커도 여기서 지우지 않는다 —
+          // 무엇이 있었는지 모른 채 지우면 적용 여부를 알 수 없게 된다.
+        }
         hub.publish({ type: "sys.logs", limits: ring.status } as never);
+        // 컨텍스트 부팅 시 1회 계산 — 복원된 대화가 있으면 유휴 상태에서도 수치가 보인다.
+        void agent.refreshContext().catch(() => {});
         return { ok: true, detail: `http://127.0.0.1:${actual} (토큰 인증 필수)` };
       },
       // [11] Chrome 기동 — GPU 모드를 **적용하고 검증까지** 하고 보고한다(§4.7.5).

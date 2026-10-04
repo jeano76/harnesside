@@ -33,7 +33,7 @@ export const ko: Catalog = {
   "panel.monitor": "모니터",
   "panel.log": "서버 로그",
   "panel.settings": "설정",
-  "panel.agent": "에이전트",
+  "panel.agent": "대화",
 
   // ── 공통 동작 ────────────────────────────────────────────────────────────
   "action.close": "닫기",

@@ -22,10 +22,11 @@
 
 import React, { useMemo } from "react";
 import { colorFor, tokenizeLine, type Language } from "../editor/highlight.js";
+import { COLOR, FONT, LAYOUT, RADIUS, SPACE } from "../theme/tokens.js";
 
-const DIM = "#6e7681";
-const BORDER = "#30363d";
-const FG_BTN = "#c9d1d9";
+const DIM = COLOR.DIM_SUBTLE;
+const BORDER = COLOR.BORDER;
+const FG_BTN = COLOR.FG;
 export interface CodeBlockProps {
   /**
    * 하이라이트할 언어. `null` 이면 **색을 칠하지 않는다.**
@@ -50,7 +51,31 @@ export interface CodeBlockProps {
   maxHeight?: number;
 }
 
-const FIRST_COLLAPSED_LINES = 24;
+export const FIRST_COLLAPSED_LINES = LAYOUT.FOLD_AT_LINES;
+
+/**
+ * 코드 블록이 **접을 수 있는지** 계산한다(순수 함수 — 렌더링과 분리).
+ *
+ * 접기 UI 는 클릭할 대상이 있어야 한다. 줄이 짧으면 펼칠 내용이 없으니
+ * "펼치기" 를 보여주는 것은 거짓이다. 그래서:
+ *   - `collapsible` 이 아니고,
+ *   - 줄 수가 24 줄을 넘지 않으면
+ *   접기 버튼을 만들지 않는다(`canToggle = false`).
+ *
+ * 컴포넌트 내부 계산이 아니라 함수로 뺀 이유: 이 규칙은 테스트가 요구한다.
+ * 계산 로직이 달라지면 안 되며(간단한 규칙), 밖에서도 고정을 요구하므로 분리한다.
+ */
+export interface FoldState {
+  /** 접기 버튼 UI 를 만들 수 있는가. */
+  canToggle: boolean;
+  /** 현재 줄 수. */
+  lineCount: number;
+}
+
+export function computeFold(lines: string[], collapsible: boolean): FoldState {
+  const tooLong = lines.length > FIRST_COLLAPSED_LINES;
+  return { canToggle: collapsible && tooLong, lineCount: lines.length };
+}
 
 export function CodeBlock({
   lang,
@@ -60,9 +85,10 @@ export function CodeBlock({
   collapsible = false,
   summary,
   defaultCollapsed = false,
-  maxHeight = 260,
+  maxHeight = LAYOUT.CODE_MAX_HEIGHT,
 }: CodeBlockProps) {
   const [open, setOpen] = React.useState(!defaultCollapsed);
+  const [copied, setCopied] = React.useState(false);
   // **명령줄은 출력과 따로** 그린다 — 같이 넣으면 출력이 하이라이트되어 지어내게 된다.
   const outLines = useMemo(() => text.replace(/\s+$/, "").split("\n"), [text]);
   const lines = useMemo(() => (command ? [`$ ${command}`, ...outLines] : outLines), [command, outLines]);
@@ -71,35 +97,78 @@ export function CodeBlock({
 
   // **접을 수 없고 짧으면** 접기 UI 를 아예 만들지 않는다 — 클릭할 대상이 없는데
   // "펼치기" 가 보이는 것은 **거짓말**이다.
-  const tooLong = lines.length > FIRST_COLLAPSED_LINES;
-  const canToggle = collapsible && tooLong;
+  // 접기 가능여부 — 순수 함수 computeFold 로 분리(위). 계산은 고정에 있다.
+  const canToggle = useMemo(() => computeFold(lines, collapsible).canToggle, [lines, collapsible]);
 
   const shown = canToggle && !open ? lines.slice(0, FIRST_COLLAPSED_LINES) : lines;
   const hidden = lines.length - shown.length;
 
   return (
-    <div style={{ margin: "4px 0 0", border: "1px solid #21262d", borderRadius: 6, background: "#0d1117" }}>
-      {canToggle && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 6px", fontSize: 10, color: DIM }}>
+    <div style={{ margin: "4px 0 0", border: `1px solid ${COLOR.SURFACE_3}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1 }}>
+      {(
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 6px", fontSize: FONT.META, color: DIM }}>
           <span>{summary ?? `${lines.length}줄`}</span>
           <span style={{ flex: 1 }} />
+          <button
+            type="button"
+            aria-label="코드 복사"
+            title={copied ? "복사됨" : "복사"}
+            onClick={() => {
+              try {
+                void navigator.clipboard?.writeText(command ? `$ ${command}\n${text}` : text);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1200);
+              } catch {
+                /* 클립보드 실패는 조용히 둔다 */
+              }
+            }}
+            style={{
+              background: "transparent",
+              color: copied ? COLOR.GOOD : DIM,
+              border: 0,
+              font: "inherit",
+              fontSize: FONT.META,
+              padding: "0 4px",
+              cursor: "pointer",
+            }}
+          >
+            {copied ? "✓ 복사됨" : "⧉ 복사"}
+          </button>
+          {canToggle ? (
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
             style={{
-              background: "#21262d",
+              background: COLOR.SURFACE_3,
               color: FG_BTN,
               border: `1px solid ${BORDER}`,
-              borderRadius: 4,
+              borderRadius: RADIUS.S,
               font: "inherit",
-              fontSize: 10,
+              fontSize: FONT.META,
               padding: "0 6px",
               cursor: "pointer",
             }}
           >
             {open ? "접기" : `나머지 ${lines.length - FIRST_COLLAPSED_LINES}줄 펼치기`}
           </button>
+          ) : (
+            // VS 처럼 접기 자리는 항상 보인다. 접을 만큼 길지 않으면 비활성으로 —
+            // 숨기면 접기 기능 자체를 잃었다고 읽힌다. 비활성 사유는 title 에.
+            <span
+              aria-disabled="true"
+              title={`접을 만큼 길지 않습니다 (${lines.length}줄)`}
+              style={{
+                color: COLOR.LINE_NUM,
+                fontSize: FONT.META,
+                padding: "0 6px",
+                cursor: "default",
+                userSelect: "none",
+              }}
+            >
+              접기
+            </span>
+          )}
         </div>
       )}
       <pre
@@ -108,8 +177,8 @@ export function CodeBlock({
           padding: "4px 0",
           maxHeight: open ? maxHeight : undefined,
           overflow: "auto",
-          font: "10px/1.5 ui-monospace, monospace",
-          tabSize: 2,
+          font: `${FONT.AUX}px/${FONT.LINE_CODE} ${FONT.MONO}`,
+          tabSize: FONT.TAB_SIZE,
         }}
       >
         {shown.map((line, i) => (
@@ -121,16 +190,16 @@ export function CodeBlock({
                 style={{
                   flex: "0 0 auto",
                   minWidth: 30,
-                  paddingRight: 8,
+                  paddingRight: SPACE.CODE_GUTTER,
                   textAlign: "right",
-                  color: "#484f58",
+                  color: COLOR.LINE_NUM,
                   userSelect: "none",
                 }}
               >
                 {i + 1}
               </span>
             )}
-            <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", color: "#c9d1d9", flex: "1 1 auto" }}>
+            <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", color: COLOR.FG, flex: "1 1 auto" }}>
               {isCommandLine(i) && command
                 ? // **명령줄만 하이라이트** — 셸 문법이므로.
                   tokenizeLine(`$ ${command}`, "shell").map((t, ti) => (

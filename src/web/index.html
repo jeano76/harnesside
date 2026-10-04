@@ -201,6 +201,29 @@
         }
       }
 
+      /* ── 스트리밍 캐럿·씽크 도트 (2026-10-04) ──────────────────────────
+         터미널처럼 "지금 찍히는 중" 을 말한다. 무한 반복은 캐럿·도트에만 허용하고,
+         reduced-motion 에서는 전부 정지한다(아래 미디어 쿼리). */
+      @keyframes harness-caret-blink {
+        0%, 45% { opacity: 1; }
+        50%, 95% { opacity: 0; }
+        100% { opacity: 1; }
+      }
+      @keyframes harness-pulse-dot {
+        0%, 100% { opacity: 0.25; }
+        50% { opacity: 1; }
+      }
+      .stream-caret {
+        display: inline-block;
+        width: 7px;
+        height: 1em;
+        vertical-align: text-bottom;
+        background: #3fb950;
+        animation: harness-caret-blink 1.06s steps(1) infinite;
+      }
+      .think-dot {
+        animation: harness-pulse-dot 1.2s ease-in-out infinite;
+      }
       /* M8: 모션 감소를 요청한 사용자에게는 **움직임을 없앤다**.
          `animation` 뿐 아니라 `transition` 도 대상이다 — 잔잔한 트랜지션도 반복되면
          어지럽다(§5.7 의 다크 모션 요구). */

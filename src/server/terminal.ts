@@ -19,7 +19,7 @@ import { spawn as ptySpawn, type IPty } from "node-pty";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync, accessSync, constants as fsConstants } from "node:fs";
 
 /**
  * 셸 인자를 **하나의 인자**로 만든다.
@@ -60,15 +60,19 @@ export function shellCandidates(explicit: string | undefined, env: NodeJS.Proces
 
 /** PTY 를 env 로 만든다. **UTF-8 을 강제**한다 — 그래야 셸에서 한글이 깨지지 않는다. */
 export function ptyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // LC_ALL 은 **삭제**한다. 빈 문자열("")로 두면 glibc 가 UTF-8 로 보지 않아
+  // `ls` 가 한글을 `$'\345\...' ` 8진 이스케이프로 찍는다(2026-10-04 실측:
+  // LC_ALL="" → 깨짐, unset → 정상). `LANG` 을 UTF-8 로 맞춰도 이긴다.
+  const { LC_ALL: _dropped, ...rest } = env;
+  void _dropped;
   return {
-    ...env,
+    ...rest,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     // **사용자 로캘을 그대로 쓰지 않는다.** LANG 이 `C` 또는 `POSIX` 면 로케일 인식이
     // 꺼져서 **한글이 깨진다**(실측: LANG=C 인 컨테이너에서 PTY 출력의 UTF-8 이 깨진다).
     // 사용자가 `ko_KR.UTF-8` 을 골랐다면 그것을 우선하되, **UTF-8 이 아니면 물려받은다.**
     LANG: /UTF-?8$/i.test(env.LANG ?? "") ? env.LANG! : "ko_KR.UTF-8",
-    LC_ALL: "",
   };
 }
 
@@ -115,6 +119,8 @@ export interface TerminalSession {
   /** 화면 크기. resize 로 바뀐다. */
   cols: number;
   rows: number;
+  /** 실제로 뜬 셸 — 요청과 다를 수 있다(없으면 폴백). 모르면 빈 문자열이 아니라 null. */
+  shell: string | null;
 }
 
 export interface TerminalEvents {
@@ -259,7 +265,9 @@ export class TerminalManager {
    * 실패하면 **왜인지 말하고 아무것도 만들지 않는다.** 셸이 없는데 "탭 열림" 을
    * 말하면 사용자는 아무것도 안 보이는 탭을 붙잡게 된다.
    */
-  create(opts: { cwd?: string; cols?: number; rows?: number; title?: string } = {}): CreateResult {
+  create(
+    opts: { cwd?: string; cols?: number; rows?: number; title?: string; shell?: string; init?: string } = {}
+  ): CreateResult {
     const max = this.opts.maxTabs ?? 8;
     const live = this.order.filter((id) => this.tabs.get(id)?.session.state === "running").length;
     if (live >= max) {
@@ -320,7 +328,20 @@ export class TerminalManager {
     // 그래서 **열어보고** 고른다. 후보를 순서대로 시도하고, 실제로 뜬 것을 쓴다.
     // 실패를 **사용자에게 말하지 않으면** 안 되므로, 하나도 안 뜨면 첫 후보로 가고
     // PTY 안의 `execvp failed` 문구를 그대로 보여준다(아래 onData).
-    const candidates = shellCandidates(this.opts.shell, process.env);
+    // 명시 요청이 있으면 그 셸을 먼저 — 없으면 폴백(프로브 순서대로).
+    // 요청 경로 검증은 shellCandidates 가 아니라 여기서 한다: 절대경로가 아니면
+    // 요청 자체를 버리고 기본 순서로 간다(상대경로는 PATH 탐색이라 엉뚱한 것이 뜬다).
+    let explicit = opts.shell && opts.shell.startsWith("/") ? opts.shell : undefined;
+    // 명시 경로가 실행 불가면 여기서 버린다 — node-pty 는 없는 셸도 일단 열어
+    // `execvp failed` 를 뒤늦게 찍으므로, 프로브 순서만으로는 폴백이 안 된다(실측).
+    if (explicit) {
+      try {
+        accessSync(explicit, fsConstants.X_OK);
+      } catch {
+        explicit = undefined;
+      }
+    }
+    const candidates = shellCandidates(explicit ?? this.opts.shell, process.env);
     let shell = candidates[0]!;
     for (const cand of candidates) {
       const probe = trySpawn(cand, cwd, cols, rows);
@@ -344,6 +365,7 @@ export class TerminalManager {
       openError: null,
       cols,
       rows,
+      shell,
     };
 
     let pty: IPty;
@@ -367,6 +389,16 @@ export class TerminalManager {
     const entry: Entry = { session, pty, busyInput: false };
     this.tabs.set(id, entry);
     this.order.unshift(id);
+    // 초기 명령 — 한 줄만, 200자까지. 여러 줄이면 첫 줄만(주입이 아니라 초기 표시다).
+    // 셸이 뜨자마자 `ls` 가 돌아가 있으면 "빈 검은 화면" 이 아니다(사용자 요구).
+    if (opts.init && opts.init.trim()) {
+      const first = opts.init.split("\n")[0]!.slice(0, 200);
+      try {
+        pty.write(`${first}\n`);
+      } catch {
+        // 쓰기 실패는 onData/onExit 경로가 말한다 — 여기서 409 로 막지 않는다
+      }
+    }
     pty.onData((d) => {
       // **PTY 안에서 나는 실패도 잡는다.** `node-pty` 는 없는 셸에 대해 throw 하지
       // 않고 PTY 를 연 뒤 `execvp(3) failed.` 를 화면에 찍고 exit 1 한다(실측).

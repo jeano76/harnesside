@@ -15,8 +15,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   DEFAULT_ROLLBACK,
   isNewer,
@@ -271,6 +271,60 @@ export class UpdateService {
   }
 
   /**
+   * 교체 준비: **슬롯 → 교체** (tmp+rename, 실행권한 유지).
+   *
+   * `apply()` 와 `/api/update/apply` 라우트가 공유한다 — 교체 순서가 두 곳에
+   * 있으면 하나가 반드시 어긋난다(부록 B 6). 순서는 여기서만 정한다.
+   */
+  async stageSwap(newBinary: string): Promise<{ ok: boolean; slot?: string; detail: string }> {
+    const slot = await this.makeSlot();
+    if (!slot.ok) {
+      return { ok: false, detail: `롤백 슬롯을 만들지 못해 적용하지 않았습니다: ${slot.detail}` };
+    }
+    try {
+      const buf = await readFile(newBinary);
+      const tmp = `${this.opts.selfPath}.harnesside-tmp`;
+      await writeFile(tmp, buf);
+      await chmod(tmp, 0o755);
+      await rename(tmp, this.opts.selfPath);
+      return { ok: true, slot: slot.detail, detail: "교체됨" };
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      this.set({ lastError: detail });
+      return { ok: false, detail: `교체 실패: ${detail}` };
+    }
+  }
+
+  /**
+   * 되돌리기: 슬롯의 이전 실행 파일을 제자리로 복사한다.
+   *
+   * slotPath 를 주면 그 슬롯을, 안 주면 가장 최근 슬롯을 쓴다.
+   * 슬롯 범위 밖의 경로는 거부한다 — 임의 경로 복사는 곧 임의 파일 쓰기다.
+   */
+  async rollback(slotPath?: string): Promise<{ ok: boolean; detail: string; path?: string }> {
+    const src = slotPath ?? this.slots[this.slots.length - 1];
+    if (!src) return { ok: false, detail: "되돌릴 슬롯이 없습니다 — 먼저 롤백 슬롯을 만드십시오" };
+    const rel = relative(resolve(this.opts.slotsDir), resolve(src));
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      return { ok: false, detail: "슬롯 범위 밖의 경로입니다" };
+    }
+    try {
+      const buf = await readFile(src);
+      const tmp = `${this.opts.selfPath}.harnesside-rollback`;
+      await writeFile(tmp, buf);
+      await chmod(tmp, 0o755);
+      await rename(tmp, this.opts.selfPath);
+      this.set({ lastError: null });
+      this.phase("idle", `이전 버전으로 되돌렸습니다: ${src}`);
+      return { ok: true, detail: `되돌렸습니다: ${src}`, path: src };
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      this.set({ lastError: detail });
+      return { ok: false, detail: `되돌리기 실패: ${detail}` };
+    }
+  }
+
+  /**
    * 적용: **교체 → 부팅 확인 → 실패 시 롤백**.
    *
    * "설치 성공 = 성공" 함정(§5.13.1)이 여기서 끝나면 안 된다. 파일을 **깨끗이
@@ -322,24 +376,12 @@ export class UpdateService {
       };
     }
 
-    // 1. 되돌릴 곳 — **교체 전에** 만든다.
-    const slot = await this.makeSlot();
-    if (!slot.ok) {
-      return { ok: false, rolledBack: false, detail: `롤백 슬롯을 만들지 못해 적용하지 않았습니다: ${slot.detail}`, elapsedSec: 0, verdict: "pending" };
+    // 1+2. 되돌릴 곳(교체 전) + 교체 — 순서는 stageSwap 이 정한다.
+    const staged = await this.stageSwap(opts.newBinary);
+    if (!staged.ok) {
+      return { ok: false, rolledBack: false, detail: staged.detail, elapsedSec: 0, verdict: "pending" };
     }
-
-    // 2. 교체 — 검증된 파일만. 검증 없이 덮어쓰면 롤백 슬롯만 남는다.
-    try {
-      const buf = await readFile(opts.newBinary);
-      const tmp = `${this.opts.selfPath}.harnesside-tmp`;
-      await writeFile(tmp, buf);
-      await chmod(tmp, 0o755);
-      await rename(tmp, this.opts.selfPath);
-    } catch (e) {
-      const detail = e instanceof Error ? e.message : String(e);
-      this.set({ lastError: detail });
-      return { ok: false, rolledBack: false, detail: `교체 실패: ${detail}`, elapsedSec: 0, verdict: "pending" };
-    }
+    const slot = { ok: true as const, detail: staged.slot! };
 
     // 3. **재기동 후** 부팅 확인.
     //
@@ -382,14 +424,11 @@ export class UpdateService {
       return { ok: true, rolledBack: false, detail: "새 버전이 기동 신호를 보냈습니다", elapsedSec: Math.round((now() - startedAt) / 1000), verdict };
     }
 
-    // 4. 실패 — 되돌리고 **다시 띄운다**.
+    // 4. 실패 — 되돌리고 **다시 띄운다** (복사는 rollback 이 정한다).
     const reason = rollbackReason(policy);
     try {
-      const buf = await readFile(slot.detail);
-      const tmp = `${this.opts.selfPath}.harnesside-rollback`;
-      await writeFile(tmp, buf);
-      await chmod(tmp, 0o755);
-      await rename(tmp, this.opts.selfPath);
+      const back = await this.rollback(slot.detail);
+      if (!back.ok) throw new Error(back.detail);
       await (opts.restartAfterRollback ?? opts.restart)();
       this.set({ lastError: reason });
       this.phase("failed", reason, 0, reason);

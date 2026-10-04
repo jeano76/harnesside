@@ -272,3 +272,30 @@ test("shutdown 은 **살아 있는 탭 수** 를 말하고 전부 죽인다", as
     await r.cleanup();
   }
 });
+
+test("명시 셸이 없으면 폴백하고 실제 뜬 셸을 말한다", async () => {
+  const r = await root();
+  const { m } = mgr(r.dir);
+  try {
+    const res = m.create({ shell: "/nonexistent/bash", title: "t" });
+    assert.equal(res.ok, true, `폴백 실패: ${res.detail}`);
+    assert.ok(res.session!.shell && res.session!.shell !== "/nonexistent/bash", "폴백한 셸을 말하지 않았다");
+  } finally {
+    m.shutdown();
+    await r.cleanup();
+  }
+});
+
+test("init 은 한 줄만 실행한다 — 여러 줄이면 첫 줄만", async () => {
+  const r = await root();
+  const { m, ev } = mgr(r.dir);
+  try {
+    const res = m.create({ shell: "/bin/bash", init: "echo INIT_OK\necho NOPE", title: "t" });
+    assert.equal(res.ok, true);
+    const out = await until(() => ev.data.join("").includes("INIT_OK"), 3000);
+    assert.equal(out, true, "init 이 실행되지 않았다");
+  } finally {
+    m.shutdown();
+    await r.cleanup();
+  }
+});

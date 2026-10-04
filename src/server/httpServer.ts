@@ -47,6 +47,25 @@ export async function readBody(req: IncomingMessage, maxBytes = 8 * 1024 * 1024)
   return raw ? JSON.parse(raw) : {};
 }
 
+/**
+ * 쿼리 문자열의 정수를 **범위 안에서만** 받는다.
+ *
+ * 왜 여기서 막나: 상한을 라우트마다 다르게 적으면 어느 하나가 빠진다. 그리고
+ * `Number("abc")` 는 `NaN` 이라 그대로 상한 비교를 통과해 **무한 반복**이 되거나
+ *(`maxHits = NaN` → 비교가 항상 false) **상한이 사라진다**(§9.3 표: 오염으로 무한 요청).
+ *
+ * **조용히 고치지 않는다** — 잘못된 값은 주어진 기본값으로 떨어지고, 그 사실은
+ * 호출부가 로그로 남긴다. 여기서 400 을 던지면 화면이 "검색어가 잘못됐다" 는
+ * **올바른 문장**을 보게 되지만, 그건 검색어가 아니라 상한 값의 문제라서 혼란스럽다.
+ */
+export function clampInt(raw: string | null, min: number, max: number, fallback: number): number {
+  if (raw === null || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  // `Number.isFinite` 로 먼저 거른다 — `NaN` 과 `Infinity` 둘 다 걸린다.
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
 function contentTypeFor(file: string): string {
   return MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
 }

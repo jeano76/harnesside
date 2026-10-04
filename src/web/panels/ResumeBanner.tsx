@@ -19,6 +19,8 @@ export interface ResumeState {
   stepsDone: number;
   stepsTotal: number;
   savedAt: string | null;
+  steps: Array<{ description: string; status: "done" | "in_progress" | "todo" }>;
+  pendingToolCall: { name: string; argumentsJson: string; reason: string } | null;
 }
 
 const REASON_LABEL: Record<string, string> = {
@@ -65,11 +67,17 @@ export function ResumeBanner({
     return () => clearInterval(id);
   }, [load]);
 
+  const [open, setOpen] = React.useState(false);
+
   if (!st?.present) return null;
 
   const progress = st.stepsTotal > 0 ? `단계 ${st.stepsDone}/${st.stepsTotal}` : null;
+  const remaining = (st.steps ?? []).filter((s) => s.status !== "done");
+  const remainingText = remaining.map((s, i) => `${i + 1}. ${s.description}`).join("\n");
+  // 마우스 오버 + 펼침으로 남은 작업을 미리 본다 — 개수만 보이면 "뭐가 남았지" 가 된다.
 
   return (
+    <>
     <div
       style={{
         display: "flex",
@@ -88,7 +96,17 @@ export function ResumeBanner({
           {st.goal}
         </span>
       )}
-      {progress && <span style={{ color: "#6e7681", flex: "0 0 auto" }}>{progress}</span>}
+      {progress && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          title={remainingText || progress}
+          style={{ background: "none", border: 0, color: "#6e7681", cursor: remaining.length > 0 ? "pointer" : "default", font: "inherit", flex: "0 0 auto" }}
+        >
+          {progress} {remaining.length > 0 ? (open ? "▾" : "▸") : null}
+        </button>
+      )}
       {st.reason && <span style={{ color: "#6e7681", flex: "0 0 auto" }}>{REASON_LABEL[st.reason] ?? st.reason}</span>}
       <span style={{ flex: 1 }} />
       <button
@@ -126,5 +144,18 @@ export function ResumeBanner({
         {busy ? "재개 중" : "이어서 진행"}
       </button>
     </div>
+      {open && remaining.length > 0 && (
+        <div style={{ padding: "2px 6px 4px 22px", background: "#1c2b1c", borderBottom: "1px solid #30363d", fontSize: 10, display: "grid", gap: 1 }}>
+          {remaining.map((s, i) => (
+            <div key={i} style={{ color: s.status === "in_progress" ? "#d29922" : "#8b949e" }}>
+              {s.status === "in_progress" ? "▸" : "○"} {s.description}
+            </div>
+          ))}
+          {st.pendingToolCall && (
+            <div style={{ color: "#6e7681" }}>다음: {st.pendingToolCall.name} — {st.pendingToolCall.reason}</div>
+          )}
+        </div>
+      )}
+  </>
   );
 }

@@ -13,10 +13,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClient, ApiError } from "../api.js";
 import { UpdateSection } from "./UpdateSection.js";
+import { NoticeSection } from "./NoticeSection.js";
+import { COLOR } from "../theme/tokens.js";
 
-const DIM = "#6e7681";
-const FG = "#c9d1d9";
-const BORDER = "#30363d";
+const DIM = COLOR.DIM_SUBTLE;
+const FG = COLOR.FG;
+const BORDER = COLOR.BORDER;
 
 interface Scored {
   model: { id: string; repo: string; file: string; bytes: number; downloads: number; license: string | null };
@@ -207,7 +209,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
         <button
           type="button"
           onClick={() => void download(s)}
-          style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "1px 8px", cursor: "pointer", font: "inherit", fontSize: 11 }}
+          style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "1px 8px", cursor: "pointer", font: "inherit", fontSize: 11 }}
         >
           다운로드
         </button>
@@ -294,7 +296,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
             <button
               type="button"
               onClick={() => void activate(plan.path, plan.path.split("/").pop() ?? "", true)}
-              style={{ background: "#238636", color: "#fff", border: 0, borderRadius: 5, padding: "2px 10px", cursor: "pointer", font: "inherit", fontSize: 11 }}
+              style={{ background: "#238636", color: "#fff", border: 0, borderRadius: 4, padding: "2px 10px", cursor: "pointer", font: "inherit", fontSize: 11 }}
             >
               교체하기
             </button>
@@ -309,13 +311,13 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
           onKeyDown={(e) => e.key === "Enter" && void search()}
           aria-label="HuggingFace 모델 검색"
             placeholder="HuggingFace 검색 (예: Ornith)"
-          style={{ flex: 1, background: "#0d1117", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 6px", font: "inherit", fontSize: 11, outline: "none" }}
+          style={{ flex: 1, background: "#0d1117", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "3px 6px", font: "inherit", fontSize: 11, outline: "none" }}
         />
         <button
           type="button"
           onClick={() => void search()}
           disabled={busy}
-          style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "2px 10px", cursor: busy ? "default" : "pointer", font: "inherit", fontSize: 11 }}
+          style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 10px", cursor: busy ? "default" : "pointer", font: "inherit", fontSize: 11 }}
         >
           {busy ? "검색 중" : "검색"}
         </button>
@@ -365,6 +367,8 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
       {/* `notice` 는 deps 가 안정적이다 — `onNotice` 를 그대로 넘기면 그쪽에서 같은
           순환이 다시 시작된다. */}
       <UpdateSection client={client} onNotice={notice} onPhase={onPhaseStable} />
+      {/* M13 추천 알림 — 판단은 서버, 여기는 보여주기만 한다. */}
+      <NoticeSection client={client} />
     </div>
   );
 }

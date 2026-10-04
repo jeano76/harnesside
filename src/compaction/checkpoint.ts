@@ -72,15 +72,24 @@ export interface ResumeInfo {
   stepsDone: number;
   stepsTotal: number;
   savedAt: string | null;
+  /** 남은 작업 미리보기 — 마우스 오버·펼침에 쓴다. 없으면 빈 배열(모름이 아니다). */
+  steps: Array<{ description: string; status: "done" | "in_progress" | "todo" }>;
+  /** 다음에 바로 뛸 도구 (있으면). */
+  pendingToolCall: Checkpoint["pendingToolCall"];
 }
 
 export async function resumeInfo(projectRoot: string): Promise<ResumeInfo> {
   const cp = await readCheckpoint(projectRoot).catch(() => null);
   if (!cp) {
     // **없음은 명시한다.** null 로 넘기면 화면이 0 과 모름을 구분하지 못한다.
-    return { present: false, goal: null, reason: null, stepsDone: 0, stepsTotal: 0, savedAt: null };
+    return { present: false, goal: null, reason: null, stepsDone: 0, stepsTotal: 0, savedAt: null, steps: [], pendingToolCall: null };
   }
-  const steps = Array.isArray(cp.steps) ? cp.steps : [];
+  const steps = Array.isArray(cp.steps)
+    ? cp.steps.filter((s) => s && typeof s.description === "string").map((s) => ({
+        description: String(s.description).slice(0, 200),
+        status: (s.status === "done" || s.status === "in_progress" ? s.status : "todo") as "done" | "in_progress" | "todo",
+      }))
+    : [];
   return {
     present: true,
     goal: cp.goal || null,
@@ -88,6 +97,8 @@ export async function resumeInfo(projectRoot: string): Promise<ResumeInfo> {
     stepsDone: steps.filter((s) => s?.status === "done").length,
     stepsTotal: steps.length,
     savedAt: typeof cp.timestamp === "string" ? cp.timestamp : null,
+    steps,
+    pendingToolCall: cp.pendingToolCall ?? null,
   };
 }
 

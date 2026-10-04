@@ -14,10 +14,12 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { bucket, severity, formatBytes as fmtBytes, SEVERITY_COLOR, type Metrics } from "../../shared/metrics.js";
+import { useI18n } from "../i18n/index.js";
 
 export const FG = "#c9d1d9";
 export const DIM = "#6e7681";
 export const BG = "#0d1117";
+const BORDER = "#30363d";
 
 export interface MonitorPanelProps {
   /** 최신 샘플. null 이면 "아직 측정 안 됨" 이지 "모두 0%" 이 아니다. */
@@ -39,6 +41,14 @@ export interface MonitorPanelProps {
   height?: number;
   onToggle?: () => void;
   collapsed?: boolean;
+  /**
+   * 하단 셸 우측용 밀집 표시 (2026-10-04).
+   *
+   * 10-01 요구 "셸 영역 우측 · 최소 사이즈 · 전부 노출" 로 돌아간다.
+   * 큰 도넛·스파크라인·코어 히트맵 대신 수치 행으로 전부 보인다.
+   * 스파크라인·코어별 분포는 펼친 화면(기본 패널)의 몫으로 남긴다.
+   */
+  compact?: boolean;
 }
 
 /** rAF + easing 으로 표시값을 0→목표로 이동시킨다(150~250ms). */
@@ -247,7 +257,7 @@ export function CoreHeatmap({ cores, cell = 7 }: { cores: number[]; cell?: numbe
         <div
           key={i}
           title={`코어 ${i}: ${c.toFixed(0)}%`}
-          style={{ width: cell, height: cell, borderRadius: 1, background: SEVERITY_COLOR[severity(c)] }}
+          style={{ width: cell, height: cell, borderRadius: 2, background: SEVERITY_COLOR[severity(c)] }}
         />
       ))}
     </div>
@@ -263,7 +273,7 @@ function Bar({ label, pct, text, color }: { label: string; pct: number | null; t
         <span style={{ color: DIM }}>{label}</span>
         <span style={{ color: color ?? SEVERITY_COLOR[sev] }}>{text}</span>
       </div>
-      <div style={{ height: 5, background: "#21262d", borderRadius: 3, overflow: "hidden" }}>
+      <div style={{ height: 5, background: "#21262d", borderRadius: 2, overflow: "hidden" }}>
         <div style={{ width: `${w}%`, height: "100%", background: color ?? SEVERITY_COLOR[sev], transition: "width 200ms ease-out" }} />
       </div>
     </div>
@@ -272,8 +282,38 @@ function Bar({ label, pct, text, color }: { label: string; pct: number | null; t
 
 // 바이트 표시는 `shared/metrics` 의 정본을 쓴다(중복 정의는 서로 어긋난다).
 
-export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed }: MonitorPanelProps) {
+/**
+ * 한 줄 모니터 스트립 — 셸 하단 (2026-10-04 사용자 명시).
+ * CPU·RAM·VRAM·컨텍스트를 100% 기준 막대로 한 줄에. 너비는 flex 라 창에 맞게
+ * 늘고 줄며, track 이 곧 100% 스케일이다. 수치는 전부 보인다(추측 금지).
+ */
+export function MonitorStrip({ latest }: { latest: Metrics | null }) {
+  if (!latest) return <div style={{ fontSize: 10, color: DIM, padding: "1px 8px" }}>계측 시작 중…</div>;
+  const cell = (label: string, pct: number | null, text: string, warn?: boolean) => (
+    <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 4, flex: "1 1 90px", minWidth: 80 }} title={`${label} ${text}`}>
+      <span style={{ color: DIM, flexShrink: 0 }}>{label}</span>
+      <span style={{ flex: "1 1 auto", height: 4, background: "#21262d", borderRadius: 2, overflow: "hidden", minWidth: 24 }}>
+        <span style={{ display: "block", width: `${pct === null ? 0 : Math.max(0, Math.min(100, pct))}%`, height: "100%", background: warn ? SEVERITY_COLOR.crit : pct === null ? "#484f58" : SEVERITY_COLOR[severity(pct)] }} />
+      </span>
+      <span style={{ color: warn ? SEVERITY_COLOR.crit : FG, flexShrink: 0 }}>{text}</span>
+    </span>
+  );
+  const ctx = latest.context;
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "1px 8px", fontSize: 10, borderTop: `1px solid ${BORDER}`, background: BG, flexWrap: "nowrap", overflow: "hidden", whiteSpace: "nowrap" }}>
+      {cell("CPU", latest.cpu.cores.length ? latest.cpu.overall : null, `${latest.cpu.overall.toFixed(0)}%`)}
+      {cell("RAM", latest.mem.usedPct, `${latest.mem.usedPct.toFixed(0)}%`)}
+      {cell("VRAM", latest.gpu ? latest.gpu.memPct : null, latest.gpu ? `${latest.gpu.memPct.toFixed(0)}%` : "?")}
+      {cell("CTX", ctx?.pct ?? null, ctx ? `${ctx.pct.toFixed(0)}%` : "—", !!ctx && ctx.pct > 80)}
+      {cell("DISK", 100 - latest.disk.usedPct, fmtBytes(latest.disk.freeBytes))}
+    </div>
+  );
+}
+
+export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed, compact = false }: MonitorPanelProps) {
   const visible = useDocumentVisible();
+  /** 패널 제목은 카탈로그에서 — 하드코딩하면 M9 누락이 조용히 남는다. */
+  const t = useI18n();
   // §5.5: "DOM 위젯을 1Hz 로 재생성하지 않는다" — 버킷이 바뀔 때만 리렌더한다.
   const b = useMemo(() => {
     if (!latest) return null;
@@ -289,10 +329,54 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
     };
   }, [latest]);
 
+  if (compact) {
+    return (
+      <section
+        aria-label={t("panel.monitor")}
+        style={{ background: BG, color: FG, borderLeft: `1px solid ${BORDER}`, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 5, overflowY: "auto", minHeight: 0 }}
+      >
+        <div style={{ fontSize: 10, color: DIM }}>{t("panel.monitor")}</div>
+        {!latest ? (
+          <div style={{ color: DIM, fontSize: 11 }}>계측 시작 중…</div>
+        ) : (
+          <>
+            <Bar label="CPU" pct={latest.cpu.cores.length ? latest.cpu.overall : null} text={`${latest.cpu.overall.toFixed(0)}%`} />
+            <Bar label="RAM" pct={latest.mem.usedPct} text={`${latest.mem.usedPct.toFixed(0)}%`} />
+            <Bar
+              label="VRAM"
+              pct={latest.gpu ? latest.gpu.memPct : null}
+              text={latest.gpu ? `${latest.gpu.memPct.toFixed(0)}%` : "? (GPU 없음)"}
+            />
+            <Bar
+              label="컨텍스트"
+              pct={latest.context?.pct ?? null}
+              text={latest.context ? `${latest.context.pct.toFixed(0)}%` : "? (작업 중에만 측정)"}
+              color={latest.context && latest.context.pct > 80 ? SEVERITY_COLOR.crit : undefined}
+            />
+            <Bar label="디스크 여유" pct={100 - latest.disk.usedPct} text={fmtBytes(latest.disk.freeBytes)} />
+            {latest.gpu && (
+              <Bar
+                label="GPU 사용률"
+                pct={latest.gpu.utilPct}
+                text={latest.gpu.utilPct === null ? "? (값 없음)" : `${latest.gpu.utilPct.toFixed(0)}%`}
+              />
+            )}
+            <div style={{ fontSize: 10, color: DIM, lineHeight: 1.5 }}>
+              {latest.gpu?.tempC !== null && latest.gpu?.tempC !== undefined ? `온도 ${latest.gpu.tempC.toFixed(0)}°C · ` : ""}
+              {latest.gpu?.powerW !== null && latest.gpu?.powerW !== undefined ? `전력 ${latest.gpu.powerW.toFixed(0)}W · ` : ""}
+              {latest.llama ? `llama ${fmtBytes(latest.llama.rssBytes)} · ` : ""}
+              {latest.context ? `${latest.context.usedTokens.toLocaleString()}tok` : "토큰 —"}
+            </div>
+          </>
+        )}
+      </section>
+    );
+  }
+
   if (collapsed) {
     return (
       <div style={{ background: BG, color: DIM, border: "1px solid #30363d", borderRadius: 6, padding: "4px 10px", fontSize: 12, display: "flex", gap: 12 }}>
-        <span>모니터</span>
+        <span>{t("panel.monitor")}</span>
         {b && (
           <>
             <span>CPU {b.cpu.toFixed(1)}%</span>
@@ -334,7 +418,12 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
         <div style={{ color: DIM, fontSize: 12 }}>계측 시작 중… 서버가 1초마다 샘플을 모읍니다.</div>
       ) : (
         <>
-          <div style={{ display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+          {/* ── 게이지 2×2 강제 (2026-10-03 요구) ───────────────────────
+              CPU·RAM·VRAM·컨텍스트 4개를 **항상 2열×2행 그리드**로 배치한다.
+              flex-wrap 이면 좁은 도크에서 4개가 한 줄로 늘어났다 줄바뀌어 4×1이
+              되는데, 요구는 "게이지 2×2"이다. grid repeat(2,1fr)로 세로를 두
+              개씩 고정하고 스페이스는 게이지 사이의 gap 으로만 둔다. */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "14px 28px", alignItems: "center" }}>
             <Gauge label="CPU" pct={latest.cpu.cores.length ? latest.cpu.overall : null} value={`${latest.cpu.overall.toFixed(0)}%`} />
             <Gauge label="RAM" pct={latest.mem.usedPct} value={`${latest.mem.usedPct.toFixed(0)}%`} />
             <Gauge

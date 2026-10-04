@@ -37,10 +37,20 @@ export function UpdateSection({
   const [st, setSt] = useState<UpdateState | null>(null);
   const [plan, setPlan] = useState<{ ok: boolean; items: string[]; blockers: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 다운로드된 검증 자산 — 적용 라우트의 입력. 경로는 서버가 준 것만 쓴다(타이핑 금지). */
+  const [staged, setStaged] = useState<{ name: string; path: string }[]>([]);
+  /** 적용 2단계 확인 — 첫 클릭은 확인, 둘째 클릭이 실행이다. */
+  const [confirmApply, setConfirmApply] = useState<string | null>(null);
+  const [verify, setVerify] = useState<{ marker: { asset?: string; slot?: string | null; swappedAt?: number } | null; slots: string[] } | null>(null);
 
   const load = useCallback(async () => {
     try {
       setSt(await client.get<UpdateState>("/api/update"));
+    } catch {
+      /* 나중에 온다 */
+    }
+    try {
+      setVerify(await client.get<{ marker: { asset?: string; slot?: string | null; swappedAt?: number } | null; slots: string[] }>("/api/update/verify"));
     } catch {
       /* 나중에 온다 */
     }
@@ -101,9 +111,11 @@ export function UpdateSection({
                 onClick={() =>
                   void act(async () => {
                     try {
-                      const r = await client.post<{ ok: boolean; detail: string }>("/api/update/download", { index: i });
-                      if (r.ok) onNotice("info", "다운로드 완료", `${a.name} — 슬롯에 저장했습니다.`);
-                      else onNotice("error", "다운로드 실패", r.detail);
+                      const r = await client.post<{ ok: boolean; detail: string; path?: string }>("/api/update/download", { index: i });
+                      if (r.ok) {
+                        onNotice("info", "다운로드 완료", `${a.name} — 슬롯에 저장했습니다.`);
+                        if (r.path) setStaged((prev) => (prev.some((s) => s.path === r.path) ? prev : [...prev, { name: a.name, path: r.path as string }]));
+                      } else onNotice("error", "다운로드 실패", r.detail);
                     } catch (e) {
                       onNotice("error", "다운로드 실패", e instanceof ApiError ? e.message : String(e));
                     }
@@ -175,6 +187,78 @@ export function UpdateSection({
           </div>
         </div>
       )}
+
+      {/* P13 적용·되돌리기 — 다운로드는 위에서, 적용은 여기서. 경로는 서버가 준 것만 쓴다. */}
+      {staged.length > 0 && (
+        <div style={{ display: "grid", gap: 4 }}>
+          <div style={{ color: DIM, fontSize: 10 }}>적용 대기 중 (슬롯에 검증됨)</div>
+          {staged.map((s) => (
+            <div key={s.path} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10, color: FG }}>{s.name}</span>
+              <span style={{ flex: 1 }} />
+              {confirmApply === s.path ? (
+                <>
+                  <span style={{ fontSize: 10, color: "#d29922" }}>실행 파일을 교체합니다. 계속합니까?</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void act(async () => {
+                        try {
+                          const r = await client.post<{ ok: boolean; slot: string; next: string }>("/api/update/apply", {
+                            asset: s.path,
+                            confirm: true,
+                          });
+                          onNotice("info", "적용됨 — 재시작 필요", `${r.next} (슬롯: ${r.slot})`);
+                          setConfirmApply(null);
+                          void load();
+                        } catch (e) {
+                          onNotice("error", "적용 실패", e instanceof ApiError ? e.message : String(e));
+                          setConfirmApply(null);
+                        }
+                      })
+                    }
+                    style={{ ...btn, borderColor: "#f85149", color: "#f85149" }}
+                  >
+                    정말 적용
+                  </button>
+                  <button type="button" onClick={() => setConfirmApply(null)} style={btn}>
+                    취소
+                  </button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setConfirmApply(s.path)} style={btn}>
+                  적용
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {((verify?.slots.length ?? 0) > 0 || verify?.marker) && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10, color: DIM }}>
+            {verify?.marker ? "적용 대기 마커 있음 (재시작 시 확인)" : `롤백 슬롯 ${verify?.slots.length ?? 0}개`}
+          </span>
+          <span style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={() =>
+              void act(async () => {
+                try {
+                  const r = await client.post<{ ok: boolean; detail: string }>("/api/update/rollback", { confirm: true });
+                  onNotice("info", "되돌림", r.detail);
+                  void load();
+                } catch (e) {
+                  onNotice("error", "되돌리기 실패", e instanceof ApiError ? e.message : String(e));
+                }
+              })
+            }
+            style={btn}
+          >
+            이전 버전으로 되돌리기
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -183,7 +267,7 @@ const btn: React.CSSProperties = {
   background: "#21262d",
   color: FG,
   border: `1px solid ${BORDER}`,
-  borderRadius: 5,
+  borderRadius: 4,
   padding: "1px 8px",
   cursor: "pointer",
   font: "inherit",

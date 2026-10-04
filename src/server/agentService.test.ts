@@ -14,6 +14,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentService, type AgentEvent } from "./agentService.js";
@@ -137,7 +138,8 @@ test("thinking 이 꺼져 있으면 사고 델타를 **보내지 않는다** —
   const events: AgentEvent[] = [];
   const s = await sandbox();
   try {
-    const svc = service(fakeBackend({ reasonChunks: "생각중" }), events, s.dir);
+    // 기본값은 ON(2026-10-04 사용자 명시) — OFF 경로는 명시적으로 끄고 본다
+    const svc = service(fakeBackend({ reasonChunks: "생각중" }), events, s.dir, { enableThinking: false });
     await svc.send("생각해봐");
     assert.equal(events.some((e) => e.type === "agent.reasoning"), false, "꺼진 설정인데 사고 델타가 나갔다");
   } finally {
@@ -149,7 +151,7 @@ test("표시를 꺼도 **예산은 이미 씀** 을 한 번 말한다 — 조용
   const events: AgentEvent[] = [];
   const s = await sandbox();
   try {
-    const svc = service(fakeBackend({ reasonChunks: "가".repeat(60) }), events, s.dir);
+    const svc = service(fakeBackend({ reasonChunks: "가".repeat(60) }), events, s.dir, { enableThinking: false });
     await svc.send("생각해봐");
     const notices = events.filter((e) => e.type === "agent.status" && /예산은 이미 소비/.test(String(e.text)));
     assert.equal(notices.length, 1, `한 번만 말해야 하는데 ${notices.length}번 했다`);
@@ -265,4 +267,118 @@ test("기준 디렉터리도 **호출 시점**의 값이다 — 전환 후 옛 �
   } finally {
     await s.cleanup();
   }
+});
+
+test("실행 중 입력은 거절하지 않고 대기열에 넣는다 (O4)", async () => {
+  const events: AgentEvent[] = [];
+  const s = await sandbox();
+  try {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let chats = 0;
+    const backend = fakeBackend();
+    const origChat = backend.chat.bind(backend);
+    backend.chat = (async (req: ChatCompletionRequest, onDelta?: (c: ChatCompletionChunk) => void) => {
+      if (++chats === 1) await gate;
+      return origChat(req, onDelta);
+    }) as ModelBackend["chat"];
+    const svc = service(backend, events, s.dir);
+    const p1 = svc.send("첫째");
+    await new Promise((r) => setTimeout(r, 50));
+    const r2 = await svc.send("둘째");
+    assert.equal(r2.ok, true, "대기열 수락이 거절됐다");
+    assert.equal(r2.queued, true);
+    assert.match(r2.detail, /대기열/);
+    assert.deepEqual(svc.queueView(), ["둘째"]);
+    release();
+    const r1 = await p1;
+    assert.equal(r1.ok, true);
+    // 비우기까지 같은 send 안에서 돈다 — 끝난 뒤 대기열은 비어 있다
+    assert.deepEqual(svc.queueView(), []);
+    const queues = events.filter((e) => e.type === "agent.queue");
+    assert.ok(queues.length >= 2, "agent.queue 이벤트가 없다 — 화면이 대기열을 모른다");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("대기열 순서를 바꾼다 — 급한 것을 먼저", async () => {
+  const events: AgentEvent[] = [];
+  const s = await sandbox();
+  try {
+    const svc = service(fakeBackend(), events, s.dir);
+    // 직접 큐를 채운다: 실행 중이 아닐 때는 send 가 바로 돈다 — running 을 흉내 내기 위해
+    // loop 를 먼저 잡는다 (send 경로가 아니라 큐 조작 자체를 본다)
+    (svc as unknown as { queue: string[] }).queue.push("a", "b", "c");
+    assert.equal(svc.moveQueue(2, 0), true);
+    assert.deepEqual(svc.queueView(), ["c", "a", "b"]);
+    assert.equal(svc.moveQueue(0, 0), true);
+    assert.equal(svc.moveQueue(-1, 0), false, "음수 인덱스가 통과했다");
+    assert.equal(svc.moveQueue(0, 9), false, "범위 밖이 통과했다");
+    assert.deepEqual(svc.clearQueue(), { cleared: 3 });
+    assert.deepEqual(svc.queueView(), []);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("취소는 대기열까지 비우고 개수를 말한다", async () => {
+  const events: AgentEvent[] = [];
+  const s = await sandbox();
+  try {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let chats = 0;
+    const backend = fakeBackend();
+    const origChat = backend.chat.bind(backend);
+    backend.chat = (async (req: ChatCompletionRequest, onDelta?: (c: ChatCompletionChunk) => void) => {
+      if (++chats === 1) await gate;
+      return origChat(req, onDelta);
+    }) as ModelBackend["chat"];
+    const svc = service(backend, events, s.dir);
+    const p1 = svc.send("첫째");
+    await new Promise((r) => setTimeout(r, 50));
+    await svc.send("둘째");
+    const c = await svc.cancel();
+    assert.match(c.detail, /대기열 1개도 비웠습니다/);
+    assert.deepEqual(svc.queueView(), []);
+    release();
+    await p1;
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("컨텍스트는 잰 값만 말한다 — 없으면 null (0이 아니다)", async () => {
+  const events: AgentEvent[] = [];
+  const s = await sandbox();
+  try {
+    const svc = service(fakeBackend(), events, s.dir);
+    assert.equal(svc.contextUsage(), null);
+    await svc.refreshContext(); // 대화 없음 — 여전히 null
+    assert.equal(svc.contextUsage(), null);
+    await svc.send("안녕");
+    const u = svc.contextUsage();
+    assert.ok(u && u.usedTokens > 0, "턴이 돌았는데도 컨텍스트가 측정되지 않았다");
+    assert.equal(u.totalTokens, 100_000);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("압축 시작·상세를 전용 이벤트로 흘린다 — 상태 줄 텍스트만이 아니다", () => {
+  // ensureLoop 은 private 이라 이벤트 계약(타입+배선)을 본다
+  const code = readFileSync("src/server/agentService.ts", "utf8");
+  const noComments = code.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(noComments, /onCompactionDetail/, "상세 콜백 배선이 없다 — 요약이 화면에 안 나온다");
+  assert.match(noComments, /type: "agent\.compaction"/, "전용 이벤트가 없다");
+  assert.match(noComments, /droppedCount/, "잊혀진 규모가 없다");
+  assert.match(noComments, /summary/, "요약 본문이 없다");
+});
+
+test("강제 OFF는 다음 턴 시작에 ON 으로 돌아온다 — Thinking 상시", () => {
+  const code = readFileSync("src/server/agentService.ts", "utf8");
+  const noComments = code.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(noComments, /wasForced/, "턴 시작 재활성 코드가 없다 — 한 번 꺼지면 영영 꺼진다");
+  assert.match(noComments, /enabled: true/, "ON 복원이 없다");
 });
