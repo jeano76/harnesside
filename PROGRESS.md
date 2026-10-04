@@ -11,13 +11,13 @@
 
 ---
 
-## ① 현재 상태 (마지막 갱신: 2026-09-30)
+## ① 현재 상태 (마지막 갱신: 2026-10-04)
 
 ```yaml
-phase: P17          # M8·M9·§10.6·최초 구동까지 옴. 남은 것은 "배선" 이다
+phase: P17          # M8·M9·§10.6·최초 구동 + P17 나머지(i18n 패널/매트리스 800×600)까지 옴
 status: in_progress
-last_commit: "bfb309d feat(llama): llama.cpp 세 상태를 설정 패널에 · 무한 요청 루프 수정"
-next_action: "상위 감시기 설계 → P18 잔여 브라우저 눈 실측 → 커밋"
+last_commit: "b92edc3 feat(web): 슬래시 자동완성·/term 핸들러 복구·세션 복원 view 블록 제외"
+next_action: "④ 항목 전부 완료 — 다음: P18 미커밋 유닛浏览器 실측 OR 상위 감시기(supervisor) 스코프 결정"
 blocking: 없음
 
 ## 2026-10-01 · 셸 구조 개편 (사용자 지정 · 완료)
