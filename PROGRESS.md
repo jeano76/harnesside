@@ -17,7 +17,7 @@
 phase: P17          # M8·M9·§10.6·최초 구동 + P17 나머지(i18n 패널/매트리스 800×600)까지 옴
 status: in_progress
 last_commit: "b92edc3 feat(web): 슬래시 자동완성·/term 핸들러 복구·세션 복원 view 블록 제외"
-next_action: "④ 항목 전부 완료 — 다음: P18 미커밋 유닛浏览器 실측 OR 상위 감시기(supervisor) 스코프 결정"
+next_action: "④ 항목 전부 완료 — 다음: P18 미커밋 유닛 브라우저 실측 OR 상위 감시기(supervisor) 스코프 결정"
 blocking: 없음
 
 ## 2026-10-01 · 셸 구조 개편 (사용자 지정 · 완료)
@@ -641,3 +641,41 @@ tmux 는 크기가 바뀔 때만 다시 그리므로 새 출력이 오기 전까
 (`E486`). `~/.claude/CLAUDE.md` 는 수정되지 않았음(mtime 불변)을 확인하고 `:q` 로 닫음.
 확인: 서버 재시작 후 새로고침 → claude 선택 직후 지난 화면이 즉시 그려짐. 보낸 질문에 `● 2` 응답 확인.
 **남은 위험**: CLI 가 대화상자·편집기(vim)에 들어가 있으면 프롬프트 입력이 그쪽으로 간다 — 화면에서 상태를 알아보기 어렵다(미해결).
+
+## 2026-10-04 — PROMPT_QUALITY_PRODUCT.md 라운드 A: Q-2 → Q-3 → Q-1 (무게를 뺀다)
+
+**지표(라운드 전 HEAD `1e4a0a2` → 후, 워킹 트리 실측)**: 비테스트 소스 LOC **50,265 → 42,700 (−7,565)** ·
+`src/` 테스트 파일 132 → 158 · `npm test` 1618 → (아래 게이트 참조). 지운 디렉터리: `src/legacy-tui/`(HEAD 7,764줄),
+`src/localstack/`(HEAD 11,963줄 — 단독 29개 파일은 `src/setup/` 으로 **이동**, 중복은 강한 판본으로 **합침**).
+
+**Q-2 (구 Ink TUI 삭제 · 선택지 (가))** — 근거: `tsconfig.server.json` 이 제외해 `dist/legacy-tui` 가 없었고 `bin`(`dist/server/index.js`)
+에서 도달 불가. 이 저장소의 제품은 웹 IDE 다. TUI 의 쓸모 있던 것: `terminal.ts`(capability 감지)는 Q-1 로 `src/setup/terminal.ts`
+에 남아 bootstrap 진행 표시가 쓴다 · `keybindings.ts`·`selection.ts` 는 **옮기지 않았다**(웹은 브라우저 키·선택을 쓰고
+단축키 정본은 `main.tsx` 명령 팔레트다). README `## Screens` 를 **웹 실제 캡처**(`docs/screenshots/web-local.png`, CDP
+`Page.captureScreenshot`, `capture-window.mjs` 와 같은 방법)로 교체, 다시 만들 수 없는 TUI 캡처(`docs/screenshots/*.txt`)와
+`scripts/capture_screens.py`(없는 TUI 바이너리를 실행) 삭제. `grep legacy-tui src scripts tsconfig* vite.config.ts package.json` → 0.
+
+**Q-3 (backend 두 벌 → 강한 쪽)** — `src/backend/{detect,openaiClient,llamaServer,types}.ts` 를 강한 판본으로 교체(이전 작업),
+`COMMON_PORTS` 는 `setup/ports.ts` 한 목록(8081 포함). 강한 판본의 원래 테스트를 `*.strong.test.ts` 로 함께 옮김
+(keepAlive · 절대 deadline · stub 거부 포함, 56건). 기존 `backend/` 테스트는 그대로 통과 — **단 1건은 약한 사본의 동작을 고정**
+하고 있었다: `llamaServer.test.ts` "준비되면 그대로 지나간다" 가 `/bin/true`(즉시 종료)를 자식으로 썼는데 강한 판본은
+"우리 자식이 죽었는데 포트가 응답 = 남의 서버" 를 **실패**로 본다(의도된 동작). 전체 실행에서만 깨지던 원인이 이것 —
+테스트를 "살아 있는 가짜 자식" 으로 고쳤다. `server/blocks.ts`(스트림 상태기, 소비자는 자기 테스트뿐) ↔ `session/blocks.ts`
+(대화 기록 정본) 상단에 1줄씩 정본 구분을 적음.
+
+**Q-1 (localstack 제거)** — 29개 단독 파일 + `terminal.ts` + `util/path.ts`(→ `shared/path.ts`)를 이동, `config.ts` 는 강한 판본에
+`enableThinking: true`(1c039c3 의도) 를 얹어 하나로(`summaryDeadlineMs` · `warmTriggerRatio` · `warmPrefill` · `llama.modelPath` ·
+MoE/speculative 항목 포함). `slashService.ts` import 17개를 새 경로로. 원본 프로젝트의 setup 테스트 39개 파일을 함께 옮김
+(`src/testSupport.ts` 포함) → setup+backend **684 pass**. 원본에 테스트가 없던 `fsUtil.ts` 에 1건 추가.
+옮기며 드러난 **hermetic 결함 2건**: 강한 `findLlamaServer` 는 PATH 와 `$HOME/.config/systemd/user` 유닛까지 보므로
+`firstRun.test.ts` · `verify-firstrun.mjs` 가 이 머신의 llama-server 를 찾아 "설치 없음" 시나리오가 깨짐 → env 격리.
+`firstRun.inspectLlama` 는 판정 함수인데 강한 `findLlamaServer` 가 못 도는 바이너리를 조용히 건너뛰어 "설치됐지만 실행 불가"
+가 "설치 없음" 으로 바뀜 → 찾기만 하고(`probe: () => true`) 실행 가능 여부는 기존처럼 `planFirstRun` 이 이유와 함께 말함.
+`grep -rn localstack src scripts` → 0. 이름: 옮긴 파일 주석의 옛 이름은 저장소 도구(`rename-identifiers.mjs`)로 치환 —
+`.ci/rules.json` 은 **되돌렸다**(이전 작업이 예외를 추가했으나 이 기획서 §8 이 금지).
+
+**실측(2026-10-04, 서버가 띄운 창, CDP)**: 로컬 대상에서 `/models` · `/server` · `/reset` 이 `/api/slash/run` 으로 각각 실제 결과를
+냈다(모델 표 · 포트 8080 상태 · 재계산 미리보기). `node scripts/verify-firstrun.mjs` 19/19.
+**되돌리는 법**: `git tag q1-before-localstack-removal`(= `1e4a0a2`) — `git checkout q1-before-localstack-removal -- src/localstack src/legacy-tui`.
+**§9 미측정 표**: 줄어든 칸 없음(이 라운드는 삭제·통일이라 호환성·배포 항목을 판정하지 않았다).
+**발견했으나 고치지 않은 것**: CLI 대상 화면 캡처에서 헤더의 `…gguf 부팅 12/12` 일부가 붉은 배경으로 칠해짐(터미널 오버레이와 겹침 의심) — 미조사.

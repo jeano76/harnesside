@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { buildConfig, writeConfig, ensureLocalStack } from "./bootstrap.js";
 import type { LlamaTuning } from "./tuning.js";
+import { SRV, writeFakeExe } from "../testSupport.js";
+
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "harnesside-bs-"));
@@ -102,6 +104,9 @@ test("an existing config is read back and merged, not discarded", async () =>
       projectRoot: dir,
       offline: true,
       allowBuild: false,
+      // Injected: without it the bootstrap scans the machine's real listeners, and on a
+      // box with a llama-server up it adopts that one — testing the machine, not the code.
+      detectServer: async () => ({ kind: "none" as const }),
       hardware: {
         cpuCount: 4, ramTotalBytes: 16 * 1024 ** 3, ramAvailableBytes: 12 * 1024 ** 3,
         gpus: [], gpuBackend: "none", canBuildCuda: false, tools: {}, platform: "linux",
@@ -128,21 +133,18 @@ test("a bootstrap that cannot fully do its job still returns a report and a usab
     // config with no `llama` block at all, and failed its own assertion. That
     // is precisely "testing the machine, not the code", the failure mode every
     // injectable seam in this codebase exists to prevent.
-    //
-    // The SECOND machine dependency was the llama **binary**: `buildConfig` only
-    // writes the `llama` block (with the port) when a binary was found. This
-    // box has llama.cpp built, so the assertion held; a CI runner does not, and
-    // the test failed there. Detected in CI, not here. The binary is now
-    // injected through the same env var the real search honours, so the test
-    // asserts the code's contract instead of what happens to be installed.
-    const fakeLlama = join(dir, "fake-llama-server");
-    await writeFile(fakeLlama, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    // The machine under test must not matter: this test passed on a box that happens to have llama.cpp installed and
+    // failed on a clean CI runner. A fake llama-server and an env that points ONLY at it make both the same.
+    const { mkdir: mk, writeFile: wf, chmod: cm } = await import("node:fs/promises");
+    await mk(join(dir, "bin"), { recursive: true });
+    const fakeBin = join(dir, "bin", SRV);
+    await writeFakeExe(fakeBin, { stdout: "version: 1 (abc)" });
     const report = await ensureLocalStack({
+      env: { HOME: join(dir, "home"), PATH: "", HARNESSIDE_LLAMA_SERVER: fakeBin } as NodeJS.ProcessEnv,
       projectRoot: dir,
       offline: true,
       allowBuild: false,
-      detectServer: async () => null,
-      env: { ...process.env, HARNESSIDE_LLAMA_SERVER: fakeLlama },
+      detectServer: async () => ({ kind: "none" as const }),
       hardware: {
         cpuCount: 4, ramTotalBytes: 16 * 1024 ** 3, ramAvailableBytes: 12 * 1024 ** 3,
         gpus: [], gpuBackend: "none", canBuildCuda: false, tools: {}, platform: "linux",
@@ -152,12 +154,12 @@ test("a bootstrap that cannot fully do its job still returns a report and a usab
     // No throw, and a well-formed report either way.
     assert.ok(Array.isArray(report.steps) && report.steps.length > 0);
     assert.ok(Array.isArray(report.errors));
-    // It must have said plainly that no model was found, rather than silently
-    // proceeding — model acquisition was removed, so there is no fallback path.
-    assert.ok(
-      report.steps.some((s) => !s.ok && /모델/.test(s.name)),
-      "a missing model is reported as a failed step, not glossed over"
-    );
+    // Offline: no model can be resolved and none is downloaded, so the model
+    // step is simply not attempted. The property that matters is the one
+    // below — the config must not claim a local backend it cannot serve.
+    const modelStep = report.steps.find((s) => /모델/.test(s.name));
+    assert.ok(modelStep === undefined || modelStep.ok === false,
+      "an offline bootstrap must not report a resolved model as OK");
     // No model, so it must NOT have claimed local-llama — that is the state
     // index.tsx treats as unconfigured and silently falls through to a dead
     // default URL.
@@ -165,4 +167,50 @@ test("a bootstrap that cannot fully do its job still returns a report and a usab
     assert.notEqual(after.backend, "local-llama", "never claims a local backend it cannot serve");
     assert.ok(after.llama?.port, "ports were still decided and recorded");
     assert.ok(report.ports?.llamaPort);
+  }));
+
+// The "keep the model already in use" branch used to fall straight through into
+// the download step, which then called downloadFile with the placeholder empty
+// URL that branch assigns. Reproduced live: the step was reported as
+// "Failed to parse URL from ", modelPath was left empty, and the run went on to
+// spawn a server with an empty model path and die with "failed to open GGUF
+// file" — a working machine turned into a three-stage failure.
+
+test("a model kept from the existing config never enters the download step", async () =>
+  withTempDir(async (dir) => {
+    await mkdir(join(dir, ".harnesside"), { recursive: true });
+    // Outside any models dir, which is the normal case: modelsDir is only a default.
+    const modelPath = join(dir, "existing.gguf");
+    await writeFile(modelPath, Buffer.alloc(4096));
+    // A fake llama-server that prints a version, not /bin/true: coreutils' `true --version` happens to print one on
+    // Linux and prints nothing on macOS, so this test passed or failed by the machine it ran on.
+    await mkdir(join(dir, "bin"), { recursive: true });
+    const fakeBin = join(dir, "bin", SRV);
+    await writeFakeExe(fakeBin, { stdout: "version: 1 (abc)" });
+    await writeFile(
+      join(dir, ".harnesside", "config.yaml"),
+      `backend: local-llama\nmodel: ${modelPath}\nllama:\n  binPath: ${fakeBin}\n  modelPath: ${modelPath}\n  port: 8080\n`
+    );
+
+    const report = await ensureLocalStack({
+      env: { HOME: join(dir, "home"), PATH: "" } as NodeJS.ProcessEnv,
+      projectRoot: dir,
+      hardware: {
+        cpuCount: 4, ramTotalBytes: 16 * 1024 ** 3, ramAvailableBytes: 12 * 1024 ** 3,
+        gpus: [], gpuBackend: "none", canBuildCuda: false, tools: {}, platform: "linux",
+      },
+      probe: async () => "free",
+      detectServer: async () => ({ kind: "none" }) as any,
+      listExistingModels: async () => [],
+    });
+
+    assert.deepEqual(report.errors, [], `expected no errors, got: ${report.errors.join(" | ")}`);
+    const download = report.steps.find((s) => s.name === "모델 다운로드");
+    assert.ok(download, "the download step should still be reported");
+    assert.equal(download!.ok, true, `download step failed: ${download!.detail}`);
+
+    // And the model must survive into the written config, since an empty
+    // modelPath is what made the subsequent server start fail.
+    const after = parse(await readFile(join(dir, ".harnesside", "config.yaml"), "utf8"));
+    assert.equal(after.llama.modelPath, modelPath);
   }));

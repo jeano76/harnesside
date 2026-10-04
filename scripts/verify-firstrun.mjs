@@ -142,6 +142,10 @@ console.log("\n3) 설치 자체가 없음 (판정만 — 빌드·다운로드 �
       // 이 머신에 8080 fake 서버가 떠 있으므로, 판정을 격리한다. 주입하지 않으면
       // "설치 없음" 이 아니라 "이 머신에 서버가 있음" 을 검사하게 된다.
       detectServer: async () => null,
+      // 환경도 격리한다 — llama-server 탐색은 PATH 와 `$HOME/.config/systemd/user` 유닛까지 본다
+      // (Q-1/Q-3 로 합친 강한 판본, 2026-10-04). 실제 환경을 넘기면 이 머신의 설치를 찾아
+      // "설치 없음" 이 아니라 "이 머신에 설치가 있음" 을 검사하게 된다(실측: source "systemd").
+      env: { PATH: "", HOME: home },
       run: async () => {
         ranSomething = true;
         return "";

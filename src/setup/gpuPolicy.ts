@@ -13,7 +13,7 @@
  * 순수 함수 + 주입 가능한 설정 — 유닛 테스트가 머신이 아니라 코드를 검증한다.
  */
 
-import type { Hardware } from "../setup/hardware.js";
+import type { Hardware } from "./hardware.js";
 
 /** 브라우저의 GPU 정책. */
 export type GpuMode = "off" | "budgeted" | "full";

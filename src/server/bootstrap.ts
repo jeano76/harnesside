@@ -258,7 +258,11 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
   {
     const { value, seconds } = await timed(async () => {
       try {
-        return await findLlamaServer({ env: opts.env });
+        // `findLlamaServer` returns a richer `FindResult` (rejected / unverified
+        // paths travel with it) so a "found nothing" answer can say WHY. The
+        // 12-step report only has a slot for the location, so unwrap here —
+        // the extra fields are `/server`·`/models`' business (slashService), not this one's.
+        return (await findLlamaServer({ env: opts.env })).location;
       } catch {
         return null;
       }
@@ -272,7 +276,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
           run: opts.run,
           log,
         } as never);
-        result.llama = { binPath, source: "built", backend: hw?.gpuBackend === "none" ? "cpu" : (hw?.gpuBackend ?? "unknown") };
+        result.llama = { binPath, source: "built", backend: hw?.gpuBackend === "none" ? "cpu" : "cuda" };
       } catch (e) {
         errors.push(`llama.cpp 빌드 실패: ${msg(e)}`);
       }

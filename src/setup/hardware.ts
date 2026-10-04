@@ -13,12 +13,16 @@
  */
 
 import { cpus, totalmem, freemem, platform } from "node:os";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export type GpuBackend = "cuda" | "vulkan" | "none";
+export type GpuBackend = "cuda" | "rocm" | "vulkan" | "metal" | "none";
+
+export type GpuVendor = "nvidia" | "amd" | "intel" | "apple";
 
 export interface Gpu {
   /** nvidia-smi's device index, as llama.cpp's `--main-gpu` / `CUDA_VISIBLE_DEVICES` want it. */
@@ -26,6 +30,13 @@ export interface Gpu {
   name: string;
   vramTotalBytes: number;
   vramFreeBytes: number;
+  /** Absent means NVIDIA — the only vendor this type described originally, so
+   *  every existing literal and `parseNvidiaSmiCsv` stays valid unchanged. */
+  vendor?: GpuVendor;
+  /** True when "VRAM" is really system RAM the GPU may address (Apple Silicon).
+   *  Then `vramTotalBytes` is the GPU's working-set budget, NOT physical memory
+   *  that is additional to RAM — callers that add the two together double-count. */
+  unifiedMemory?: boolean;
 }
 
 export interface Hardware {
@@ -42,20 +53,50 @@ export interface Hardware {
    *  what the *machine* has: a box can have a GPU and no CUDA compiler, in
    *  which case building must not ask for `-DGGML_CUDA=ON`. */
   canBuildCuda: boolean;
+  /** A ROCm/HIP compiler is present AND an AMD GPU is, so `-DGGML_HIP=ON` can work. */
+  canBuildRocm?: boolean;
+  /** A Vulkan shader compiler (`glslc`) is present, so `-DGGML_VULKAN=ON` can work. */
+  canBuildVulkan?: boolean;
+  /** CPU architecture as Node names it ("x64" | "arm64" …). */
+  arch?: string;
   /** Build toolchain availability, as found on PATH. */
   tools: Record<string, boolean>;
   platform: string;
+  /** Linux C library. The published llama.cpp prebuilts are glibc builds: on musl (Alpine) they download fine and
+   *  then fail to run, so the ladder skips them instead of fetching a binary that cannot start. */
+  libc?: "glibc" | "musl";
 }
 
 /** Command runner seam. `run("nvidia-smi", [...])` resolves with stdout, or
  *  rejects if the binary is missing / exits nonzero — callers that treat a
  *  missing tool as "just CPU then" wrap it in try/catch. */
-export type Run = (file: string, args: string[]) => Promise<string>;
+/** Optional per-call settings for a `Run`. Third parameter so every existing
+ *  two-argument call site and test double keeps working unchanged. */
+export interface RunOptions {
+  timeout?: number;
+  maxBuffer?: number;
+  /** Resolve with the output instead of rejecting on a non-zero exit.
+   *
+   *  Needed wherever the exit code IS the signal — probing whether a
+   *  llama-server build can parse a model file fails precisely by exiting
+   *  non-zero, and treating that as a thrown error loses the message that says
+   *  why. */
+  tolerateExitCode?: boolean;
+  windowsHide?: boolean;
+}
 
-export const defaultRun: Run = async (file, args) => {
+export type Run = (file: string, args: string[], opts?: RunOptions) => Promise<string>;
+
+export const defaultRun: Run = async (file, args, opts = {}) => {
   const { stdout } = await execFileAsync(file, args, {
-    timeout: 10_000,
-    maxBuffer: 8 * 1024 * 1024,
+    timeout: opts.timeout ?? 10_000,
+    maxBuffer: opts.maxBuffer ?? 8 * 1024 * 1024,
+    windowsHide: opts.windowsHide,
+  }).catch((err: any) => {
+    if (!opts.tolerateExitCode) throw err;
+    // execFile puts both streams in the error's message on failure, which is
+    // where the "invalid ggml type" text lives.
+    return { stdout: `${err.stdout ?? ""}${err.stderr ?? ""}` };
   });
   return stdout;
 };
@@ -102,16 +143,299 @@ export function parseNvidiaSmiCsv(csv: string): Gpu[] {
 const MiB = 1024 * 1024;
 const GiB = 1024 * MiB;
 
+/** Per-process VRAM, straight from the driver's own accounting.
+ *
+ *  `nvidia-smi`'s memory.total/memory.free pair cannot tell us WHICH process is
+ *  holding the card, and that distinction is the whole point: the tuner needs
+ *  to discount harnesside's own llama-server (whose weights are the memory it is
+ *  sizing a context FOR) while still respecting an unrelated app. The compute
+ *  apps table is the only query that attributes memory to a pid, so this is
+ *  what makes the discount safe rather than a guess.
+ */
+const NVIDIA_COMPUTE_QUERY_ARGS = ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"];
+
+/** Parses the compute-apps table into pid → bytes.
+ *
+ *  Rows can be absent (no CUDA processes), and MIG/driver states have produced
+ *  "N/A" in the used_memory column, so a row is skipped rather than poisoning
+ *  the map with NaN. A missing pid therefore means "no measurable usage",
+ *  which callers treat as 0 — the conservative direction.
+ */
+export function parseNvidiaComputeAppsCsv(csv: string): Map<number, number> {
+  const byPid = new Map<number, number>();
+  for (const line of csv.split("\n")) {
+    const row = line.trim();
+    if (!row) continue;
+    const tail = row.split(",");
+    if (tail.length < 2) continue;
+    const pid = Number(tail[0].trim());
+    const usedMiB = Number(tail[tail.length - 1].trim());
+    if (!Number.isFinite(pid) || !Number.isFinite(usedMiB) || usedMiB <= 0) continue;
+    byPid.set(pid, usedMiB * MiB);
+  }
+  return byPid;
+}
+
+/**
+ * Finds llama-server processes belonging to THIS install.
+ *
+ * Attribution is deliberately narrow, because a false positive here hands out a
+ * context the card cannot hold. A pid qualifies only if it is running a binary
+ * whose realpath is inside this install's llama.cpp build directory — which is
+ * what harnesside launches (see bootstrap's buildLlamaCpp) — and not merely
+ * anything named "llama-server", since a system-wide package or another user's
+ * session would match on name alone.
+ *
+ * Best-effort by construction: no `pgrep` (minimal containers, Windows), or a
+ * permission error, yields an empty list, and the caller then keeps the plain
+ * free-VRAM reading. That is the safe direction — crediting nothing never
+ * over-allocates.
+ */
+export async function findOwnLlamaServerPids(
+  llamaDir: string | undefined,
+  run: Run = defaultRun
+): Promise<number[]> {
+  if (!llamaDir) return [];
+  let out: string;
+  try {
+    // `pgrep -f` matches the full command line, which is where the binary path
+    // appears; -x is deliberately NOT used because the command line carries
+    // flags (-m, --port, ...) we do not want to pin exactly.
+    out = await run("pgrep", ["-f", `llama-server`]);
+  } catch {
+    return []; // pgrep exits 1 when nothing matched — that is not an error
+  }
+  const pids = out
+    .split("\n")
+    .map((l) => Number(l.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (pids.length === 0) return [];
+
+  // Confirm each candidate's executable really lives in our build dir.
+  const own: number[] = [];
+  for (const pid of pids) {
+    try {
+      const exe = (await run("readlink", ["-f", `/proc/${pid}/exe`])).trim();
+      if (exe && isInsideDir(exe, llamaDir)) own.push(pid);
+    } catch {
+      // Can't read it (permissions, or the process exited between the two
+      // calls) — not provably ours, so not credited.
+    }
+  }
+  return own;
+}
+
+/** True when `child` resolves to a path inside `dir` (or `dir` itself).
+ *
+ *  Compared on resolved, separator-normalised paths so a trailing slash or a
+ *  `..` segment can't produce a match, and a sibling directory that merely
+ *  shares a prefix ("/opt/harnesside-2" vs "/opt/harnesside") is correctly
+ *  rejected. */
+function isInsideDir(child: string, dir: string): boolean {
+  const norm = (p: string) => resolve(p).replace(/\\/g, "/").replace(/\/+$/, "");
+  const c = norm(child);
+  const d = norm(dir);
+  return c === d || c.startsWith(d + "/");
+}
+
+/**
+ * VRAM held by a llama-server belonging to THIS install, in GiB.
+ *
+ * Pid set is passed in rather than discovered here because "is this llama-server
+ * ours" is a question about which binary we launched, not about the driver. Only
+ * positively-attributed pids count, and the result is clamped to the card size
+ * in the caller. Returns 0 when nothing is attributable, which keeps a first run
+ * (genuinely empty card) on the plain free-VRAM reading.
+ */
+export async function ownLlamaServerVramGiB(
+  serverPids: readonly number[],
+  run: Run = defaultRun
+): Promise<number> {
+  if (serverPids.length === 0) return 0;
+  try {
+    const byPid = parseNvidiaComputeAppsCsv(await run("nvidia-smi", NVIDIA_COMPUTE_QUERY_ARGS));
+    let total = 0;
+    for (const pid of serverPids) total += byPid.get(pid) ?? 0;
+    return total / GiB;
+  } catch {
+    // No nvidia-smi / no permission / MIG: fall back to discounting nothing.
+    return 0;
+  }
+}
+
 /** Toolchain we need before a from-source llama.cpp build can even be
  *  attempted. `curl` is not a build dep but IS needed to download a model, and
  *  its absence is a very different failure than a missing compiler, so it's
  *  reported here too. */
-const PROBE_TOOLS = ["git", "cmake", "make", "ninja", "g++", "cc", "nvcc", "curl", "pkg-config"];
+const PROBE_TOOLS = [
+  "c++", "clang++",
+  "git", "cmake", "make", "ninja", "g++", "cc", "nvcc", "curl", "pkg-config",
+  // Accelerator toolchains: decide whether a GPU-targeted source build can work.
+  "hipcc", "glslc", "vulkaninfo",
+  // Installers and privilege: decide HOW missing build tools could be installed.
+  "sudo", "apt-get", "dnf", "pacman", "apk", "zypper", "brew", "winget", "choco", "pip3",
+  // Windows-only compiler; harmless to probe elsewhere.
+  "cl",
+];
 
-export async function detectHardware(run: Run = defaultRun): Promise<Hardware> {
+/** Everything `detectHardware` reads from the host besides running commands.
+ *  A seam so a synthetic AMD / Apple / Windows machine can be tested on any box. */
+export interface HostProbe {
+  platform: string;
+  arch: string;
+  ramTotalBytes: number;
+  ramAvailableBytes: number;
+  cpuCount: number;
+  /** UTF-8 contents of a file, or null when absent/unreadable. */
+  readText: (path: string) => Promise<string | null>;
+  /** Entries of a directory, or [] when absent. */
+  listDir: (path: string) => Promise<string[]>;
+}
+
+/** What a cgroup (a container's `--memory` / `--cpus`, a systemd slice's `MemoryMax`) limits this process to.
+ *  `os.totalmem()` / `os.cpus()` report the HOST, so on a 4 GiB container they said 31 GiB and the tuner
+ *  picked a model the container is OOM-killed on. Undefined fields = unlimited / unreadable. */
+export interface CgroupLimits {
+  memoryBytes?: number;
+  memoryUsedBytes?: number;
+  cpuCores?: number;
+}
+
+/** Reads cgroup v2 (`memory.max`, `memory.current`, `cpu.max`) and v1 (`memory.limit_in_bytes`,
+ *  `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `read` returns a file's text or null. The process's own cgroup
+ *  directory (`/proc/self/cgroup`) is tried before the root, so a limit set on a slice is seen too. */
+export function readCgroupLimits(read: (path: string) => string | null): CgroupLimits {
+  const out: CgroupLimits = {};
+  const own = (read("/proc/self/cgroup") ?? "").split("\n").map((l) => /^0::(\/.*)$/.exec(l)?.[1]).find(Boolean) ?? "";
+  const dirs = [...new Set([own && own !== "/" ? `/sys/fs/cgroup${own}` : "", "/sys/fs/cgroup"].filter(Boolean))];
+  const num = (t: string | null): number | undefined => {
+    const v = t?.trim();
+    return v && /^\d+$/.test(v) ? Number(v) : undefined; // "max" = unlimited
+  };
+  // The tightest limit wins: a slice below the root can be stricter than the root's.
+  let mem: number | undefined;
+  let used: number | undefined;
+  let cpu: number | undefined;
+  for (const d of dirs) {
+    const m = num(read(`${d}/memory.max`)) ?? num(read(`${d}/memory/memory.limit_in_bytes`));
+    // v1 reports "no limit" as a huge number (~2^63); treat anything above 2^60 as unlimited.
+    if (m !== undefined && m < 2 ** 60 && (mem === undefined || m < mem)) {
+      mem = m;
+      used = num(read(`${d}/memory.current`)) ?? num(read(`${d}/memory/memory.usage_in_bytes`));
+    }
+    const cm = (read(`${d}/cpu.max`) ?? "").trim().split(/\s+/);
+    if (cm.length === 2 && /^\d+$/.test(cm[0]) && /^\d+$/.test(cm[1]) && Number(cm[1]) > 0) {
+      const c = Number(cm[0]) / Number(cm[1]);
+      if (cpu === undefined || c < cpu) cpu = c;
+    }
+    const q = Number((read(`${d}/cpu/cpu.cfs_quota_us`) ?? "").trim());
+    const per = Number((read(`${d}/cpu/cpu.cfs_period_us`) ?? "").trim());
+    if (Number.isFinite(q) && q > 0 && Number.isFinite(per) && per > 0) {
+      const c = q / per;
+      if (cpu === undefined || c < cpu) cpu = c;
+    }
+  }
+  if (mem !== undefined) { out.memoryBytes = mem; if (used !== undefined) out.memoryUsedBytes = used; }
+  if (cpu !== undefined) out.cpuCores = cpu;
+  return out;
+}
+
+/** Host figures clamped to the cgroup's limits. Pure so it is testable without a container. */
+export function applyCgroupLimits(
+  host: { ramTotalBytes: number; ramAvailableBytes: number; cpuCount: number },
+  limits: CgroupLimits
+): { ramTotalBytes: number; ramAvailableBytes: number; cpuCount: number } {
+  let { ramTotalBytes, ramAvailableBytes, cpuCount } = host;
+  if (limits.memoryBytes !== undefined && limits.memoryBytes < ramTotalBytes) {
+    ramTotalBytes = limits.memoryBytes;
+    const free = limits.memoryBytes - (limits.memoryUsedBytes ?? 0);
+    ramAvailableBytes = Math.max(0, Math.min(ramAvailableBytes, free));
+  }
+  if (limits.cpuCores !== undefined) cpuCount = Math.max(1, Math.min(cpuCount, Math.ceil(limits.cpuCores)));
+  return { ramTotalBytes, ramAvailableBytes, cpuCount };
+}
+
+const readSyncOrNull = (p: string): string | null => {
+  try { return readFileSync(p, "utf8"); } catch { return null; }
+};
+
+export const realHostProbe = (): HostProbe => ({
+  platform: platform(),
+  arch: process.arch,
   // os.cpus() returns [] in some container/VM setups, so keep a floor of 1
-  // rather than propagating 0 into every downstream division.
-  const cpuCount = Math.max(1, cpus().length || 1);
+  // rather than propagating 0 into every downstream division. Clamped to the cgroup (container) limits.
+  ...applyCgroupLimits(
+    { ramTotalBytes: totalmem(), ramAvailableBytes: freemem(), cpuCount: Math.max(1, cpus().length || 1) },
+    platform() === "linux" ? readCgroupLimits(readSyncOrNull) : {}
+  ),
+  readText: async (p) => {
+    const { readFile } = await import("node:fs/promises");
+    return readFile(p, "utf8").catch(() => null);
+  },
+  listDir: async (p) => {
+    const { readdir } = await import("node:fs/promises");
+    return readdir(p).catch(() => []);
+  },
+});
+
+/** Share of unified memory macOS lets the GPU wire by default. Apple documents no
+ *  fixed number; the commonly observed default on machines up to ~64 GB is about
+ *  two thirds, rising toward three quarters on larger ones. 0.67 is deliberately
+ *  on the low side: a model sized to a budget the OS then refuses fails at load,
+ *  whereas an under-sized one only runs slightly smaller. */
+export const APPLE_GPU_MEMORY_FRACTION = 0.67;
+
+const PCI_VENDORS: Record<string, GpuVendor> = { "0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel" };
+
+/** AMD GPUs from the kernel's own amdgpu sysfs files (`mem_info_vram_*`, bytes).
+ *  Read from sysfs rather than parsing `rocm-smi` output, because sysfs works with
+ *  no ROCm userspace installed — which is exactly the machine being provisioned. */
+export async function detectAmdGpus(host: HostProbe): Promise<Gpu[]> {
+  const gpus: Gpu[] = [];
+  const drmRoot = process.env.HARNESSIDE_DRM_ROOT || "/sys/class/drm";
+  const cards = (await host.listDir(drmRoot)).filter((n) => /^card\d+$/.test(n)).sort();
+  for (const card of cards) {
+    const dev = `${drmRoot}/${card}/device`;
+    const vendor = (await host.readText(`${dev}/vendor`))?.trim().toLowerCase();
+    if (!vendor || PCI_VENDORS[vendor] !== "amd") continue;
+    const total = Number((await host.readText(`${dev}/mem_info_vram_total`))?.trim());
+    if (!Number.isFinite(total) || total <= 0) continue; // an APU reports none here
+    const used = Number((await host.readText(`${dev}/mem_info_vram_used`))?.trim());
+    const product = (await host.readText(`${dev}/product_name`))?.trim();
+    gpus.push({
+      index: gpus.length,
+      name: product || `AMD GPU (${card})`,
+      vramTotalBytes: total,
+      vramFreeBytes: Number.isFinite(used) ? Math.max(0, total - used) : total,
+      vendor: "amd",
+    });
+  }
+  return gpus;
+}
+
+/** Windows adapter names (one per line) that mean a real GPU with a Vulkan driver.
+ *  Excludes the software/remote adapters Windows always lists ("Microsoft Basic
+ *  Render Driver", "Microsoft Remote Display Adapter", Hyper-V), which would
+ *  otherwise make every virtual machine look accelerated. */
+export function windowsAdapterHasVulkanGpu(namesText: string): boolean {
+  return namesText
+    .split(/\r?\n/)
+    .map((n) => n.trim())
+    .filter((n) => n && !/microsoft|basic|remote|hyper-v|virtual|vmware|parsec/i.test(n))
+    .some((n) => /radeon|\bamd\b|\barc\b|iris|uhd|intel/i.test(n));
+}
+
+/** True when `vulkaninfo --summary` lists a real (non-software) device. */
+export function vulkanSummaryHasGpu(summary: string): boolean {
+  return /PHYSICAL_DEVICE_TYPE_(DISCRETE|INTEGRATED|VIRTUAL)_GPU/.test(summary);
+}
+
+export async function detectHardware(
+  run: Run = defaultRun,
+  hostOverride: Partial<HostProbe> = {}
+): Promise<Hardware> {
+  const host: HostProbe = { ...realHostProbe(), ...hostOverride };
+  const isWin = host.platform === "win32";
 
   let gpus: Gpu[] = [];
   try {
@@ -124,7 +448,11 @@ export async function detectHardware(run: Run = defaultRun): Promise<Hardware> {
   await Promise.all(
     PROBE_TOOLS.map(async (tool) => {
       try {
-        await run("sh", ["-c", `command -v ${tool}`]);
+        // `command -v` is a shell builtin that does not exist on Windows, where
+        // every tool would read as absent and a perfectly equipped machine would
+        // be told to install a compiler it already has.
+        if (isWin) await run("where", [tool]);
+        else await run("sh", ["-c", `command -v ${tool}`]);
         tools[tool] = true;
       } catch {
         tools[tool] = false;
@@ -132,15 +460,66 @@ export async function detectHardware(run: Run = defaultRun): Promise<Hardware> {
     })
   );
 
+  // Non-NVIDIA accelerators. NVIDIA wins when present ("Nvidia GPU를 우선 순으로").
+  let gpuBackend: GpuBackend = gpus.length > 0 ? "cuda" : "none";
+  if (gpus.length === 0) {
+    if (host.platform === "darwin" && host.arch === "arm64") {
+      // Apple Silicon: one GPU sharing system RAM. Reported as a GPU so every
+      // consumer of `gpus` sizes the model against it, flagged so the memory is
+      // not counted twice.
+      const budget = Math.floor(host.ramTotalBytes * APPLE_GPU_MEMORY_FRACTION);
+      gpus = [{
+        index: 0,
+        name: "Apple Silicon (unified memory)",
+        vramTotalBytes: budget,
+        vramFreeBytes: Math.floor(host.ramAvailableBytes * APPLE_GPU_MEMORY_FRACTION),
+        vendor: "apple",
+        unifiedMemory: true,
+      }];
+      gpuBackend = "metal";
+    } else if (host.platform === "linux") {
+      gpus = await detectAmdGpus(host);
+      if (gpus.length > 0) gpuBackend = tools.hipcc ? "rocm" : "vulkan";
+    }
+  }
+  if (gpuBackend === "none" && isWin) {
+    // No sysfs and no vulkaninfo on a stock Windows box; the adapter list is what is
+    // there. Memory is not read (`AdapterRAM` is a 32-bit field that caps at 4 GiB and
+    // would mis-size every modern card), so the model is sized as for a CPU machine
+    // while the engine still gets the Vulkan build.
+    try {
+      const names = await run("powershell", ["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name"], { timeout: 15_000 });
+      if (windowsAdapterHasVulkanGpu(names)) gpuBackend = "vulkan";
+    } catch { /* no PowerShell: stay CPU */ }
+  }
+  if (gpuBackend === "none" && tools.vulkaninfo) {
+    // Intel, or any device with no VRAM figure we can read. The backend is known
+    // (Vulkan runs on it) even though its memory is not, so the model is sized as
+    // for a CPU box while the engine still uses the accelerator.
+    try {
+      if (vulkanSummaryHasGpu(await run("vulkaninfo", ["--summary"], { timeout: 10_000 }))) {
+        gpuBackend = "vulkan";
+      }
+    } catch {
+      /* no usable Vulkan driver */
+    }
+  }
+
   return {
-    cpuCount,
-    ramTotalBytes: totalmem(),
-    ramAvailableBytes: freemem(),
+    cpuCount: host.cpuCount,
+    ramTotalBytes: host.ramTotalBytes,
+    ramAvailableBytes: host.ramAvailableBytes,
     gpus,
-    gpuBackend: gpus.length > 0 ? "cuda" : "none",
-    canBuildCuda: gpus.length > 0 && Boolean(tools.nvcc),
+    gpuBackend,
+    canBuildCuda: gpus.length > 0 && (gpus[0].vendor ?? "nvidia") === "nvidia" && Boolean(tools.nvcc),
+    canBuildRocm: gpus.some((g) => g.vendor === "amd") && Boolean(tools.hipcc),
+    canBuildVulkan: Boolean(tools.glslc),
+    arch: host.arch,
     tools,
-    platform: platform(),
+    platform: host.platform,
+    ...(host.platform === "linux"
+      ? { libc: ((await host.listDir("/lib").catch(() => [])) as string[]).some((n) => /^ld-musl-/.test(n)) ? ("musl" as const) : ("glibc" as const) }
+      : {}),
   };
 }
 

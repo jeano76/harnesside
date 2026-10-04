@@ -1,35 +1,35 @@
 /**
- * 슬래시 `/models` · `/server` · `/reset` — llamacli(TUI)의 `onSlashCommand` 를 **같은 내용**으로
- * 서버에서 실행한다 (`src/localstack/` 은 llamacli 의 setup·backend 모듈을 옮긴 것).
+ * 슬래시 `/models` · `/server` · `/reset` — 구 TUI(2026-10-04 삭제)의 `onSlashCommand` 를 **같은 내용**으로
+ * 서버에서 실행한다 (setup·backend 모듈은 Q-1 로 `src/setup/`·`src/backend/` 에 합쳤다).
  *
  * 오래 걸리는 일(모델 내려받기·서버 재시작)이 있어서 요청 하나로 끝내지 않는다:
  * `start()` 가 작업을 만들고, 화면이 `get()` 으로 **지금까지의 출력**을 가져간다.
  * 끝나기 전에 결과를 지어내지 않는다 — `done` 이 `true` 일 때만 끝난 것이다.
  *
- * 서버를 내리거나 설정을 덮어쓰는 단계는 llamacli 와 똑같이 **두 번째 명령**
+ * 서버를 내리거나 설정을 덮어쓰는 단계는 구 TUI와 똑같이 **두 번째 명령**
  * (`/models <n> confirm` · `/server restart confirm` · `/reset confirm`)이 있어야만 실행된다.
  * 미리보기만 하는 경로는 아무것도 바꾸지 않는다.
  */
 
 import { dirname } from "node:path";
 import { stat } from "node:fs/promises";
-import { loadConfig } from "../localstack/config.js";
-import { ensureLocalStack } from "../localstack/setup/bootstrap.js";
-import { describeReset, describeInForce } from "../localstack/setup/resetDiff.js";
-import { previewReset } from "../localstack/setup/resetPreview.js";
-import { evaluateAll, evaluateFit, findRung, formatModelTable, usableVramGiB } from "../localstack/setup/modelMetrics.js";
-import { selectModel, recordServerState } from "../localstack/setup/modelSelect.js";
-import { describeGpuPlan } from "../localstack/setup/gpuReport.js";
-import { isMoeModel, readGgufKvShape } from "../localstack/setup/ggufMeta.js";
-import { probeModelCompatibility } from "../localstack/setup/llamaCpp.js";
-import { detectHardware, findOwnLlamaServerPids, ownLlamaServerVramGiB } from "../localstack/setup/hardware.js";
-import { tuneForHardware } from "../localstack/setup/tuning.js";
-import { switchModelAndServer, detectPortOwner, resolveLiveServerPort, parseLlamaServerArgs } from "../localstack/setup/modelSwitch.js";
-import { reportServer } from "../localstack/setup/serverReport.js";
-import { runServerRestart, gateModelSwitch } from "../localstack/setup/serverCommand.js";
-import { provisionForSwitch } from "../localstack/setup/provision.js";
-import { formatProgress, type TransferProgress } from "../localstack/setup/download.js";
-import { baseName } from "../localstack/util/path.js";
+import { loadConfig } from "../config.js";
+import { ensureLocalStack } from "../setup/bootstrap.js";
+import { describeReset, describeInForce } from "../setup/resetDiff.js";
+import { previewReset } from "../setup/resetPreview.js";
+import { evaluateAll, evaluateFit, findRung, formatModelTable, usableVramGiB } from "../setup/modelMetrics.js";
+import { selectModel, recordServerState } from "../setup/modelSelect.js";
+import { describeGpuPlan } from "../setup/gpuReport.js";
+import { isMoeModel, readGgufKvShape } from "../setup/ggufMeta.js";
+import { probeModelCompatibility } from "../setup/llamaCpp.js";
+import { detectHardware, findOwnLlamaServerPids, ownLlamaServerVramGiB } from "../setup/hardware.js";
+import { tuneForHardware } from "../setup/tuning.js";
+import { switchModelAndServer, detectPortOwner, resolveLiveServerPort, parseLlamaServerArgs } from "../setup/modelSwitch.js";
+import { reportServer } from "../setup/serverReport.js";
+import { runServerRestart, gateModelSwitch } from "../setup/serverCommand.js";
+import { provisionForSwitch } from "../setup/provision.js";
+import { formatProgress, type TransferProgress } from "../setup/download.js";
+import { baseName } from "../shared/path.js";
 
 export const SERVER_SLASH_KEYS = ["models", "server", "reset"] as const;
 export type ServerSlashKey = (typeof SERVER_SLASH_KEYS)[number];
@@ -56,7 +56,7 @@ interface Job {
 export interface SlashServiceOptions {
   projectRoot: string;
   /**
-   * 서버가 실제로 바뀐 뒤 **세션을 새 서버에 맞춘다** (llamacli 의 `syncSessionToServer`).
+   * 서버가 실제로 바뀐 뒤 **세션을 새 서버에 맞춘다** (구 TUI의 `syncSessionToServer`).
    * 맞추지 않으면 에이전트는 옛 모델 이름으로 요청한다. 보여줄 줄을 돌려준다.
    */
   onModelSwitched?: (modelPath: string, contextSize?: number) => Promise<string[]> | string[];

@@ -38,6 +38,10 @@ function base(over: Partial<FirstRunOptions> = {}): FirstRunOptions {
   return {
     modelsDir: "/nonexistent-models",
     home: "/nonexistent-home",
+    // **환경도 격리한다.** 강한 판본의 `findLlamaServer`(Q-3/Q-1, 2026-10-04)는 PATH 와
+    // `$HOME/.config/systemd/user` 의 유닛까지 본다 — 실제 환경을 넘기면 이 머신의 llama-server 를
+    // 찾아 "설치 없음" 시나리오가 "설치됨" 으로 바뀐다(실측: source "systemd").
+    env: { PATH: "/nonexistent-bin", HOME: "/nonexistent-home" },
     allowInstall: false,
     run: async () => "version: b9999\n",
     probe: async () => "free" as PortState,

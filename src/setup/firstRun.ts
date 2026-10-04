@@ -129,7 +129,12 @@ export async function inspectLlama(opts: {
   if (running) return { situation: "running", running, llama: null };
 
   // 2) 바이너리.
-  const llama = await findLlamaServer({ env, home: opts.home }).catch(() => null);
+  // 여기서는 **찾기만** 한다(판정 함수다). `findLlamaServer` 는 기본으로 후보를 실행해 보고 못 도는
+  // 바이너리를 조용히 건너뛰는데, 그러면 "설치돼 있지만 실행할 수 없다" 가 "설치 없음" 으로 바뀌고
+  // 사용자는 이유를 못 듣는다(2026-10-04 실측). 실행 가능 여부는 `planFirstRun` 이 `probeLlamaServer`
+  // 로 따로 확인해 **이유와 함께** 말한다. 모델 호환성 검사도 여기서는 하지 않는다(모델 미정).
+  const found = await findLlamaServer({ env, home: opts.home, probe: async () => true, checkModel: false }).catch(() => null);
+  const llama = found?.location ?? null;
   if (llama) return { situation: "installed", running: null, llama };
   return { situation: "missing", running: null, llama: null };
 }

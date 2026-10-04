@@ -62,6 +62,29 @@ test("the known-good 12-core tuning is unchanged by the clamp", () => {
   assert.equal(t.parallel, 1);
 });
 
+// The slot decision's stated reason used to be "every extra slot multiplies the
+// KV cache", cited as a load-time OOM argument. That is false for an explicit
+// -np — llama.cpp allocates the KV pool once at n_ctx/n_parallel
+// (llama-context.cpp:294 -> llama-model.cpp:2600), so more slots mean a SMALLER
+// pool. Multiplication only happens under kv_unified, which llama.cpp turns on
+// when -np is omitted (server.cpp:156-160). The rationale has to name the real
+// trap, because "raise parallel" and "drop -np" both used to be described as
+// dangerous for the same false reason and they are the opposite of each other.
+test("the parallel-slot rationale explains the unified-KV trap rather than repeating the disproven claim", () => {
+  const t = tuneForHardware(machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 7.2 } }));
+  const slot = t.rationale.find((r) => r.includes("--parallel"));
+  assert.ok(slot, "the slot decision must be explained to the user");
+  assert.match(slot, /kv_unified/, "must name unified KV as the thing that actually grows the pool");
+  // "곱해지지 않습니다" (does NOT multiply) legitimately contains 곱해, so match
+  // the disproven ASSERTION instead: the old text claimed extra slots DO
+  // multiply the cache. Asserting on the substring alone would reject the
+  // correction that documents the opposite.
+  assert.ok(
+    !/(슬롯을 늘리면|extra slot).{0,30}(곱|multiply)/.test(slot) && !/4배/.test(slot),
+    `the disproven "a slot multiplies the KV cache" claim must be gone, got: ${slot}`
+  );
+});
+
 test("no GPU means CPU-only, and a GPU always wins over the CPU", () => {
   for (const cpuCount of [1, 4, 8, 32]) {
     const cpuOnly = tuneForHardware(machine({ cpuCount, ramGiB: 16 }));
@@ -162,7 +185,56 @@ test("MoE expert offload is proportional to the shortfall and bounded", () => {
   assert.equal(fits.cpuMoeLayers, 0, "a model that fits must not be offloaded to the CPU");
   const huge = tuneForHardware(machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "small", totalGiB: 4, freeGiB: 3.5 } }), { modelBytes: 70 * GiB });
   assert.ok(huge.cpuMoeLayers >= 1, "a badly-fitting model must offload some experts");
-  assert.ok(huge.cpuMoeLayers <= 80, `cpuMoeLayers ${huge.cpuMoeLayers} exceeds the 60% cap`);
+  assert.ok(huge.cpuMoeLayers <= 32, `cpuMoeLayers ${huge.cpuMoeLayers} exceeds the 40% cap`);
+});
+
+// ── A measured value must outrank the formula ──────────────────────────────
+
+const box8gb = machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 7.2 } });
+const ORNITH_35B = 21_713_463_040; // the Q4_K_M this was measured on
+
+test("a benchmarked --n-cpu-moe is kept, not recomputed", () => {
+  // On this box the formula produced 48 where a benchmark produced 30 — a 1.6x
+  // overshoot, with the difference measured at +136% decode. The bootstrap runs
+  // on every launch, so a formula that wins overwrites a measurement once per
+  // start, forever.
+  const measured = tuneForHardware(box8gb, { modelBytes: ORNITH_35B, cpuMoeLayers: 30 });
+  assert.equal(measured.cpuMoeLayers, 30);
+  assert.ok(
+    measured.rationale.some((r) => /실측된 값/.test(r)),
+    "keeping a measured value must be stated, not silent"
+  );
+});
+
+test("without a measured value the formula applies, and lands on the measured value", () => {
+  const computed = tuneForHardware(box8gb, { modelBytes: ORNITH_35B });
+  // The old 0.6 cap produced 48 here. The benchmarked safe value is 30.
+  assert.ok(
+    computed.cpuMoeLayers <= 32,
+    `a computed value above the benchmarked point is a regression: got ${computed.cpuMoeLayers}`
+  );
+  assert.ok(computed.cpuMoeLayers > 0, "a 21 GB model on an 8 GB card does need CPU MoE paging");
+});
+
+test("a measured value of 0 means 'not measured', not 'measured as zero'", () => {
+  // 0 is llama.cpp's own default and is exactly what an 8 GB card cannot do,
+  // so it must not be honoured as a measurement.
+  const t = tuneForHardware(box8gb, { modelBytes: ORNITH_35B, cpuMoeLayers: 0 });
+  assert.ok(t.cpuMoeLayers > 0);
+});
+
+test("a caller's value is used verbatim, for a different model or quant", () => {
+  // The benchmarked number is per model+quant; nothing here second-guesses it.
+  assert.equal(tuneForHardware(box8gb, { modelBytes: ORNITH_35B, cpuMoeLayers: 26 }).cpuMoeLayers, 26);
+});
+
+test("a machine with no GPU is unaffected by any of this", () => {
+  const cpuOnly = tuneForHardware(
+    machine({ cpuCount: 12, ramGiB: 30, gpu: null }),
+    { modelBytes: ORNITH_35B }
+  );
+  assert.equal(cpuOnly.gpuLayers, 0);
+  assert.equal(cpuOnly.cpuMoeLayers, 0, "--n-cpu-moe is meaningless with no GPU");
 });
 
 test("every rationale line is non-empty, and every decision is explained", () => {
@@ -171,4 +243,150 @@ test("every rationale line is non-empty, and every decision is explained", () =>
     assert.ok(t.rationale.length >= 4, "a tuning decision must carry several explanations");
     for (const r of t.rationale) assert.ok(r.trim().length > 0, "no rationale line may be blank");
   }
+});
+
+// The context is sized from a KV-cache budget, so the two things that decide it
+// are the memory available and the model's own per-token cost. The regression
+// these cover: keying the context on card size alone gave a 35B the same
+// generous window as a 9B on the same GPU, which is the case that OOMs.
+const ORNITH_9B = 5_368_709_120; // 9B Q4_K_M, for the model-size comparison below
+
+test("the reference box reproduces the context its own server is demonstrably running", () => {
+  // Anchoring case. RTX 2070 SUPER 8 GiB with the 35B-A3B has been running
+  // `-c 16384`; a tuner that disagrees with a known-good configuration by 25%
+  // is not "more optimal", it is inventing a setting nobody has run.
+  const t = tuneForHardware(machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 7.28 } }), {
+    modelBytes: ORNITH_35B,
+  });
+  assert.equal(t.contextSize, 16384);
+});
+
+test("our own llama-server's VRAM does not shrink the context it is holding", () => {
+  // The bug: with our server up, nvidia-smi's free reading excludes exactly the
+  // weights we are sizing a context FOR, so the budget collapsed 4x (16384 ->
+  // 4096) purely because the box was working. Both readings describe the same
+  // machine and must produce the same answer.
+  const idle = machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 7.28 } });
+  // 1.46 GiB free while our server holds ~5.94 GiB of weights (6080 MiB, as
+  // reported by nvidia-smi's own per-process accounting).
+  const withServer = machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 1.46 } });
+
+  const withoutCredit = tuneForHardware(withServer, { modelBytes: ORNITH_35B });
+  const withCredit = tuneForHardware(withServer, { modelBytes: ORNITH_35B, ownServerVramGiB: 6080 / 1024 });
+
+  assert.ok(
+    withoutCredit.contextSize < tuneForHardware(idle, { modelBytes: ORNITH_35B }).contextSize,
+    "unattributed busy card should be treated as genuinely smaller"
+  );
+  assert.equal(withCredit.contextSize, tuneForHardware(idle, { modelBytes: ORNITH_35B }).contextSize);
+});
+
+test("another program's VRAM still counts against the budget", () => {
+  // The add-back is only ever for OUR server. Crediting an unrelated CUDA
+  // process would hand out a context the card cannot actually hold.
+  const busy = machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 2 } });
+  const idle = machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 7.28 } });
+  assert.ok(
+    tuneForHardware(busy, { modelBytes: ORNITH_35B }).contextSize < tuneForHardware(idle, { modelBytes: ORNITH_35B }).contextSize,
+    "an unrelated process occupying VRAM must still reduce the context"
+  );
+});
+
+test("a bigger model on the same card gets a smaller context, not the same one", () => {
+  // KV cost per token scales with the model, so card size alone cannot decide
+  // this — the 35B is the one that would OOM.
+  const gpu = { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 7.28 } as const;
+  const big = tuneForHardware(machine({ cpuCount: 12, ramGiB: 30, gpu }), { modelBytes: ORNITH_35B });
+  const small = tuneForHardware(machine({ cpuCount: 12, ramGiB: 30, gpu }), { modelBytes: ORNITH_9B });
+  assert.ok(small.contextSize > big.contextSize, `9B (${small.contextSize}) should exceed 35B (${big.contextSize})`);
+});
+
+test("a larger card buys a larger context for the same model", () => {
+  const m = ORNITH_35B;
+  const small = tuneForHardware(machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "small", totalGiB: 8, freeGiB: 7.28 } }), { modelBytes: m });
+  const large = tuneForHardware(machine({ cpuCount: 32, ramGiB: 64, gpu: { name: "RTX 4090", totalGiB: 24, freeGiB: 23 } }), { modelBytes: m });
+  assert.ok(large.contextSize > small.contextSize);
+  assert.equal(large.contextSize, 32768, "a 24 GiB card should reach the ceiling with this model");
+});
+
+test("the context never exceeds the card, however generous the machine looks", () => {
+  for (const gpu of [{ name: "x", totalGiB: 4, freeGiB: 4 }, { name: "y", totalGiB: 80, freeGiB: 80 }] as const) {
+    for (const modelBytes of [0, ORNITH_9B, ORNITH_35B, 70 * GiB]) {
+      const t = tuneForHardware(machine({ cpuCount: 8, ramGiB: 64, gpu }), { modelBytes, ownServerVramGiB: 12 });
+      assert.ok(t.contextSize >= 4096 && t.contextSize <= 32768);
+      assert.equal(t.contextSize % 4096, 0);
+      assert.ok(Number.isFinite(t.contextSize));
+    }
+  }
+});
+
+test("budgetVramGiB never invents memory beyond the card", () => {
+  const hw = machine({ cpuCount: 12, ramGiB: 30, gpu: { name: "RTX 2070 SUPER", totalGiB: 8, freeGiB: 1 } });
+  const gpu = hw.gpus[0];
+  // An absurdly large "ours" reading is clamped to the card, minus reserve.
+  assert.ok(budgetVramGiB(hw, gpu, 64 * GiB) <= 8);
+  // And a negative/garbage one cannot reduce the budget below the floor.
+  assert.ok(budgetVramGiB(hw, gpu, -5 * GiB) >= 0.5);
+});
+
+// ── /reset re-applies a context this machine's KV budget still supports ─────
+{
+  const GiB2 = 1024 ** 3;
+  const hw8: any = {
+    cpuCount: 12, ramTotalBytes: 30 * GiB2, ramAvailableBytes: 24 * GiB2,
+    gpus: [{ index: 0, name: "NVIDIA RTX 2070 SUPER", vramTotalBytes: 8 * GiB2, vramFreeBytes: 7.4 * GiB2 }],
+    gpuBackend: "cuda", canBuildCuda: true, tools: {}, platform: "linux",
+  };
+  const base = { modelBytes: 20.36 * GiB2, moe: true, kvElementsPerToken: 10240 };
+
+  test("reapplyContext: a previous 98,304 that the KV budget supports survives the reset", () => {
+    const t = tuneForHardware(hw8, { ...base, reapplyContext: 98304 });
+    assert.equal(t.contextSize, 98304);
+    assert.ok(t.rationale.some((r) => /유지합니다/.test(r)));
+  });
+
+  test("reapplyContext: a previous value the shrunken card cannot hold is cut, with the reason", () => {
+    const tiny: any = { ...hw8, gpus: [{ ...hw8.gpus[0], vramTotalBytes: 4 * GiB2, vramFreeBytes: 3.2 * GiB2 }] };
+    const t = tuneForHardware(tiny, { ...base, reapplyContext: 4_000_000 });
+    assert.ok(t.contextSize < 4_000_000);
+    assert.ok(t.rationale.some((r) => /KV 예산/.test(r) && /줄입니다/.test(r)));
+  });
+
+  test("reapplyContext: absent, the exact-KV ceiling (98,304) applies", () => {
+    assert.equal(tuneForHardware(hw8, base).contextSize, 98304);
+  });
+}
+
+test("R2: a context below 8192 carries an explicit warning", () => {
+  const GiB3 = 1024 ** 3;
+  const tiny: any = {
+    cpuCount: 4, ramTotalBytes: 2 * GiB3, ramAvailableBytes: 1 * GiB3,
+    gpus: [{ index: 0, name: "NVIDIA GT 1030", vramTotalBytes: 2 * GiB3, vramFreeBytes: 1.6 * GiB3 }],
+    gpuBackend: "cuda", canBuildCuda: true, tools: {}, platform: "linux",
+  };
+  const t = tuneForHardware(tiny, { modelBytes: 5.1 * GiB3, moe: false, kvElementsPerToken: 131072 });
+  assert.ok(t.contextSize < 8192, `ctx ${t.contextSize}`);
+  assert.ok(t.rationale.some((r) => /⚠ 컨텍스트/.test(r)));
+});
+
+test("CPU-only: the weights are taken out of RAM before the KV cache is sized (a 4 GiB box with a 5 GiB model is not handed 98k of context)", () => {
+  const G = 1024 ** 3;
+  const cpuBox = (ramGiB: number): any => ({ cpuCount: 4, ramTotalBytes: ramGiB * G, ramAvailableBytes: ramGiB * G * 0.8, gpus: [], gpuBackend: "none", canBuildCuda: false, tools: {}, platform: "linux" });
+  const small = tuneForHardware(cpuBox(4), { modelBytes: 5.1 * G, moe: false, kvElementsPerToken: 10240 });
+  const mid = tuneForHardware(cpuBox(8), { modelBytes: 5.1 * G, moe: false, kvElementsPerToken: 10240 });
+  const big = tuneForHardware(cpuBox(32), { modelBytes: 5.1 * G, moe: false, kvElementsPerToken: 10240 });
+  assert.ok(small.contextSize <= mid.contextSize && mid.contextSize <= big.contextSize, `${small.contextSize} / ${mid.contextSize} / ${big.contextSize}`);
+  assert.ok(small.contextSize < 98304, "a model that does not fit RAM must not get the maximum context");
+  assert.equal(big.contextSize, 98304);
+});
+
+test("Apple Silicon (unified memory): a dense model larger than the GPU share still offloads (-ngl > 0), it is not turned into CPU-only", () => {
+  const G = 1024 ** 3;
+  const mac: any = {
+    cpuCount: 3, ramTotalBytes: 7 * G, ramAvailableBytes: 5 * G,
+    gpus: [{ index: 0, name: "Apple Silicon (unified memory)", vramTotalBytes: 4.7 * G, vramFreeBytes: 3.5 * G, vendor: "apple", unifiedMemory: true }],
+    gpuBackend: "metal", canBuildCuda: false, tools: {}, platform: "darwin", arch: "arm64",
+  };
+  const t = tuneForHardware(mac, { modelBytes: 5.1 * G, moe: false, kvElementsPerToken: 10240, modelLayers: 32 });
+  assert.equal(t.gpuLayers, 999, `got -ngl ${t.gpuLayers}: the discrete-VRAM arithmetic must not apply to unified memory`);
 });

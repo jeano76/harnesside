@@ -42,7 +42,9 @@ test("bootstrap 테스트는 llama 바이너리를 **주입**한다", async () =
     assert.match(body, new RegExp(LLAMA_ENV), `${f} 가 ${LLAMA_ENV} 를 주입하지 않는다 — 이 머신에 llama.cpp 가 있어야만 통과한다`);
     // 주입값이 **존재하지 않는 경로**여서는 안 된다 — 그래야 "찾았다" 가 아니라
     // "주입받았다" 다.
-    assert.match(body, /writeFile\(fakeLlama|writeFile\(fakeBin/, `${f} 가 가짜 바이너리를 만들지 않는다`);
+    // `writeFakeExe` 는 `testSupport.ts` 의 같은 일(실행 가능한 가짜를 실제로 쓴다)이다 — Q-1 로 옮겨 온
+    // 강한 판본의 테스트가 이 헬퍼를 쓴다(플랫폼별 실행 파일 형식까지 맞춰 준다).
+    assert.match(body, /writeFile\(fakeLlama|writeFile\(fakeBin|writeFakeExe\(/, `${f} 가 가짜 바이너리를 만들지 않는다`);
   }
 });
 

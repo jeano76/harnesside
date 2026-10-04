@@ -37,6 +37,8 @@ function hw(opts: {
     canBuildCuda: !opts.noGpu,
     tools: { cmake: true, make: true, gcc: true, nvcc: !opts.noGpu },
     platform: "linux",
+    arch: "x64",
+    libc: "glibc",
   } as Hardware;
 }
 

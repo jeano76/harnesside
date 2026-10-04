@@ -29,6 +29,8 @@ function fakeHw(over: Partial<Hardware> = {}): Hardware {
     canBuildCuda: true,
     tools: {},
     platform: "linux",
+    arch: "x64" as const,
+    libc: "glibc" as const,
     ...over,
   } as Hardware;
 }

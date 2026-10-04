@@ -38,6 +38,8 @@ function fakeHw(): Hardware {
     canBuildCuda: true,
     tools: {},
     platform: "linux",
+    arch: "x64",
+    libc: "glibc",
   } as Hardware;
 }
 
