@@ -17,7 +17,7 @@
 Three harnesses, one per axis, plus the unit suite. Run all of them:
 
 ```bash
-npm test                                              # 2022 unit tests (2026-10-05)
+npm test                                              # 2083 unit tests (2026-10-05)
 npx tsx scripts/persona_usability_check.ts           # terminal identity
 npx tsx scripts/project_persona_check.ts             # project shape
 npx tsx scripts/tui_simulation_check.ts              # terminal capability + interaction
@@ -25,7 +25,7 @@ npx tsx scripts/tui_simulation_check.ts              # terminal capability + int
 
 | Axis | Harness | Checks | Status |
 |---|---|---:|---|
-| Unit / regression | `npm test` | **2,022** | pass — `2022 pass / 0 fail`, 2026-10-05. (The `525` this table used to quote was stale by ~4x; a number with no date is a claim, not a measurement.) |
+| Unit / regression | `npm test` | **2,083** | pass — `2083 pass / 0 fail`, 2026-10-05. (The `525` this table used to quote was stale by ~4x; a number with no date is a claim, not a measurement.) |
 | Terminal identity (100 personas) | `persona_usability_check.ts` | **5,877** | 0 violations |
 | Project shape (100 real directories) | `project_persona_check.ts` | **7,237** | 0 violations |
 | Terminal capability + TUI interaction | `tui_simulation_check.ts` | **599** | 0 violations |

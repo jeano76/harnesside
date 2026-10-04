@@ -6,7 +6,7 @@
 > 2. **검증하지 않은 것을 통과로 쓰지 않는다.** 확인 못 한 것은 **"미측정"** 이라고 적는다.
 > 3. **사용자 원문 요구는 지우지 않는다.** 왜 그렇게 만들었는지를 코드에 남긴다.
 >
-> 마지막 검증: **2026-10-05** · `npm test` **2022 pass / 0 fail** · `npm run typecheck` exit 0
+> 마지막 검증: **2026-10-05** · `npm test` **2083 pass / 0 fail** · `npm run typecheck` exit 0
 > · `node scripts/ci-checks.mjs` 통과 · `npm run build` 통과
 > · `node scripts/coverage-floor.mjs --min 80` **81.39%** 통과 (서버 계층 · 파일 133개)
 >
