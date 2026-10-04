@@ -6,8 +6,24 @@
 > 2. **검증하지 않은 것을 통과로 쓰지 않는다.** 확인 못 한 것은 **"미측정"** 이라고 적는다.
 > 3. **사용자 원문 요구는 지우지 않는다.** 왜 그렇게 만들었는지를 코드에 남긴다.
 >
-> 마지막 검증: **2026-10-03** · `npm test` **1521 pass / 0 fail** · `npm run typecheck` exit 0
-> · `node scripts/ci-checks.mjs` 통과
+> 마지막 검증: **2026-10-04** · `npm test` **1988 pass / 0 fail** · `npm run typecheck` exit 0
+> · `node scripts/ci-checks.mjs` 통과 · `npm run build` 통과
+> · `node scripts/coverage-floor.mjs --min 80` **82.19%** 통과
+>
+> **축이 하나 늘었다.** 아래 ①~⑤ 는 `PROMPT_IDE_CLI.md` / `PROMPT_UX_COMMERCIAL.md` 쪽
+> (화면 · 레이아웃) 남은 일이다. **무게·안정성·호환성·상품성** 축은 새 문서
+> `PROMPT_QUALITY_PRODUCT.md` 의 `Q-1`~`Q-13` 이고, 대시보드는 `PROGRESS.md` ② 에 있다.
+> 여기서는 그쪽에 없는 것만 적는다.
+
+---
+
+## ☐ 새 축 남은 것 (PROMPT_QUALITY_PRODUCT.md)
+
+| 순서 | 요구 | 하는 일 | 상태 |
+|---|---|---|---|
+| 1 | **Q-11** | 설치 경로를 **1개**로. 지금 README 에 `npm run dev` / `npm link` / `node dist/...` 셋이고, 영문·한글 두 벌이 같은 내용을 중복한다. Q-4 에서 `files`·`prepublishOnly` 를 넣었으니 `npm i -g harnesside` 가 자연스럽다 — **반대 근거도 적을 것** | ☐ |
+| 2 | **Q-12** | README 3,075줄 → 3문서. `README.md`(60초 시작) · `docs/VERIFICATION.md`(검증 + "무엇을 검증하지 않는가") · `docs/ARCHITECTURE.md`(구조·블록·스킬·CDP). `## Implementation status` 2,000줄은 `PROGRESS.md` 가 정본이므로 지운다. **검증 섹션을 지우는 것이 아니라 옮긴다** | ☐ |
+| 3 | **Q-13** | `harnesside doctor` 확장 (읽기 전용 유지). 판정만 추가: Node 버전 · 터미널 capability · 포트 3상태(빈 것 / 우리가 씀 / 남이 씀) · **`dist` 가 `src` 보다 오래됐는가** · 설정 provenance(비밀값은 절대 출력 안 함) · 모델 파일. 모르는 것은 `미확인` 으로 — 0·false 로 채우지 않는다 | ☐ |
 
 ---
 

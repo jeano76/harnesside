@@ -55,6 +55,7 @@ import { CliSessions } from "./cliSessions.js";
 import { installPipeGuard, isBrokenPipe, safeWrite } from "./safeOutput.js";
 import { bootFailureLines } from "../shared/bootFailure.js";
 import { readVersion } from "./version.js";
+import { remoteBaseUrlNotice } from "./baseUrlPolicy.js";
 import { SlashService, SERVER_SLASH_KEYS, type ServerSlashKey } from "./slashService.js";
 import { homedir } from "node:os";
 import { join, isAbsolute, resolve, relative } from "node:path";
@@ -517,6 +518,17 @@ async function main(): Promise<number> {
   const webDir = join(projectRoot, "dist", "web");
   let tokenRec: Awaited<ReturnType<typeof issueToken>> | null = null;
 
+  // Q-10: 원격 baseUrl 은 지원하지 않는다 — 설정에 있으면 조용히 무시하지 않고 말한다(src/server/baseUrlPolicy.ts).
+  {
+    const raw = await readFile(join(projectRoot, ".harnesside", "config.yaml"), "utf8").catch(() => null);
+    if (raw) {
+      const { parse: parseYaml } = await import("yaml");
+      let cfg: unknown = null;
+      try { cfg = parseYaml(raw); } catch { cfg = null; }
+      const notice = remoteBaseUrlNotice(cfg);
+      if (notice) emit(`[warn] ${notice}`);
+    }
+  }
   boot = await bootstrap({
     projectRoot,
     modelsDir,

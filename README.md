@@ -334,6 +334,35 @@ server compatibility.
 Acceptance TCs in `docs/multienv-acceptance-report.md`: **13 unverified + 5 partial**, unchanged this round
 (0 reduced, 0 added). (The quality plan quoted "25"; the report's own tally is 13 + 5.)
 
+### OpenAI-compatibility scope (2026-10-04 · Q-10)
+
+"OpenAI Chat Completions API와 호환된다" is a claim, so here is exactly which
+endpoints were measured and which were not. Values are `검증됨` / `측정함` /
+`미지원` — never an unqualified "compatible".
+
+| Surface | State | Evidence (command · date · result) |
+|---|---|---|
+| Local `llama-server` `/v1/chat/completions`, streaming | `검증됨` | `src/backend/openaiClient.test.ts` (534 lines) · the SSE reassembly, client-side `max_tokens` cap, idle guard and partial-tool-call salvage are all pinned there |
+| `/tokenize` | `측정함` — 1,440 chars → **562 tokens**; 20 calls **p50 1.5 ms · p90 3.3 ms · max 55.9 ms** | read-only requests against this machine's llama-server on 8080, 2026-10-04 |
+| `/props` (`n_ctx`) | `측정함` — **1 ms**, `n_ctx` = **98,304** | same run; `getContextSize()` reads `/config` then falls back to `/props` (`src/backend/openaiClient.ts`) |
+| Remote `baseUrl` (proxy · cloud · another LAN host) | **미지원** | the web server's agent always requests `127.0.0.1:<planned llama port>`. A remote address in `config.yaml` was **read by nothing** — the user got local answers while believing otherwise. Streaming, error shape, token accounting and auth were never measured, so there is no basis for calling it supported. Now it says so at boot: `src/server/baseUrlPolicy.ts` + `index.ts` emit `[warn] … 원격 OpenAI 호환 서버는 지원하지 않습니다` |
+
+**The asymmetry worth naming.** It is fine to *call* an OpenAI-compatible
+endpoint — that is the whole point of the local backend. It is not fine to
+*store a key in this repository*, and `.ci/rules.json` enforces that with six
+secret patterns (GitHub PAT/OAuth, OpenAI, HuggingFace, AWS, private key). So
+"talk to OpenAI" and "put an OpenAI key here" are different acts with different
+rules, and only one of them is checked. Keeping the remote path unsupported is
+what makes that asymmetry cost nothing.
+
+**Error bodies are not truncated to 200 characters, on purpose.** A requirement
+suggested clipping the upstream response at 200 chars for display. The agent
+loop pattern-matches the response body to tell *why* a request failed — a
+context-window overflow reads differently from a bad request — so clipping the
+body breaks the classification, and the loop retries a non-retryable failure
+instead of reporting it. The UI already clips to 300 chars **at render time**,
+which is the layer that owns that decision. Left unchanged, deliberately.
+
 ### What this does not cover
 
 Stated plainly, because a validation section that only lists passes is not
