@@ -37,6 +37,7 @@
 
 import { tokenizeLine, colorFor, LANGUAGE_LABEL, type Language, type Token } from "./highlight.js";
 import { COLOR, FONT } from "../theme/tokens.js";
+import { indentInfoFor, type IndentInfo } from "./indentGuides.js";
 
 /**
  * 두 층이 **공유해야 하는** 글자 모양·여백.
@@ -87,6 +88,8 @@ export interface OverlayLine {
   /** 화면에 그릴 1-based 줄 번호. */
   n: number;
   tokens: Token[];
+  /** 인덴트 가이드 — **규칙은 `indentGuides.ts`** (2026-10-05). 계산은 거기서 한다. */
+  indent: IndentInfo;
 }
 
 export interface EditorOverlayPlan {
@@ -134,6 +137,8 @@ export function editorOverlayPlan(opts: {
   lang: Language;
   path?: string;
   maxLines?: number;
+  /** 들여쓰기 한 단계(선이 그어질 간격). 기본은 탭 폭(2). */
+  indentStep?: number;
 }): EditorOverlayPlan {
   const maxLines = opts.maxLines ?? EDITOR_OVERLAY_MAX_LINES;
   const normalized = normalizeForOverlay(opts.text);
@@ -147,9 +152,12 @@ export function editorOverlayPlan(opts: {
     colorable,
     totalLines: all.length,
     truncated: all.length > shown.length,
-    lines: colorable
-      ? shown.map((line, i) => ({ n: i + 1, tokens: tokenizeLine(line, opts.lang) }))
-      : shown.map((line, i) => ({ n: i + 1, tokens: [{ kind: "plain", text: line }] })),
+    lines: shown.map((line, i) => ({
+      n: i + 1,
+      tokens: colorable ? tokenizeLine(line, opts.lang) : [{ kind: "plain" as const, text: line }],
+      // 가이드는 **색칠 여부와 무관**하게 계산한다 — 미지원 형식이라도 들여쓰기는 보인다.
+      indent: indentInfoFor(line, { tabSize: FONT.TAB_SIZE, step: opts.indentStep }),
+    })),
     note: buildNote({ colorable, path: opts.path, total: all.length, shown: shown.length, lang: opts.lang }),
   };
 }

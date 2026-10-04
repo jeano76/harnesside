@@ -34,6 +34,9 @@ import {
   tokenizeLine,
 } from "../editor/highlight.js";
 import { extractSymbols } from "../../shared/symbols.js";
+// 인덴트 가이드 — 규칙은 `editor/indentGuides.ts`, 렌더는 `editor/IndentGuides.tsx`.
+import { IndentGuides } from "../editor/IndentGuides.js";
+import { indentInfoFor } from "../editor/indentGuides.js";
 import { COLOR, FONT, RADIUS } from "../theme/tokens.js";
 
 const DIM = COLOR.DIM_SUBTLE;
@@ -181,6 +184,7 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
                   style={{
                     display: "flex",
                     paddingRight: 8,
+                    position: "relative",
                     background: jumpLine === i + 1 ? COLOR.SURFACE_3 : "transparent",
                   }}
                 >
@@ -197,7 +201,15 @@ export function FilePreview({ client, path, autoOpen = false }: FilePreviewProps
                   >
                     {i + 1}
                   </span>
-                  <span style={{ whiteSpace: "pre", color: COLOR.FG }}>
+                  {/* 가이드를 **코드 텍스트 안쪽**에 그린다 — 줄 번호 거터는 `em` 단위라서
+                      `ch` 로 변환하려면 글자 폭을 재야 한다(측정 없이 정확히 할 수 없다).
+                      코드 시작점을 상대 좌표로 잡으면 그 재 측정이 필요 없다. */}
+                  <span style={{ whiteSpace: "pre", color: COLOR.FG, position: "relative" }}>
+                    <IndentGuides
+                      info={indentInfoFor(line, { tabSize: FONT.TAB_SIZE })}
+                      offsetCh={0}
+                      color={COLOR.LINE_NUM}
+                    />
                     {tokenizeLine(line, lang).map((tok, k) => (
                       <span key={k} style={{ color: colorFor(tok.kind) }}>
                         {tok.text}

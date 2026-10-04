@@ -22,6 +22,10 @@
 
 import React, { useMemo } from "react";
 import { colorFor, tokenizeLine, type Language } from "../editor/highlight.js";
+// 인덴트 가이드 — 규칙은 `editor/indentGuides.ts`, 렌더는 `editor/IndentGuides.tsx`.
+// FilePreview 와 **똑같은 방식**(코드 텍스트 안쪽, 상대 좌표)이라 두 화면의 선이 어긋나지 않는다.
+import { IndentGuides } from "../editor/IndentGuides.js";
+import { indentInfoFor } from "../editor/indentGuides.js";
 import { COLOR, FONT, LAYOUT, RADIUS, SPACE } from "../theme/tokens.js";
 
 const DIM = COLOR.DIM_SUBTLE;
@@ -199,7 +203,15 @@ export function CodeBlock({
                 {i + 1}
               </span>
             )}
-            <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", color: COLOR.FG, flex: "1 1 auto" }}>
+            <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", color: COLOR.FG, flex: "1 1 auto", position: "relative" }}>
+              {/* **명령줄에는 선을 그리지 않는다** — `$ npm run build` 의 들여쓰기는 블록 구조가 아니라 접두사다. */}
+              {!isCommandLine(i) && (
+                <IndentGuides
+                  info={indentInfoFor(line, { tabSize: FONT.TAB_SIZE })}
+                  offsetCh={0}
+                  color={COLOR.LINE_NUM}
+                />
+              )}
               {isCommandLine(i) && command
                 ? // **명령줄만 하이라이트** — 셸 문법이므로.
                   tokenizeLine(`$ ${command}`, "shell").map((t, ti) => (
