@@ -684,7 +684,7 @@ google-chrome \
 - 라운드 영역 바깥에 1~2px 여백을 두어, 창 모서리를 가리지 않게 한다.
   (여백 0이면 둥근 모서리가 창 경계에서 잘려 보인다)
 
-### 4.3 CDP 컨트롤러 (`src/server/cdpController.ts`)
+### 4.3 CDP 컨트롤러 (`src/server/browserLauncher.ts` — 명세 당시 이름은 cdpController)
 
 기존 `src/tools/browser.ts` 의 세션 관리(타임아웃 강제, 이벤트 waiter, 요청 ID 매핑)를
 **공용 모듈로 승격**한다. 앱용으로 다음을 추가:
@@ -1137,8 +1137,8 @@ interface Block {
 
 - 하단 고정 입력창. 멀티라인(`Shift+Enter`), 붙여넣기 대용량 처리(칩 표시),
   히스토리(`↑/↓`), 자동 저장 드래프트.
-- 슬래시 명령 팔레트: 원본 `src/tui/SlashMenu.tsx` 의 항목 목록을 **웹 명령 팔레트로
-  이전**한다(한 벌의 정의를 양쪽이 공유하도록 `src/commands/registry.ts` 로 추출 권장).
+- 슬래시 명령 팔레트: 원본 TUI 의 `SlashMenu.tsx`(Q-2 로 삭제) 항목 목록을 **웹 명령 팔레트로
+  이전**한다(한 벌의 정의를 양쪽이 공유하도록 추출 — 실제 정본은 `src/shared/slashCommands.ts`).
   - 명령은 `{id, title, category, shortcut, run(ctx)}` 형태.
   - `Ctrl+Shift+P` 커맨드 팔레트, `/` 슬래시 메뉴(입력창 안에서 자동완성).
   - **명령 팔레트에 반드시 포함** (화면 밖에 있는 기능은 없는 기능이다):
@@ -1149,7 +1149,7 @@ interface Block {
 
 ### 5.8 키바인딩
 
-`src/commands/registry.ts` 가 단일 정본. `Ctrl/⌘` = `mod`.
+`src/shared/slashCommands.ts` 가 단일 정본(명세 당시 이름 commands/registry). `Ctrl/⌘` = `mod`.
 
 | 키 | 동작 |
 |---|---|
@@ -1661,7 +1661,7 @@ interface Block {
 - **설정으로 재정의 가능**: `models.prioritySeries: ["ornith-1.5-35b-a3b"]`
   처럼 다른 계열을 추가·삭제할 수 있게 데이터로 둔다(하드코딩 금지).
   단 **기본 배열에는 Ornith가 포함**되어야 한다.
-- **검증**: `src/models/recommend.ts` 유닛 테스트에서 아래를 반드시 확인할 것.
+- **검증**: `src/models/hub.ts` 의 `recommend()` 유닛 테스트에서 아래를 반드시 확인할 것.
   - 로컬에 `Ornith-1.5-35B-A3B-Q4_K_M.gguf` 만 있을 때 → 추천 1순위가 그 파일(점수 무관).
   - 로컬에 다른 모델만 있고 Ornith 미설치 → 1순위 제안 + "다운로드" 버튼(자동 받지는 않음).
   - VRAM 8GiB 가상 머신 → 양자화 표가 `Q4_K_M` 보다 큰 것을 고르지 않을 것.
@@ -1673,7 +1673,7 @@ interface Block {
   (+ `?search=`, `?author=`)
 - **GGUF 검증**: `gguf` 태그 + 파일 확장자 `.gguf` + (가능하면) `gguf` 메타의
   `general.architecture` / `parameter_count` / `quantization_version` 파싱.
-  (이미 받아둔 `.gguf` 헤더를 읽는 `src/models/ggufMeta.ts` 로 로컬 파일도 동일 처리)
+  (이미 받아둔 `.gguf` 헤더를 읽는 `src/setup/ggufMeta.ts` 로 로컬 파일도 동일 처리)
 - **적합도 점수(0~100)** — 우선순위 계열(§7.2)이 아닌 나머지에 대한 정렬 기준:
   ```
   score = 100
@@ -2325,7 +2325,7 @@ harnesside (Node)  ← 부모
 | **컴팩션** | 컨텍스트가 임계치에 닿으면 과거 대화를 요약해 압축하고 자동 재개 |
 | **체크포인트** | 컴팩션/종료 직전에 목표·진행단계·미완료 도구 호출을 구조화해 남기는 상태 파일 |
 | **스킬/룰** | 트리거에 따라 지연 로드되는 작업 지침(skill) / 항상 적용되는 규칙(rule) |
-| **WS 이벤트 프로토콜** | §2.3 에 정의한 서버↔웹 단방향 이벤트 명세. 코드에서는 `src/server/protocol.ts` |
+| **WS 이벤트 프로토콜** | §2.3 에 정의한 서버↔웹 단방향 이벤트 명세. 코드에서는 `src/server/agentService.ts` 의 `AgentEvent` 와 `src/server/wsHub.ts`(명세 당시 이름 protocol.ts) |
 | **도킹 vs 분리** | 도킹 = 같은 창 안에서 영역 이동 / 분리 = 독립된 오버레이 창으로 떼어냄 |
 | **시드네시 재사용** | `~/.harnesside/` (머신 전역) / `<프로젝트>/.harnesside/` (rule·skill만 커밋) / `state/` (비영속) |
 | **활성 도구 정의** | `activeToolDefs()` — 실제로 모델에 전송되는 도구 목록의 유일한 진실원 |

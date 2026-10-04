@@ -40,7 +40,6 @@ export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이
 옵션:
   --install      doctor 와 함께 판정에 이어 설치·수령한다
   --no-browser    창을 띄우지 않고 서버만 (디버깅용)
-  --keep-alive    창을 닫아도 종료하지 않음
   --daemon        = up -d
   --dry           12단계만 출력, 부수효과 없음
   --json          status 를 JSON 1줄로

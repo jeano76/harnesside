@@ -22,7 +22,7 @@ TUI 가 삭제되면서(Q-2, 2026-10-04) 그 스크립트가 실행하던 바이
 ## Terminal capability detection
 
 There is no portable "does this terminal support ANSI" query, and terminals do
-not fail all-or-nothing anyway. `src/tui/terminal.ts` therefore reports a
+not fail all-or-nothing anyway. `src/setup/terminal.ts` therefore reports a
 capability record, and every sequence the app emits is built through it, so
 anything unsupported becomes an empty string rather than a wrong byte on
 screen.
@@ -101,9 +101,9 @@ codebase, and each is documented at its call site and covered by a test. The
 
 | Area | Entry point | Responsibility |
 |---|---|---|
-| Terminal UI | `src/tui/App.tsx` | Input, log rendering, scroll, folds, cursor placement |
-| Terminal capabilities | `src/tui/terminal.ts` | What this process may emit, per terminal |
-| Keybindings | `src/tui/keybindings.ts` | The single source of truth for `/help` and `/keys` |
+| Web UI | `src/web/main.tsx` | Prompt, conversation blocks, command palette, AI CLI target (replaced the deleted Ink TUI `tui/App.tsx`) |
+| Terminal capabilities | `src/setup/terminal.ts` | What this process may emit, per terminal (bootstrap progress) |
+| Keybindings | `src/web/main.tsx` | Command palette shortcuts (the TUI's `tui/keybindings.ts` was deleted with the TUI) |
 | Agent loop | `src/agent/loop.ts` | Turn driving, tool dispatch, context accounting |
 | Compaction | `src/compaction/` | Checkpoint write/resume, history summarization |
 | Self-healing | `src/hermes/` | Failure log, circuit breaker, improvement proposals |
@@ -113,7 +113,7 @@ codebase, and each is documented at its call site and covered by a test. The
 | Update | `src/selfUpdate.ts` | Manifest check, hash-verified install, restart |
 | Crash handling | `src/crashHandler.ts` | Synchronous crash log + terminal restore |
 
-`src/tui/terminal.ts`, `src/tui/keybindings.ts` and `src/selfUpdate.ts` are
+`src/setup/terminal.ts` and `src/selfUpdate.ts` are
 the most recent additions and the ones with the sharpest edges — see the
 developer guide below before changing them.
 
@@ -709,7 +709,7 @@ only the tail that fits in one row, prefixed with `…` when truncated,
 exactly like a normal single-line terminal input. The input row is also now
 pinned to `height={1}` with `overflow="hidden"` as a backstop. Verified: a
 210-character line no longer wraps past one row, no matter how long it
-gets or how it's edited. Covered by `src/tui/textWidth.test.ts`.
+gets or how it's edited. Covered by `tui/textWidth.test.ts`(삭제된 구 TUI).
 
 (While investigating, also removed the unused `uuid` dependency, which had
 an open moderate-severity advisory — it was never actually imported
@@ -734,8 +734,8 @@ Also found in the same raw capture: `StatusBar` had the identical
 unconstrained-width bug as the input line and slash menu — a long
 cwd/model combination wrapped it onto a second row, which was throwing off
 the fixed row-distance the cursor fix depends on. Extracted the truncation
-logic into a shared `src/tui/textWidth.ts` and applied it to `StatusBar`
-too (`src/tui/StatusBar.tsx`'s `statusBarFieldWidth`), so it's now
+logic into a shared `tui/textWidth.ts`(삭제된 구 TUI) and applied it to `StatusBar`
+too (`tui/StatusBar.tsx`(삭제된 구 TUI)'s `statusBarFieldWidth`), so it's now
 guaranteed to stay exactly one row.
 
 The first attempted fix: after every render, move the cursor 2 rows up
@@ -760,8 +760,8 @@ typed text. This doesn't fix IME composition-popup anchoring (a deeper,
 terminal/IME-level limitation outside an app's control), but it does give
 an always-correct answer to "where is my typing going," which is what was
 actually being asked. Also verified correct immediately after a live
-terminal resize (SIGWINCH). Covered by `src/tui/StatusBar.test.ts` and
-`src/tui/textWidth.test.ts`.
+terminal resize (SIGWINCH). Covered by `tui/StatusBar.test.ts`(삭제된 구 TUI) and
+`tui/textWidth.test.ts`(삭제된 구 TUI).
 
 ### Alternate screen buffer: fixing the *actual* foundational issue
 
@@ -857,7 +857,7 @@ The exact same "total content exceeds the fixed layout height" bug class
 already fixed for the input line, status bar, and slash menu — this was
 the last place it was still hiding.
 
-Fixed with a general-purpose `wrapToWidth()` (`src/tui/textWidth.ts`,
+Fixed with a general-purpose `wrapToWidth()` (`tui/textWidth.ts`(삭제된 구 TUI),
 alongside the existing `tailToWidth()`) that wraps *every* log line kind
 (not just diffs, which already had their own line-splitting) to the real
 terminal width using display-width-aware wrapping, so `logHeight`'s
@@ -865,7 +865,7 @@ per-entry accounting is always accurate. Verified against a real model
 response in a narrow (70-column) terminal with several long, retried
 `run_shell` tool-call lines that wrap across multiple rows — the final
 answer rendered completely cleanly with no fragments mixed in. Covered by
-`src/tui/textWidth.test.ts`.
+`tui/textWidth.test.ts`(삭제된 구 TUI).
 
 ### Compaction crash: a strict backend rejected the summary request
 
@@ -1065,7 +1065,7 @@ Reported directly: no ANSI color anywhere in assistant text, and no visible
 distinction for fenced code blocks — everything rendered as flat white
 text regardless of what markdown the model actually produced. Fixed by
 rendering assistant messages through `marked` + `marked-terminal`
-(`src/tui/markdown.ts`), giving real headings, bold/italic, syntax-
+(`tui/markdown.ts`(삭제된 구 TUI)), giving real headings, bold/italic, syntax-
 highlighted code blocks, and lists in the terminal, matching how Claude
 Code's own CLI output looks.
 
@@ -1090,7 +1090,7 @@ verification rather than assumed away:
   the code and miscounting its pieces as visible glyphs. This is exactly
   why colored diffs were previously just left unwrapped entirely rather
   than passed through it (risking their own overflow). Added
-  `wrapAnsiSafe()` (`src/tui/textWidth.ts`, via the `wrap-ansi` package)
+  `wrapAnsiSafe()` (`tui/textWidth.ts`(삭제된 구 TUI), via the `wrap-ansi` package)
   which treats escape sequences as zero-width and re-opens whatever style
   was active at each wrap point, and switched both diff and assistant
   markdown rendering to use it.
@@ -1820,7 +1820,7 @@ progress.
 > 자르기로는 여전히 넘칠 수 있음) 항상 한 줄에 들어가는 만큼의 꼬리 부분만 렌더링하고,
 > 잘렸으면 앞에 `…`을 붙이도록 수정 — 일반적인 한 줄짜리 터미널 입력창과 동일한 동작.
 > 입력줄 박스에도 `height={1}`과 `overflow="hidden"`을 백스톱으로 추가함. 검증: 210자
-> 짜리 줄도 더 이상 한 줄을 넘지 않음(얼마나 길어지거나 어떻게 편집되든). `src/tui/textWidth.test.ts`로
+> 짜리 줄도 더 이상 한 줄을 넘지 않음(얼마나 길어지거나 어떻게 편집되든). `tui/textWidth.test.ts`(삭제된 구 TUI)로
 > 커버됨.
 >
 > (조사 중 사용되지 않는 `uuid` 의존성도 함께 제거함 — 보안 권고가 열려있었는데 코드
@@ -1841,7 +1841,7 @@ progress.
 > 같은 raw 캡처에서 추가로 발견: `StatusBar`도 입력줄/슬래시 메뉴와 똑같이 폭 제한이
 > 없는 버그가 있었음 — cwd/model 조합이 길면 2번째 줄로 줄바꿈되면서, 커서 수정이
 > 의존하는 "고정된 행 간격" 가정 자체가 깨지고 있었음. 잘라내기 로직을 공용
-> `src/tui/textWidth.ts`로 분리해서 `StatusBar`(`src/tui/StatusBar.tsx`의
+> `tui/textWidth.ts`(삭제된 구 TUI)로 분리해서 `StatusBar`(`tui/StatusBar.tsx`(삭제된 구 TUI)의
 > `statusBarFieldWidth`)에도 적용해 이제 항상 정확히 한 줄로 고정됨.
 >
 > 1차 시도: 매 렌더링 후 커서를 2줄 위로(빈 트레일러 줄 + 한 줄로 고정된 StatusBar 줄)
@@ -1859,8 +1859,8 @@ progress.
 > 반전 비디오 블록이 타이핑한 텍스트 바로 뒤에 붙음. IME 조합 팝업의 앵커링 문제(앱
 > 차원에서 손댈 수 없는 더 깊은 터미널/IME 차원의 한계)까지 고치진 못하지만, 실제로
 > 물어본 "내가 타이핑한 게 어디로 가는가"에는 항상 정확한 답을 줌. 실제 터미널 리사이즈
-> (SIGWINCH) 직후에도 정확한 것 확인함. `src/tui/StatusBar.test.ts`,
-> `src/tui/textWidth.test.ts`로 커버됨.
+> (SIGWINCH) 직후에도 정확한 것 확인함. `tui/StatusBar.test.ts`(삭제된 구 TUI),
+> `tui/textWidth.test.ts`(삭제된 구 TUI)로 커버됨.
 >
 > ### Alternate screen buffer: 진짜 근본적인 문제를 마침내 고침
 >
@@ -1937,12 +1937,12 @@ progress.
 > 메뉴에서 이미 고쳤던 것과 정확히 같은 "전체 콘텐츠가 고정 레이아웃 높이를 초과"
 > 버그 클래스 — 이게 마지막으로 숨어있던 자리였음.
 >
-> 범용 `wrapToWidth()`(`src/tui/textWidth.ts`, 기존 `tailToWidth()` 옆에 추가)로
+> 범용 `wrapToWidth()`(`tui/textWidth.ts`(삭제된 구 TUI), 기존 `tailToWidth()` 옆에 추가)로
 > 수정 — diff(이미 자체 줄 분리 로직이 있었음)뿐 아니라 **모든** 로그 줄 종류를 실제
 > 터미널 폭 기준으로(디스플레이 폭 인식 줄바꿈) 감싸서, `logHeight`의 항목별 계산이
 > 항상 정확하도록 함. 좁은(70컬럼) 터미널에서 여러 번 재시도한 긴 `run_shell` 도구
 > 호출 줄이 여러 행으로 줄바꿈되는 실제 모델 응답으로 검증 — 최종 답변이 잔재 섞임
-> 없이 완전히 깨끗하게 렌더링됨. `src/tui/textWidth.test.ts`로 커버됨.
+> 없이 완전히 깨끗하게 렌더링됨. `tui/textWidth.test.ts`(삭제된 구 TUI)로 커버됨.
 >
 > ### 컴팩션 크래시: 엄격한 백엔드가 요약 요청을 거부함
 >
@@ -2111,7 +2111,7 @@ progress.
 >
 > 직접 신고됨: assistant 텍스트 어디에도 ANSI 색상이 없고, 코드 블록도 눈에 띄는
 > 구분이 전혀 없음 — 모델이 실제로 어떤 마크다운을 만들었든 전부 흰 평문으로만
-> 렌더링됨. `marked` + `marked-terminal`(`src/tui/markdown.ts`)을 통해 assistant
+> 렌더링됨. `marked` + `marked-terminal`(`tui/markdown.ts`(삭제된 구 TUI))을 통해 assistant
 > 메시지를 렌더링하도록 고쳐서, 실제 헤딩·굵게/기울임·문법 강조된 코드 블록·리스트가
 > 터미널에 제대로 나오게 함 — Claude Code 자체 CLI 출력과 비슷한 모양.
 >
@@ -2136,7 +2136,7 @@ progress.
 >   폭 계산에 잘못 들어감. 색깔 있는 diff를 예전엔 아예 줄바꿈 없이 그냥
 >   그대로 출력했던 이유가 정확히 이것(대신 diff 자체가 넘칠 위험을 감수함).
 >   `wrap-ansi` 패키지를 써서 이스케이프 시퀀스를 폭 0으로 취급하고 줄바꿈
->   지점마다 활성 스타일을 다시 열어주는 `wrapAnsiSafe()`(`src/tui/textWidth.ts`)를
+>   지점마다 활성 스타일을 다시 열어주는 `wrapAnsiSafe()`(`tui/textWidth.ts`(삭제된 구 TUI))를
 >   추가하고, diff와 assistant 마크다운 렌더링 둘 다 이걸 쓰도록 바꿈.
 >
 > 세 번째 버그는 실제 마크다운 콘텐츠(블록 사이 빈 줄 구분이 잦음)가 로그

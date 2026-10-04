@@ -699,3 +699,22 @@ MoE/speculative 항목 포함). `slashService.ts` import 17개를 새 경로로.
 바꿔 통과시키지 않았다** — 검사 자체가 낡았는지는 Q-6(검사를 게이트로 올리기)에서 판단한다. 지금 `npm run test:e2e` 는 **21/23** 이다.
 **§9 미측정 표**: #10 "`dist` 를 지우고 처음부터 빌드하면 부팅한다" → **검증됨**(위). #11 "`npm pack` 산출물로 전역 설치된다" → **미측정**(전역 설치는 하지 않았다).
 **되돌리는 법**: `git revert` (설정·스크립트 변경뿐).
+
+## 2026-10-04 — Q-8 (문서와 코드의 드리프트를 CI 게이트로)
+
+- **새 검사(ci-checks 4b)**: 문서 10개(PROMPT*.md · README · PROGRESS · todo · IMPROVEMENTS · MIGRATION_CHECKLIST)에서 백틱으로 감싼 src/… 경로와
+  펜스 코드 블록 줄머리 src/… 를 뽑아 **실제로 있는지** 본다(228개 참조). 역사 기록은 `.ci/doc-paths.json` 예외(10건, 전부 사유 있음) —
+  **이유가 빈 예외·더 이상 쓰이지 않는 예외는 실패**. `.ci/rules.json` 은 건드리지 않았다.
+- **4c**: `package.json` scripts 가 가리키는 `scripts/`·`src/` 파일 존재 확인(12개 스크립트).
+- **검사가 실제로 빨간불이 되는지 확인**: `todo.md` 에 없는 경로 한 줄 → `FAIL 문서가 없는 경로를 가리킨다`, scripts 에 없는 파일 →
+  `FAIL package.json scripts.zz …` (둘 다 되돌림). 스크립트 안에도 자기 검사(인라인·코드 블록 탐침)를 넣었다.
+- **고친 드리프트**: README 의 없는 src/tui/ 참조 **23 → 0**(살아 있는 `terminal.ts` 는 `src/setup/terminal.ts`, 삭제된 TUI 파일은 경로 대신 "삭제된 구 TUI" 표기 —
+  README 재작성은 Q-12). `PROMPT.md` 계획 경로 7곳을 실제 위치로(cdpController→browserLauncher, commands/registry→shared/slashCommands,
+  models/recommend→models/hub `recommend()`, models/ggufMeta→setup/ggufMeta, protocol.ts→agentService `AgentEvent`+wsHub).
+  `PROMPT_UX_COMMERCIAL.md` 의 없는 `SearchBlock.tsx` 를 실제(ToolBlock view 블록·main 팔레트)로. `PROMPT_QUALITY_PRODUCT.md` 의
+  models/ggufMeta(없는 경로) → `src/setup/ggufMeta.ts`.
+- `verify-shutdown.mjs` 의 신호 이름표를 `verify-signals.mjs` 와 같은 PROMPT §4.4(S1~S6)로 맞춤(예전엔 같은 "S2" 가 두 스크립트에서 다른 신호).
+- USAGE 의 처리되지 않던 `--keep-alive` 삭제 + `cli.usage.test.ts`(USAGE 의 `--옵션`이 USAGE 밖 소스에 있어야 함) 추가.
+- `scripts/fixtures/coverage-report.txt` 는 Q-1 커밋(`d99655b`)에서 이미 재생성돼 있었다(localstack 없음 · loop.ts 미도달 행이 1,770 이하) — 확인만.
+- `npm run test:e2e` 는 Q-4 에서 실제 스크립트로 바뀌었다(21/23 — 휴리스틱 2건은 Q-6).
+**§9 미측정 표**: 줄어든 칸 없음. **되돌리는 법**: `git revert`.

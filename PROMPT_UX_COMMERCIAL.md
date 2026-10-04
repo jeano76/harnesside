@@ -50,7 +50,7 @@ src/web/panels/AgentPanel.tsx  대화 묶음(turn), Think 표시, 블록 렌더,
 src/web/panels/ToolBlock.tsx   셸/파일/diff/검색 블록 (search·files는 view.what 확장)
 src/web/panels/CodeBlock.tsx   코드 + 하이라이트(editor/highlight.ts 정본 사용)
 src/web/panels/Markdown.tsx    마크다운 렌더 (marked 사용, 자체 스타일, highlight.ts 재사용)
-src/web/panels/SearchBlock.tsx 저장소 검색 결과 블록 + QuickOpen (Ctrl+P)
+(SearchBlock.tsx 는 만들지 않았다 — 저장소 검색 결과는 ToolBlock.tsx 의 view 블록, Ctrl+P 는 main.tsx 팔레트)
 src/web/panels/ApprovalCard.tsx 파괴적 도구 승인 카드 (차단형 오버레이, 60초 자동거절)
 src/web/panels/TerminalView.tsx xterm 탭, 셸 상단 탐색, PTY 상태
 src/web/panels/MonitorPanel.tsx CPU/RAM/VRAM/GPU/컨텍스트 게이지 (null≠0, why 필수)

@@ -1,0 +1,55 @@
+{
+  "$comment": "문서 경로 드리프트 검사(scripts/ci-checks.mjs 4b)의 예외. 역사 기록·계획 문장처럼 **일부러 없는 경로를 말하는** 곳만 둔다. 이유가 비었거나 더 이상 쓰이지 않는 예외는 검사가 실패시킨다.",
+  "exceptions": [
+    {
+      "doc": "PROGRESS.md",
+      "prefix": "src/legacy-tui",
+      "reason": "Q-2(2026-10-04) 삭제 기록 — 무엇을 왜 지웠는지 남기는 문장"
+    },
+    {
+      "doc": "PROGRESS.md",
+      "prefix": "src/localstack",
+      "reason": "Q-1(2026-10-04) 이동·삭제 기록"
+    },
+    {
+      "doc": "PROMPT_QUALITY_PRODUCT.md",
+      "prefix": "src/legacy-tui",
+      "reason": "Q-2 요구 본문 — 삭제 대상을 이름으로 가리킨다(완료 후에도 요구 원문은 지우지 않는다)"
+    },
+    {
+      "doc": "PROMPT_QUALITY_PRODUCT.md",
+      "prefix": "src/localstack",
+      "reason": "Q-1·Q-3 요구 본문 — 이동·합치기 대상을 이름으로 가리킨다"
+    },
+    {
+      "doc": "PROMPT_QUALITY_PRODUCT.md",
+      "path": "src/tui/",
+      "reason": "§2.2·Q-8 드리프트 표 본문 — '없는 경로를 가리킨다' 는 사실 자체를 기록한다"
+    },
+    {
+      "doc": "PROMPT_QUALITY_PRODUCT.md",
+      "path": "src/web/panels/SearchBlock.tsx",
+      "reason": "§2.2·Q-8 드리프트 표 본문 — 없는 파일이라는 사실 자체를 기록한다(해당 기획서는 Q-8 에서 고쳤다)"
+    },
+    {
+      "doc": "PROMPT.md",
+      "prefix": "src/legacy-tui",
+      "reason": "원 명세의 TUI 격리 계획(§ 이동 표·커버리지 제외) — 실제로는 Q-2 에서 격리 대신 삭제"
+    },
+    {
+      "doc": "PROMPT.md",
+      "path": "src/tui/terminal.ts",
+      "reason": "원 명세의 이동 표 — 실제 위치는 src/setup/terminal.ts(Q-1)"
+    },
+    {
+      "doc": "IMPROVEMENTS.md",
+      "path": "src/index.tsx",
+      "reason": "포크 시절 TUI 진입점에 대한 개선 기록 — 웹 IDE 로 넘어오며 사라진 파일"
+    },
+    {
+      "doc": "MIGRATION_CHECKLIST.md",
+      "path": "src/index.tsx",
+      "reason": "이름 변경 이전(포크 시절) 체크리스트의 원래 진입점"
+    }
+  ]
+}

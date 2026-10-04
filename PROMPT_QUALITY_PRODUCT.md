@@ -662,7 +662,7 @@ node dist/server/index.js      ← bin이 가리키는 곳 (README에 없음)
 | **포트 상태** (7317 웹 / llama / 9222 CDP) | 각 포트: 비어 있음 / 우리가 씀 / **다른 프로그램이 씀** | 이 셋을 구분하지 않으면 §Q-4의 stale-dist 문제가 사용자에게 "모르겠다"로 보인다 |
 | **`dist/` 가 `src/` 보다 오래되었는가** | `dist/` newest mtime vs `src/` newest mtime | **지금 실제로 그 상태다**(§2.2 7) — 이 한 줄이 지금 가장 값싸다 |
 | **설정 파일** (`.harnesside/config.yaml` 존재 · 스키마 버전 · 비밀값 존재 여부 **값은 절대 출력 안 함**) | `src/config/contract.ts` 의 provenance 를 재사용 | 비밀을 출력하지 않는다 — `ci-checks.mjs` 규칙 2의 이유 |
-| **모델 파일** (경로 존재 · 크기 · GGUF 매직) | `src/models/ggufMeta` 재사용 | — |
+| **모델 파일** (경로 존재 · 크기 · GGUF 매직) | `src/setup/ggufMeta.ts` 재사용 (Q-1 로 옮겨진 위치) | — |
 
 **검증**
 

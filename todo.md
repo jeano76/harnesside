@@ -148,7 +148,7 @@
 | 2 | Q-3 backend 강한 쪽으로 | ✅ | 동일 |
 | 3 | Q-1 localstack 제거 | ✅ `/models`·`/server`·`/reset` 실측 | 동일 |
 | 4 | Q-4 dist 좁히기·npm 배포 | ✅ dist 26MB→2.3MB · 테스트 산출물 0 · LICENSE MIT(jeano76) | `PROGRESS.md` Q-4 · `test:e2e` 21/23(휴리스틱 2건 Q-6 판단) |
-| 5 | Q-8 문서-코드 드리프트 CI | ☐ | README 의 `## Terminal capability detection` 이하가 여전히 TUI 기준(Q-12 와 겹침) |
+| 5 | Q-8 문서-코드 드리프트 CI | ✅ ci-checks 4b·4c (빨간불 확인) · README 의 없는 src/tui/ 참조 0 | README 본문은 여전히 TUI 기준 — Q-12 |
 | 6~ | Q-5·Q-6·Q-7 → Q-9·Q-10 → Q-11·Q-12·Q-13 | ☐ | — |
 
 미측정: 라운드 전 커버리지 수치(라운드 후 82.8% · 파일 124개만 측정) · CLI 대상 화면에서 헤더 일부가 붉게 칠해지는 현상(미조사).

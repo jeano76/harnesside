@@ -13,6 +13,7 @@
  */
 
 import { readFile, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, dirname, resolve, relative, sep } from "node:path";
@@ -234,6 +235,85 @@ const MUST_NOT_COMMIT = [/^\.harnesside\/state\//, /(^|\/)\.env(\.|$)/, /(^|\/)i
 const leaked = files.filter((f) => MUST_NOT_COMMIT.some((re) => re.test(rel(f))));
 if (leaked.length) for (const f of leaked) fail(`커밋 금지 경로: ${rel(f)}`);
 else pass("커밋 금지 경로 0건 (state/ · .env · id_rsa · bin/)");
+
+// ---------------------------------------------------------------- 4b. 문서 ↔ 코드 경로 드리프트 (Q-8)
+//
+// 문서가 가리키는 `src/…` 경로가 **실제로 있는지** 본다. 2026-10-04 실측: README 가 없는 `src/tui/` 를 23번,
+// 기획서가 없는 `SearchBlock.tsx` 를 가리켰다 — 문서를 믿고 그 파일을 찾은 사람은 아무것도 못 찾는다.
+// 대상: 인라인 백틱 경로 + 펜스 코드 블록에서 줄 맨 앞 토큰이 `src/` 인 것. 글롭·자리표시자(`* < > { } $`)는 뺀다.
+// 역사 기록(삭제한 경로를 일부러 말하는 문장)은 `.ci/doc-paths.json` 에 **이유와 함께** 예외로 둔다 —
+// 이유가 빈 예외와 **더 이상 쓰이지 않는 예외**는 실패다(예외가 조용히 쌓이면 검사가 무효가 된다).
+// 이 검사가 거짓말할 수 있는 경우: 백틱 없이 쓴 경로·`src/` 로 시작하지 않는 경로는 보지 않는다(의도된 범위).
+const DOC_NAMES = ["README.md", "PROGRESS.md", "todo.md", "IMPROVEMENTS.md", "MIGRATION_CHECKLIST.md"];
+const docList = [
+  ...(await readdir(ROOT)).filter((n) => /^PROMPT.*\.md$/.test(n)).sort(),
+  ...DOC_NAMES,
+].filter((n) => existsSync(join(ROOT, n)));
+
+export function extractSrcPaths(text) {
+  const out = [];
+  const norm = (p) => p.replace(/[:#].*$/, "").replace(/[.,;)]+$/, "");
+  const skip = (p) => /[*<>{}$]/.test(p);
+  for (const m of text.matchAll(/`(src\/[^`\s]*)`/g)) {
+    const p = norm(m[1]);
+    if (!skip(p)) out.push(p);
+  }
+  let fenced = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*```/.test(line)) { fenced = !fenced; continue; }
+    if (!fenced) continue;
+    const m = /^\s*(src\/\S+)/.exec(line);
+    if (m && !skip(m[1])) out.push(norm(m[1]));
+  }
+  return out;
+}
+
+const docRules = JSON.parse(await readFile(join(ROOT, ".ci", "doc-paths.json"), "utf8"));
+const used = new Set();
+let driftHits = 0;
+let driftRefs = 0;
+for (const ex of docRules.exceptions) {
+  if (!ex.reason || !String(ex.reason).trim()) { fail(`문서 경로 예외에 이유가 없다: ${ex.doc} ${ex.path ?? ex.prefix}`); driftHits++; }
+}
+for (const doc of docList) {
+  const paths = extractSrcPaths(await readFile(join(ROOT, doc), "utf8"));
+  driftRefs += paths.length;
+  for (const p of new Set(paths)) {
+    if (existsSync(join(ROOT, p))) continue;
+    const ex = docRules.exceptions.find((e) => e.doc === doc && (e.path === p || (e.prefix && p.startsWith(e.prefix))));
+    if (ex) { used.add(ex); continue; }
+    fail(`문서가 없는 경로를 가리킨다: ${doc} → ${p}`);
+    driftHits++;
+  }
+}
+for (const ex of docRules.exceptions) {
+  if (!used.has(ex)) { fail(`쓰이지 않는 문서 경로 예외(지워야 한다): ${ex.doc} ${ex.path ?? ex.prefix}`); driftHits++; }
+}
+if (driftHits === 0) {
+  pass(`문서 경로 드리프트 0건 (문서 ${docList.length}개 · 경로 참조 ${driftRefs}개 · 사유 있는 예외 ${docRules.exceptions.length}건)`);
+  exemptions += docRules.exceptions.length;
+}
+
+// ---------------------------------------------------------------- 4c. package.json scripts 가 가리키는 파일 (Q-8)
+//
+// 2026-10-04 실측: `test:e2e` 가 없는 `scripts/e2e_check.ts` 를 실행하고 있었다 — 아무도 돌리지 않아 몰랐다.
+// `dist/` 는 빌드 산출물이라 보지 않는다(빌드 전에는 없는 것이 정상).
+const pkg = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+let scriptHits = 0;
+for (const [name, cmd] of Object.entries(pkg.scripts ?? {})) {
+  for (const m of String(cmd).matchAll(/(?:^|[\s"'])((?:scripts|src)\/[\w./-]+\.(?:mjs|cjs|js|ts|tsx|py))/g)) {
+    if (!existsSync(join(ROOT, m[1]))) { fail(`package.json scripts.${name} 가 없는 파일을 가리킨다: ${m[1]}`); scriptHits++; }
+  }
+}
+if (scriptHits === 0) pass(`package.json scripts 의 파일 참조 전부 존재 (${Object.keys(pkg.scripts ?? {}).length}개 스크립트)`);
+
+// 4b 자기 검사 — **없는 경로를 실제로 잡는가.** 잡지 못하는 검사는 없는 검사다(Q-8 검증 1).
+{
+  const probe = extractSrcPaths("문서 `src/__q8_probe_missing__.ts` 와 `src/server/index.ts:513` 그리고\n```\nsrc/__q8_fenced_probe__.tsx 설명\n```\n");
+  const flagged = probe.filter((p) => !existsSync(join(ROOT, p)));
+  if (flagged.length !== 2 || !probe.includes("src/server/index.ts")) fail(`문서 경로 검사 자기 검사 실패: ${JSON.stringify(probe)}`);
+  else pass("자기 검사: 문서 경로 검사가 없는 경로(인라인·코드 블록)를 잡고 있는 경로는 통과시킨다");
+}
 
 // ---------------------------------------------------------------- 5. 자기 검사
 
