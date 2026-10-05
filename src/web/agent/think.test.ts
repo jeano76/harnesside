@@ -104,13 +104,46 @@ test("경과 시간: 시작 전은 null — 0 초가 아니다", () => {
   assert.equal(t.startedAt, null, "종료 후에도 시간이 흐른다");
 });
 
-test("속도: 시간이 0 이거나 미측정이면 null — **0 tok/s 는 거짓말**", () => {
+test("속도: 출력이 없거나 잰 시간이 0 이면 null — **0 tok/s 는 거짓말**", () => {
   const s = ingest(initialThink({ enabled: true }), { reasoning: "가나다라마" });
-  assert.equal(speed(s, s.startedAt!), null, "0초에 속도를 냈다");
-  const fast = speed(s, s.startedAt! + 1000);
-  assert.ok(fast !== null && fast > 0, `속도가 잘못됐다: ${fast}`);
-  // 토큰 0 이면 속도도 없다(0/0 = 0 으로 쓰면 "정지" 처럼 보인다)
-  assert.equal(speed({ ...s, usedTokens: 0, outputTokens: 0 }, s.startedAt! + 1000), null);
+  assert.equal(speed(s), null, "첫 델타만으로 속도를 냈다(간격 0)");
+  assert.equal(speed({ ...s, usedTokens: 0, outputTokens: 0, activeMs: 1000 }), null, "토큰 0인데 속도가 있다");
+  assert.equal(speed({ ...s, activeMs: 0 }), null, "시간 0인데 속도가 있다");
+});
+
+test("속도: 델타 간격으로 잰다 — wall-clock이 아니라 순수 출력 시간", () => {
+  const realNow = Date.now;
+  try {
+    let t = 1_000_000;
+    (Date as unknown as { now: () => number }).now = () => t;
+    let s = initialThink({ enabled: true });
+    s = ingest(s, { reasoning: "abcdefgh" }); // ≈2 토큰, 간격 0
+    t += 500;
+    s = ingest(s, { reasoning: "abcdefgh" }); // +2 토큰, 간격 500ms
+    const v = speed(s)!;
+    assert.ok(Math.abs(v - 8) < 1, `4토큰/0.5초 = 8 tok/s여야: ${v}`);
+  } finally {
+    (Date as unknown as { now: () => number }).now = realNow;
+  }
+});
+
+test("속도: 2초 넘게 끊기면 대기로 보고 분모에서 뺀다", () => {
+  const realNow = Date.now;
+  try {
+    let t = 1_000_000;
+    (Date as unknown as { now: () => number }).now = () => t;
+    let s = initialThink({ enabled: true });
+    s = ingest(s, { reasoning: "abcdefgh" });
+    t += 500;
+    s = ingest(s, { reasoning: "abcdefgh" }); // activeMs 500
+    t += 60_000; // 도구 실행 60초 — 분모에 안 들어간다
+    s = ingest(s, { reasoning: "abcdefgh" }); // 간격 60초 → 캡 2000ms만 누적
+    assert.equal(s.activeMs, 2500, `대기 60초가 분모에 들어갔다: ${s.activeMs}`);
+    const v = speed(s)!;
+    assert.ok(Math.abs(v - 6 / 2.5) < 0.5, `6토큰/2.5초여야: ${v}`);
+  } finally {
+    (Date as unknown as { now: () => number }).now = realNow;
+  }
 });
 
 test("애니메이션: 기본은 3개 파동 도트 1.2s (§5.3)", () => {
@@ -330,17 +363,17 @@ test("안내에 한 줄 꼬리표가 있다 — 표시줄과 숫자를 반복하
 });
 
 test("finish 는 끝난 추론의 최종 속도를 남긴다 — 다음 턴까지 보인다", () => {
-  let s = initialThink({ enabled: true });
-  s = ingest(s, { reasoning: "abc" });
-  const t1 = s.startedAt!;
-  const done = { ...s, startedAt: t1 };
-  // 1초 뒤 끝났다고 치면 속도가 기록된다.
   const realNow = Date.now;
   try {
-    (Date as unknown as { now: () => number }).now = () => t1 + 1000;
-    const f = finish(done);
+    let t = 2_000_000;
+    (Date as unknown as { now: () => number }).now = () => t;
+    let s = initialThink({ enabled: true });
+    s = ingest(s, { reasoning: "abc" });
+    t += 500;
+    s = ingest(s, { reasoning: "def" });
+    const f = finish(s);
     assert.ok(f.lastSpeedTokPerSec !== null && f.lastSpeedTokPerSec > 0, `속도가 없다: ${f.lastSpeedTokPerSec}`);
-    assert.equal(f.lastUsedTokens, done.usedTokens);
+    assert.equal(f.lastUsedTokens, s.usedTokens);
     assert.equal(f.usedTokens, 0, "계량기는 비워야 한다");
   } finally {
     (Date as unknown as { now: () => number }).now = realNow;

@@ -29,6 +29,11 @@ export interface ThinkState {
   usedTokens: number;
   /** 지금까지 본 전체 출력 토큰(사고+답변+도구호출) 추정 — 속도 분자. 상한 비교에는 쓰지 않는다. */
   outputTokens: number;
+  /** 실제 출력에 쓴 누적 시간(ms). 델타 사이 대기(슬롯 대기·도구 실행·프리필)는
+   *  뺀다 — `tok/s` 가 순수 출력 속도이기 위해서다. */
+  activeMs: number;
+  /** 마지막으로 토큰이 도착한 시각. 간격 계산용. */
+  lastDeltaAt: number | null;
   startedAt: number | null;
   /** 강제 도구 호출 모드인가. */
   forcedToolChoice: boolean;
@@ -66,6 +71,8 @@ export function initialThink(opts: Partial<Pick<ThinkState, "enabled" | "style" 
     needsWarning: false,
     usedTokens: 0,
     outputTokens: 0,
+    activeMs: 0,
+    lastDeltaAt: null,
     startedAt: null,
     forcedToolChoice: false,
     reason: null,
@@ -106,11 +113,18 @@ export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
     + (d.text ? estimateTextTokens(d.text) : 0)
     + (d.tool ? estimateTextTokens(d.tool) : 0);
   if (!d.reasoning && out === 0) return s;
+  const now = Date.now();
+  // 순수 출력 시간만 누적한다. 델타와 델타 사이가 벌어지면(슬롯 대기·도구 실행
+  // 중·다음 라운드 프리필) 그 사이는 쉬는 시간이라 분모에서 뺀다. 상한
+  // ACTIVE_GAP_CAP_MS를 넘는 간격은 잘라낸다 — 2초 넘게 토큰이 안 오면 출력
+  // 중이 아니라 대기 중이다. 첫 델타는 간격이 없어 0ms 로 들어간다.
+  const gap = s.lastDeltaAt === null ? 0 : Math.max(0, now - s.lastDeltaAt);
+  const activeMs = s.activeMs + Math.min(gap, ACTIVE_GAP_CAP_MS);
   // **언어별 추정**(`estimateTextTokens`). 예전의 `길이 / 3.4` 은 영문 기준이라
   // 한글 사고의 실제 토큰을 절반밖에 못 셌다 — 표시된 숫자가 거짓말이 된다.
   const used = s.usedTokens + (d.reasoning ? estimateTextTokens(d.reasoning) : 0);
   const output = s.outputTokens + out;
-  const withOutput = { outputTokens: output, startedAt: s.startedAt ?? Date.now() };
+  const withOutput = { outputTokens: output, activeMs, lastDeltaAt: now, startedAt: s.startedAt ?? now };
   if (s.enabled && d.reasoning && used > s.maxReasoningTokens && !s.forcedToolChoice) {
     return {
       ...s,
@@ -140,11 +154,17 @@ export function elapsedSec(s: ThinkState, now = Date.now()): number | null {
   return Math.max(0, (now - s.startedAt) / 1000);
 }
 
-/** tok/s — 전체 출력 추정 ÷ 실측 초. 시간이 0 이면 **무한대나 0 이 아니라 null** — 0 은 "속도가 0" 이라는 거짓말. */
-export function speed(s: ThinkState, now = Date.now()): number | null {
-  const e = elapsedSec(s, now);
-  if (e === null || e <= 0 || s.outputTokens === 0) return null;
-  return s.outputTokens / e;
+// 델타 간격 상한(ms). 이보다 오래 토큰이 안 오면 출력 중이 아니라 대기다 —
+// 슬롯 대기·도구 실행·다음 라운드 프리필이 분모에 들어가지 않게 자른다.
+// 디코드(실측 38 tok/s ≈ 26ms/토큰)나 SSE 묶음 도착 간격은 한참 아래다.
+export const ACTIVE_GAP_CAP_MS = 2000;
+
+/** tok/s — 전체 출력 추정 ÷ 순수 출력 시간(activeMs). 델타 사이 대기(슬롯·
+ *  도구·프리필)는 분모에 없다. 출력이 없거나 잰 시간이 0 이면 null — 0 은
+ *  "속도가 0" 이라는 거짓말이다. */
+export function speed(s: ThinkState): number | null {
+  if (s.outputTokens === 0 || s.activeMs <= 0) return null;
+  return s.outputTokens / (s.activeMs / 1000);
 }
 
 export function finish(s: ThinkState): ThinkState {
@@ -159,6 +179,8 @@ export function finish(s: ThinkState): ThinkState {
     startedAt: null,
     usedTokens: 0,
     outputTokens: 0,
+    activeMs: 0,
+    lastDeltaAt: null,
     needsWarning: false,
     forcedToolChoice: false,
     reason: null,
@@ -312,6 +334,8 @@ export function adoptServerThink(
     ...s,
     usedTokens: 0,
     outputTokens: 0,
+    activeMs: 0,
+    lastDeltaAt: null,
     needsWarning: false,
     forcedToolChoice: false,
     reason: null,
