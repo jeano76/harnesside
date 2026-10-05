@@ -348,10 +348,17 @@ config 에 기록되어 다음 부팅마다 그대로 재사용된다.
 
 ```
 설치됨      0.2.0
-빌드        20261005  08c4467  더티
+빌드        20261005  aa5b6f9
 설치 해시   검증 안 됨 — 전체 트리를 자기 매니페스트로 대조하지 못했습니다
-설치 경로   /home/jeano/.npm-global/lib/node_modules/harnesside/dist
+설치 경로   /home/사용자/.npm-global/lib/node_modules/harnesside/dist
 ```
+
+`설치 경로` 의 사용자 이름은 이 저장소를 읽는 사람마다 다르므로 `사용자` 로
+두었다. `npm config get prefix` 가 말하는 곳이 실제 경로다 — 기본값은
+`/usr/local` 이고, 여러 사람이 직접 만든 prefix 를 쓰는 경우 그 값이 된다.
+
+`빌드` 뒤에 **아무것도 없는 것**이 정상이다. 트리가 깨끗하면 `더티` 라는
+말을 출력하지 않는다(`UpdateSection.tsx`) — 이상할 때만 말한다.
 
 마지막이 이 프로그램의 태도다. 이 설치본은 **npm 이 설치한 것**이라
 `dist/manifest.json` 이 없다. 그래서 해시를 계산할 **수단이 없고**
