@@ -18,8 +18,18 @@ import { WorkspaceBar } from "./panels/WorkspaceBar.js";
 import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js";
 import { openView, toggleView, collapseView, addSlash, finishSlash, toggleSlashFold, restartSlash } from "../session/blocks.js";
 import { ModelPanel } from "./panels/ModelPanel.js";
-import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
+import { initialThink, finish, ingest, adoptServerThink, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import { itemTopInContent, scrollTopToShow } from "./agent/slashScroll.js";
+import {
+  buildHistory,
+  historyState,
+  recallUp,
+  recallDown,
+  cancelBrowse,
+  shouldRecallUp,
+  shouldRecallDown,
+  type PromptHistoryState,
+} from "./agent/promptHistory.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
 import { MonitorStrip } from "./panels/MonitorPanel.js";
 import { DiffPanel } from "./editor/DiffPanel.js";
@@ -140,6 +150,40 @@ export default function App() {
   const draftRef = useRef<HTMLTextAreaElement | null>(null);
   const focusDraft = useCallback(() => draftRef.current?.focus(), []);
   const [draft, setDraft] = useState(() => loadDraft(typeof localStorage !== "undefined" ? localStorage : null)?.text ?? "");
+
+  /**
+   * 프롬프트 히스토리 — `↑` `↓` 로 지난 말을 다시 꺼낸다 (2026-10-05).
+   *
+   * 판단은 전부 `promptHistory.ts` 의 순수 함수가 한다. 여기서는 배선만 한다.
+   *
+   * 전부 `blocks` 에서 뽑지 않는다. 아직 보내지 않은 **대기열**은 히스토리가 아니다 —
+   * 지금 보낸 것이 바로 다음에 나오는 게 맞다.
+   */
+  const histRef = useRef<PromptHistoryState>(historyState([]));
+  /**
+   * 히스토리 개수 — **ref 로는 부족하다.** 안내문(`promptHint`)이 이 값을 읽는데,
+   * ref 는 렌더를 다시 그리지 않으므로 `useMemo` 가 갱신 시점을 알 수 없다.
+   * 그래서 개수만 state 로 둔다(목록 자체는 ref — 타이핑마다 만들지 않기 위해).
+   */
+  const [histCount, setHistCount] = useState(0);
+  /** 과거 목록을 고친다 — 사용자가 프롬프트를 보낼 때마다. */
+  const pushHistory = useCallback((sent: string) => {
+    const st = histRef.current;
+    const next = buildHistory([...st.items, sent]);
+    histRef.current = historyState(next);
+    setHistCount(next.length);
+  }, []);
+  /** 꺼내기로 입력창 글자를 바꿨을 때 — 커서를 맨 끝에 둔다. */
+  const applyRecall = useCallback((text: string) => {
+    setDraft(text);
+    requestAnimationFrame(() => {
+      const el = draftRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(text.length, text.length);
+    });
+  }, []);
+
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   // 승인 대기 — 서버가 보낸 요청을 **대화 위에 떠 있는 카드**로 표시한다.
@@ -171,6 +215,23 @@ export default function App() {
   const [promptTo, setPromptTo] = useState<"agent" | "cli">("agent");
   const [cliCmds, setCliCmds] = useState<{ provider: string; commands: { name: string; description: string; source: string; label: string }[]; notes: string[]; stale: boolean } | null>(null);
   const toCli = promptTo === "cli" && cliTarget !== null;
+
+  /**
+   * 입력창의 기본 안내문 — **대상이 누구인지, 무엇을 누르는지**를 한 줄에 담는다.
+   *
+   * 예전엔 "무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)" 뿐이었다. 그런데
+   * `/` 로 명령이 열린다는 사실을 **안내문에 쓰지 않았다**(CLI 대상으로 바꿨을 때만
+   * 붙어 있었다 — 대상을 바꾸면 오히려 그쪽에서만 보이는 문장이 못했다).
+   * 슬래시 명령은 14개나 되는데 발견할 방법이 입력창 밖에 있었다.
+   *
+   * 히스토리가 있으면 `↑↓` 도 함께 알린다 — 키만으로 되는 기능은 알려지지 않는다.
+   */
+  const promptHint = useMemo(() => {
+    if (toCli && cliTarget) return `${cliTarget.title} 로 보냅니다 (Enter 로 전송 · Shift+Enter 줄바꿈 · / 로 이 CLI 의 명령)`;
+    const base = "무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈 · / 로 명령";
+    return histCount > 0 ? `${base} · ↑↓ 지난 프롬프트)` : `${base})`;
+  }, [toCli, cliTarget, histCount]);
+
   // CLI 대상일 때 터미널을 **메시지 출력창 자리**에 크게 보인다. harnesside 대화를 보려면 대상을 로컬로 바꾼다.
   const msgRef = useRef<HTMLDivElement | null>(null);
   const [msgRect, setMsgRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -257,6 +318,8 @@ export default function App() {
       }
       // 여러 줄은 bracketed paste 로 한 번에, 한 줄은 그대로 + Enter. 입력 경로는 attach PTY 하나다.
       const data = text.includes("\n") ? `\x1b[200~${text}\x1b[201~\r` : `${text}\r`;
+      // CLI 로 보낸 것도 사람이 보낸 말이다 — `↑` 로 다시 꺼낼 수 있게 한다.
+      pushHistory(text);
       setDraft("");
       try {
         await client.post(`/api/terminal/${encodeURIComponent(cliTarget.terminalId)}/input`, { data });
@@ -272,6 +335,9 @@ export default function App() {
     // 예전에는 `전송: …` 라는 **상태 줄** 로만 남겼다. 그래서 묶음의 시작을 알 수
     // 없었고, "어떤 물음에 대한 답인지" 가 화면에 남지 않았다.
     setBlocks((prev) => applyEvent(prev, { type: "agent.user", text, at: Date.now() }));
+    // **보낸 말을 히스토리에 넣는다.** 전송 후에 넣어야 한다 — 넣지 않으면 방금 보낸
+    // 말을 `↑` 로 한 번 더 꺼내게 되고, `↓` 로 되돌아오면 방금 보낸 말이 나온다.
+    pushHistory(text);
     setDraft("");
     try {
       const r = await client.post<{ ok: boolean; detail: string; queued?: boolean }>("/api/agent/turn", { text });
@@ -285,7 +351,8 @@ export default function App() {
       setTurnRunning(false);
       pushToast({ id: "turn:fail", kind: "error", title: "턴 요청이 실패했습니다", body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
     }
-  }, [draft, pushToast, toCli, cliTarget]);
+    // `pushHistory` 는 `useCallback([])` 이므로 안정적이라 넣어도 재계산되지 않는다.
+  }, [draft, pushToast, pushHistory, toCli, cliTarget]);
 
   /**
    * 슬래시 버튼 — 구 TUI(2026-10-04 삭제)의 `onSlashCommand` 와 **같은 내용**을 웹에서 실행하고,
@@ -811,6 +878,17 @@ export default function App() {
             }
             return;
           }
+          if (evType === "agent.thinking") {
+            // **서버의 추론 상한을 따른다** (2026-10-05 실측).
+            //
+            // 웹은 상한을 자기 기본값(4,096)으로 셌다. 서버가 설정을 따라 64 로
+            // 좁혀도 웹은 4096 으로 쟀고, 그래서 서버가 조용히 도구 호출을 강제하는데
+            // **화면에는 아무 설명이 없었다.** 서버가 정본이므로 여기서 맞춘다.
+            //
+            // 델타를 받기 **전에** 맞춰야 한다 — 델타를 첫 처리하는 순간 임계 비교가
+            // 이미 잘못된 상한으로 이뤄진다.
+            setThink((prev) => adoptServerThink(prev, { enabled: ev.enabled, maxReasoningTokens: ev.maxReasoningTokens }));
+          }
           if (evType === "agent.reasoning") {
             setThink((s) => ({ ...ingest(s, { reasoning: String(ev.text ?? "") }), startedAt: s.startedAt ?? Date.now() }));
           }
@@ -844,6 +922,15 @@ export default function App() {
           // 결정이 돌아오면 카드를 닫는다. "승인이 끝났는데 카드가 안 사라졌다" 가 없도록.
           const id = ev.id as string | undefined;
           if (id) setApprovals((prev) => prev.has(id) ? (() => { const n = new Map(prev); n.delete(id); return n; })() : prev);
+        } else if (ev.type === "model.changed") {
+          // **서빙 중인 모델이 바뀌었다**(2026-10-05 실측).
+          //
+          // 예전엔 `modelName` 을 부팅 시 **한 번만** 읽었다. 그래서 `/models <n>
+          // confirm` 으로 9B 로 바꿔도 select 는 35B 를 계속 가리켰다 — 화면이 옛
+          // 값을 그대로 믿고 있었다. 서버 값만 고쳐서는 부족했고, **그 사실을 알려
+          // 주는 신호**가 있어야 화면이 따라온다.
+          const m = typeof ev.model === "string" ? ev.model : null;
+          if (m) setModelName(m);
         } else if (ev.type === "workspace.changed") {
           // 다른 곳(팔레트·다른 창)에서 루트가 바뀌었다. 화면을 **모으지 않으면** 사용자는
           // 옛 폴더에 계속 쓰게 된다.
@@ -1267,9 +1354,52 @@ export default function App() {
   }, [logOpen]);
 
   // ── 입력창·하단 쉘 높이 (2026-10-04: 좌측 밴드 삭제 — 10-01 확정 구조로 복귀) ──
-  // 입력 창 높이(세로 가변) — localStorage 저장. 기본 104 = 3줄(12px·1.5 → 54)
-  // + 위아래 패딩 16 + 하단 바 약 34. "3줄 정도" 가 기본으로 보인다.
-  const [inputH, setInputH] = useState(() => { try { const v = Number(localStorage.getItem("harnesside.inputH")) || 104; return Math.max(48, Math.min(400, v)); } catch { return 104; } });
+  // 입력 창 높이(세로 가변) — localStorage 저장.
+  //
+  // ── 높이를 줄로 환산하는 법 (실측) ──────────────────────────────────────────
+  //
+  // 저장값과 "보이는 줄" 의 관계를 **직접 쟀다**(`textarea.clientHeight` 를
+  // `line-height` 로 나눈다). 관계는 이렇다:
+  //
+  //     clientHeight ≈ 저장값 − 35      (테두리 2 + 위아래 패딩 16 + 버튼 여백)
+  //     보이는 줄 = floor((clientHeight − 16) / 18)
+  //
+  // 계측한 값(달라진 곳은 계측값을 그대로 쓴다):
+  //
+  //     저장 86 → clientHeight 51 → 1줄
+  //     저장 70 → clientHeight 35 → 1줄  (최소값)
+  //     저장 68 → clientHeight 32 → **0줄(글자가 하나도 보이지 않는다)**
+  //
+  // ── 옛 주석이 틀렸던 이유 ──────────────────────────────────────────────────
+  //
+  // 예전 주석은 "104 = 3줄 + 패딩 16 + 하단 바 34" 라고 적었다. **하단 바는 이 상자의
+  // 형제다** — 안에 있는 줄이 아니다. 그래서 3으로 잘못 세었고, 실제 기본값은
+  // **2줄**이었다. 숫자를 적어두고 확인하지 않은 것이 가장 오래 남는 오류다.
+  //
+  // **기본 104 = 2줄.**
+  //
+  // 86(1줄)로 줄였다가 **한 줄 더 넓혀 달라는** 요청을 받아 104 로 되돌렸다
+  // (2026-10-05). 계측 기준 그대로 **2줄**이 된다. 줄 수는 계산이 아니라 측정이다:
+  // `clientHeight` 가 51 이면 1줄, 69 이면 2줄이다.
+  //
+  // **드래그 간격은 18px**(계측한 줄 높이). 예전엔 16px 였는데, 그러면 저장값이 줄
+  // 단위에서 벗어나 86+16=102 같은 값에 걸린다. 줄로 세어지는 상자의 높이는 줄
+  // 단위로 움직여야 한다.
+  //
+  // **최소값은 70(1줄)** — 예전엔 48이었는데, 거기까지 줄이면 `clientHeight` 가 32가
+  // 되어 **타이핑한 글자가 하나도 보이지 않는다**(실측). 입력을 못 보는 상태는
+  // 장식이 아니라 사고다.
+  const INPUT_H_DEFAULT = 104;
+  const INPUT_H_STEP = 18;
+  const INPUT_H_MIN = 70;
+  const [inputH, setInputH] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem("harnesside.inputH")) || INPUT_H_DEFAULT;
+      return Math.max(INPUT_H_MIN, Math.min(400, v));
+    } catch {
+      return INPUT_H_DEFAULT;
+    }
+  });
 
   useEffect(() => {
     try {
@@ -1286,7 +1416,7 @@ export default function App() {
     e.preventDefault();
     const startY = e.clientY;
     const startH = inputH;
-    const move = (ev: MouseEvent) => setInputH(Math.max(48, Math.min(400, startH - (ev.clientY - startY))));
+    const move = (ev: MouseEvent) => setInputH(Math.max(INPUT_H_MIN, Math.min(400, startH - (ev.clientY - startY))));
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -1397,14 +1527,24 @@ export default function App() {
           tabIndex={0}
           onPointerDown={onInputSepDown}
           onKeyDown={(e) => {
-            if (e.key === "ArrowUp") { e.preventDefault(); setInputH((h) => Math.min(400, h + 16)); }
-            if (e.key === "ArrowDown") { e.preventDefault(); setInputH((h) => Math.max(48, h - 16)); }
+            if (e.key === "ArrowUp") { e.preventDefault(); setInputH((h) => Math.min(400, h + INPUT_H_STEP)); }
+            if (e.key === "ArrowDown") { e.preventDefault(); setInputH((h) => Math.max(INPUT_H_MIN, h - INPUT_H_STEP)); }
           }}
           style={{ flex: "0 0 auto", height: 6, cursor: "row-resize", background: "transparent" }}
         />
-        <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: 48, display: "flex", flexDirection: "column", overflow: "hidden", border: 0, borderTop: `2px solid ${toCli ? (cliTarget?.yolo ? "#f85149" : "#a371f7") : BORDER}`, borderRadius: 0, margin: 0, background: "#161b22" }}>
+        <div className="elev-1" style={{ flex: "0 0 auto", height: inputH, minHeight: INPUT_H_MIN, display: "flex", flexDirection: "column", overflow: "hidden", border: 0, borderTop: `2px solid ${toCli ? (cliTarget?.yolo ? "#f85149" : "#a371f7") : BORDER}`, borderRadius: 0, margin: 0, background: "#161b22" }}>
           <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-          <textarea ref={draftRef} className="no-focus-ring" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => {
+          <textarea
+            ref={draftRef}
+            className="no-focus-ring"
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              // **글 을 고치면 브라우즈를 그만둔다** — 다음 `↑` 가 최신부터 다시 시작해야
+              // 한다. 그대로 두면 한참 전 말에서 계속 뒤로 가게 된다.
+              histRef.current = cancelBrowse(histRef.current);
+            }}
+            onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             if (slashOpen) {
               if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashItems.length); return; }
@@ -1416,7 +1556,28 @@ export default function App() {
               if (e.key === "Enter" && !e.shiftKey && draft.trim().toLowerCase() !== pick.exact) { e.preventDefault(); completeSlash(pick.fill); return; }
             }
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (draft.trim()) void sendTurn(); }
-          }} placeholder={toCli && cliTarget ? `${cliTarget.title} 로 보냅니다 (Enter 로 전송 · Shift+Enter 줄바꿈 · / 로 이 CLI 의 명령)` : "무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈)"} aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
+            // 프롬프트 히스토리 (`↑` `↓`).
+            //
+            // **순서가 중요하다.** ① 슬래시 메뉴(후보 이동) ② 히스토리 ③ 기본 커서 이동.
+            // 메뉴가 좁고 급하므로 언제나 먼저다. 히스토리는 메뉴가 닫혔을 때만.
+            //
+            // 그리고 **커서가 있는 줄을 먼저 본다** — 여러 줄 프롬프트를 고치는 중에
+            // 과거가 끼어들면 본문을 못 고친다. 그래서 첫 줄에서만 `↑`,
+            // 끝에서만 `↓` 가 히스토리다(순수 함수가 판단한다).
+            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+              const el = e.currentTarget;
+              const caret = el.selectionStart ?? 0;
+              const up = e.key === "ArrowUp";
+              if (up ? !shouldRecallUp(draft, caret) : !shouldRecallDown(draft, caret)) return;
+              const r = up ? recallUp(histRef.current, draft) : recallDown(histRef.current);
+              if (!r) return;
+              // **조용히 커서를 움직이지 않는다.** 히스토리가 없으면 기본 동작에 맡긴다.
+              e.preventDefault();
+              histRef.current = r.next;
+              applyRecall(r.text);
+              return;
+            }
+          }} placeholder={promptHint} aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
           <button type="button" disabled={!draft.trim()} onClick={() => void sendTurn()} style={{ flex: "0 0 auto", alignSelf: "stretch", margin: 6, padding: "0 16px", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
             {toCli ? "CLI로 보내기" : turnRunning ? "대기열에 추가" : "보내기"}
           </button>

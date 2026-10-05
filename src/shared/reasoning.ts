@@ -55,3 +55,26 @@ export const MAX_REASONING_CEILING = 8192;
 
 /** 허용 하한 — 설정 스키마의 `min`. */
 export const MIN_REASONING_FLOOR = 64;
+
+/**
+ * 사용자가 준 값을 **여기로 좁힌다.** 규칙은 정본에 있고, **한 군데만** 좁힌다.
+ *
+ * 좁히는 곳이 셋(스키마 검증·에이전트 생성·웹 상태 머신)이면 셋이 서로 다르게
+ * 해석한다. 그래서 여기 하나만 둔다 — 다른 곳은 이 함수를 부른다.
+ *
+ * **숫자가 아니면 기본값으로 돌린다.** 조용히 `NaN` 을 예산으로 삼으면 추론이
+ * **영원히 안 끝나거나** 즉시 초과로 취급된다 — 잘못된 설정이 조용한 결함으로
+ * 이어지지 않게 한다.
+ */
+export function clampReasoningBudget(value: unknown): number {
+  // **`null`·`""`·`undefined` 를 0 으로 바꾸지 않는다.**
+  //
+  // `Number(null)` 은 **0** 이고 `Number("")` 도 0 이다. 그대로 좁히면 **최소값(64)**
+  // 이 되어 사고가 거의 즉시 잘린다 — 설정 한 줄이 조용한 결함이 되는 가장 짧은 경로다.
+  // "값이 없다" 는 "아무것도 하지 않는다" 로 읽어야 한다.
+  if (value === null || value === undefined) return DEFAULT_MAX_REASONING;
+  if (typeof value === "string" && value.trim() === "") return DEFAULT_MAX_REASONING;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_MAX_REASONING;
+  return Math.max(MIN_REASONING_FLOOR, Math.min(MAX_REASONING_CEILING, Math.round(n)));
+}

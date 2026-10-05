@@ -11,7 +11,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { animationFor, initialThink, ingest, finish, type ThinkState, type ThinkStyle } from "../agent/think.js";
+import { animationFor, initialThink, ingest, finish, thinkNotice, type ThinkState, type ThinkStyle } from "../agent/think.js";
 // 블록 규칙의 **정본**은 여기다. 이 파일은 그려 줄 뿐이다(두 곳에 판단을 두면 어긋난다).
 import { appendToBlock, applyEvent, groupTurns, type AgentBlock } from "../../session/blocks.js";
 import type { ApiClient } from "../api.js";
@@ -336,6 +336,13 @@ export function AgentPanel({
   onDismissCompaction?: () => void;
 }) {
   const style: ThinkStyle = think.style;
+  /**
+   * 예산 초과 안내 — **판정과 문구를 `thinkNotice` 에 맡긴다.**
+   *
+   * 예전엔 이 자리에서 라벨 문자열을 직접 적었다. 그것이 틀린 말을 했다(사용자가 지적).
+   * 문자열을 여기서 직접 관리하는 한, 다음turnstile에도 같은 착각이 반복된다.
+   */
+  const budgetNotice = thinkNotice(think, running);
   const bottom = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
   /** **맨 아래에 붙어 있는가.** 이 값이 오토 스크롤의 조건이다. */
@@ -627,9 +634,14 @@ export function AgentPanel({
         })}
 
         {running && think.enabled && <ThinkIndicator state={think} style={style} />}
-        {running && !think.enabled && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }} title="서버가 예산 초과로 Thinking 을 껐습니다. 다음 턴에 다시 켜집니다.">
-            <span>Thinking 꺼짐 (예산 초과)</span>
+        {/* 예산 초과 안내 — **문구는 `thinkNotice` 가 정한다** (판정과 문구를 한 곳에 둔다).
+            예전엔 이 자리에서 `Thinking 꺼짐 (예산 초과)` 라고 직접 적었는데, 그것은
+            틀린 말이었다(사용자가 지목). thinking 은 상시 동작하고, 실제로 바뀐
+            것은 **이 턴을 "생각" 에서 "도구 호출" 로 전환한다** 는 것뿐이다.
+            숫자가 추정치라는 것도 같이 말한다 — 서버 로그도 스스로 추정치라고 적고 있다. */}
+        {budgetNotice && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }} title={budgetNotice.title}>
+            <span>{budgetNotice.text}</span>
           </div>
         )}
 

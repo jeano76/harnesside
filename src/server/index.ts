@@ -33,6 +33,7 @@ import { gitStatus, gitShowHead } from "./gitDiff.js";
 import { planClone, clone, redactUrl, pull, push, summarize, currentBranch, commit } from "../git/sync.js";
 import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
+import { liveModelPath, applyModelSwitch, loadThinkBudget } from "./modelIdentity.js";
 import { WorkspaceService } from "./workspaceService.js";
 import { formatCrashReport, writeCrashLogSync, readCrashTail, acknowledgeCrashLog, archiveHarmlessCrashLog } from "../crashHandler.js";
 import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
@@ -376,17 +377,47 @@ const updates: UpdateService = new UpdateService({
   const slash = new SlashService({
     projectRoot,
     onModelSwitched: (modelPath) => {
-      if (boot) boot.model = { ...boot.model, path: modelPath, reason: "슬래시 명령으로 교체함" } as never;
+      // ── 여기서 저절로 옛 모델이 화면에 남던 이유 (실측) ────────────────────
+      //
+      // `/api/system/version` 의 model 은 이 순서로 읽는다:
+      //     `ports.adopted.model` → `model.path`
+      //
+      // **앞의 것이 뒤의 것을 가린다.** 이 세션은 부팅 때 이미 떠 있던
+      // llama-server(35B)를 **채택**했으므로 `ports.adopted` 가 있고, 교체를
+      // 알려 준 훅은 `model.path` 만 고쳤다. 결과적으로 화면은 계속 옛 이름을
+      // 봤다 — 9B 로 바꿨는데 헤더에 35B 이 남아 있던 그 상황(실측으로 확인).
+      //
+      // **교체 뒤에는 이 서버를 우리가 띄운 것**이므로 "채택" 기록은 더 이상
+      // 사실을 말하지 않는다. 둘 다 고쳐야 한다 — 하나만 고치면 또 한쪽이 남는다.
+      // **두 곳을 함께 고치는 갱신**은 `applyModelSwitch` 가 한다(규칙과 테스트가 거기 있다).
+      if (boot) boot = applyModelSwitch(boot, modelPath) as typeof boot;
       agent.invalidate();
+      // **화면에 알려 준다** — 클라이언트는 이 값을 부팅 시 **한 번만** 읽는다.
+      // 신호 없이 값만 바꾸면 사용자는 다음 창을 열 때까지 옛 이름을 본다.
+      hub?.publish({ type: "model.changed", model: modelPath } as never);
       return [`세션이 새 서버에 연결되었습니다 — 모델 ${modelPath.split("/").pop()}`];
     },
   });
+  /**
+   * 사고 토큰 상한을 **설정에서 실제로 읽는다** (2026-10-05).
+   *
+   * 이 값은 스키마에 `사고 토큰 상한` 으로 노출되어 있고, 서버 로그도 "설정에서 올리라" 고
+   * 안내했다. 그런데 **아무도 읽지 않았다** — 항상 기본값(4,096) 이라, 안내가 존재하지
+   * 않는 손잡이를 가리켰다. 지시를 따라도 화면이 변하지 않는 것이 그 결과였다.
+   *
+   * 읽는 곳을 **한 군데**로 묶었다. 여기서 읽지 않으면 다른 곳에서 읽기 시작하고 그때마다
+   * 값이 어긋난다.
+   */
+  const thinkCfg = await loadThinkBudget(projectRoot);
+
   const agent = new AgentService({ baseDir: () => workspace.baseDir(),
     baseUrl: () => `http://127.0.0.1:${boot?.ports?.llamaPort ?? 8080}`,
     // 모델 이름도 **호출 시점**에 읽는다 — 부팅이 끝나야 정해진다(`boot` 이 아직 없다).
     model: () => boot?.model?.path ?? process.env.HARNESSIDE_MODEL ?? "",
     systemPrompt,
     thresholds: { autoTriggerRatio: 0.6, contextWindowTokens: 32_768 },
+    // 읽어 온 설정값만 넘긴다 — 없는 키를 `undefined` 로 넘기면 기본값과 섞인다.
+    ...(thinkCfg.set ? { maxReasoningTokens: thinkCfg.maxReasoningTokens } : {}),
     emit: (e) => {
       hub?.publish({ ...e } as never);
       // §5.10: 블록이 바뀌면 저장 예약. **매 델타마다** 쓰면 디스크 I/O 가 스트리밍을
@@ -734,7 +765,7 @@ const updates: UpdateService = new UpdateService({
             llama: r.llama?.source ?? null,
             // 채택한 경로에서는 **서버가 스스로 말한 모델 이름** 이 진짜다.
             // 로컬 파일 경로는 그 서버가 지금 serve 하는 것과 다를 수 있다.
-            model: r.ports?.adopted?.model ?? r.model?.path ?? null,
+            model: liveModelPath(r),
             gpuMode: r.gpu?.mode ?? null,
           }))
           // §8.2 파일 API — 경로 안전이 이 라우트 **앞에서** 처리된다(§3.4).

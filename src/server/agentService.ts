@@ -24,7 +24,7 @@ import type { CompactionThresholds } from "../compaction/compactor.js";
 import type { CompactionDetail } from "../compaction/compactor.js";
 import { estimateTextTokens } from "../shared/textTokens.js";
 import { estimateTokens } from "../compaction/compactor.js";
-import { DEFAULT_MAX_REASONING } from "../shared/reasoning.js";
+import { DEFAULT_MAX_REASONING, clampReasoningBudget, MIN_REASONING_FLOOR, MAX_REASONING_CEILING } from "../shared/reasoning.js";
 import { activeToolDefs } from "../tools/index.js";
 import { applyEvent, normalizeTool, type AgentBlock } from "../session/blocks.js";
 import { resumeInfo, type ResumeInfo } from "../compaction/checkpoint.js";
@@ -102,6 +102,19 @@ export interface AgentServiceOptions {
    */
   backend?: ModelBackend | (() => ModelBackend);
   enableThinking?: boolean;
+  /**
+   * 사고 토큰 상한 — **설정(`agent.maxReasoningTokens`) 을 실제로 따른다.**
+   *
+   * 왜 이 옵션이 없었나: 스키마에는 `사고 토큰 상한` 이 사용자에게 노출되어 있고
+   * `label`·`type:number`·`min`·`max` 까지 붙어 있었다. 그런데 **아무것도 읽지 않았다.**
+   * 서버는 항상 `DEFAULT_MAX_REASONING`(4,096) 을 썼다. 더 나쁜 것은, 예산 초과 로그가
+   * 사용자에게 "설정의 사고 토큰 상한 을 올리십시오" 라고 안내한 것이었다 —
+   * **존재하지 않는 손잡이를 가리키는 안내**였다(설정에 적어도 아무 반응이 없었다).
+   *
+   * 범위는 여기서 한 번만 좁힌다 — 정본(`shared/reasoning.ts`)의 floor/ceiling 이
+   * 규칙이다. 값을 세 군데에서 각각 좁히면 셋이 어긋난다.
+   */
+  maxReasoningTokens?: number;
   thresholds?: CompactionThresholds;
   logger?: (line: string) => void;
   /** 턴이 끝났을 때(성공/실패/취소 무관) — 세션 저장 훅이 이걸 듣는다(§5.10). */
@@ -148,6 +161,13 @@ export class AgentService {
   constructor(private opts: AgentServiceOptions) {
     // 명시 옵션이 있으면 기본값보다 우선한다 (테스트·임베딩용).
     if (typeof opts.enableThinking === "boolean") this.think.enabled = opts.enableThinking;
+    // **설정의 상한을 따른다** — 범위 좁히기는 여기서 **한 번만** 한다.
+    if (typeof opts.maxReasoningTokens === "number") {
+      const n = clampReasoningBudget(opts.maxReasoningTokens);
+      if (n !== this.think.maxReasoningTokens) {
+        this.think = { ...this.think, maxReasoningTokens: n };
+      }
+    }
   }
 
   /** 게이트 설정 — HTTP/WS 가 준비된 후 부른다. */
@@ -306,6 +326,17 @@ export class AgentService {
         this.state = { ...this.state, running: true, startedAt: now(), cancelled: false, lastError: null };
         this.toolCalls = 0;
         this.reasoningTokens = 0;
+        // **이 턴의 추론 예산을 알린다.**
+        //
+        // 웹은 상한을 **자기 기본값(4,096)** 으로 계산하고 있었다. 서버가 설정을 따라
+        // 64 로 좁혔어도 웹은 4096 으로 쟀으므로, 서버가 조용히 도구 호출을 강제하는데
+        // **화면에는 아무 설명이 없었다.** 규칙이 어긋나면 화면이 거짓말이 된다.
+        //
+        // 서버가 정본이다 — 매 턴 시작에 그 값을 알린다.
+        //
+        // `agent.thinking` 은 **선언만 있고 아무것도 publish 하지 않던** 타입이었다
+        // (`agent.state` 도 마찬가지였다). 정본을 알릴 자리가 있는데 비어 있었다.
+        this.emit({ type: "agent.thinking", ...this.thinking, at: now() });
         // 강제 OFF였으면 매 턴 시작에 ON 으로 되돌린다(Thinking 상시).
         // 예산을 넘기면 그 턴 안에서 다시 꺼진다 — 매 턴 예산이 리셋되는 셈이다.
         // invalidate 로 다음 턴의 루프가 새 값을 보게 한다(실행 중인 루프는 로컬 참조로 돈다).
@@ -334,7 +365,15 @@ export class AgentService {
               text:
                 `사고 상한(${this.think.maxReasoningTokens.toLocaleString("ko-KR")} 토큰)을 넘어 thinking 표시를 껐습니다 ` +
                 `— 모델이 이미 쓴 예산이라 되돌릴 수 없습니다. 다음 턴부터 다시 켜집니다. ` +
-                `더 오래 보고 싶으면 설정의 "사고 토큰 상한" 을 올리십시오.`,
+                // **존재하지 않는 손잡이를 가리키지 않는다.**
+                //
+                // 예전엔 "설정의 사고 토큰 상한 을 올리십시오" 라고 적었는데, 그 설정은
+                // **아무것도 읽지 않았다**(스키마에만 있고 배선이 없었다). 사용자는 지시를
+                // 따라도 아무 반응이 없는 화면을 마주했다.
+                //
+                // 이제는 실제로 읽는다 — 그래서 **어디를 고쳐야 하는지**를 경로로 말한다.
+                // 웹 화면에 숫자 입력란은 없다(없다고 말하는 게 낫다). 이 파일을 고치면 된다.
+                `더 오래 보고 싶으면 프로젝트의 .harnesside/config.yaml 의 agent.maxReasoningTokens 를 올리십시오 (지금 ${this.think.maxReasoningTokens.toLocaleString("ko-KR")}, 허용 ${MIN_REASONING_FLOOR}~${MAX_REASONING_CEILING.toLocaleString("ko-KR")}).`,
               at: now(),
             });
           }

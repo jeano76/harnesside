@@ -397,6 +397,61 @@ CDP 포트를 **이름으로 지정하지 않으면** 비어 있는 포트를 �
 | 기다리는 동안 | 보내기 버튼이 `대기열에 추가`가 됨 · `/queue` 로 순서 보기 |
 | 키보드 없이 명령 찾기 | `Ctrl+K` · 슬래시는 입력창에서 `/` |
 
+### 추론 예산이 초과되면 무슨 일이 벌어지나
+
+본턴에서 모델이 **생각만 하다가 아무것도 안 하는** 것을 막으려고 상한이 있다.
+초과하면 **이번 턴을 "생각" 에서 "직접 도구 호출" 로 전환한다.** 상한은
+`.harnesside/config.yaml` 의 `agent.maxReasoningTokens` 로 정한다.
+
+```
+추론 예산 초과 → 도구 호출로 전환 (66/64·추정)
+```
+
+이 문구는 **무엇이 일어났는지 · 다음에 무엇을 할 것인지 · 이 값이 추정치라는 사실**을
+함께 말한다. 예전에는 `Thinking 꺼짐 (예산 초과)` 라고 적었는데 그것은 **틀린 말**이었다 —
+thinking 은 상시 동작하고, 실제로 바뀐 것은 이 턴의 행동 모드뿐이었다. 툴팁마저
+"다음 턴에 다시 켜집니다" 라고 말해 라벨과 서로 모순이었다.
+
+> 이 화면을 고치면서 **더 큰 것 두 개**가 함께 드러났다. 둘 다 **설정만 있고 배선이 없는**
+> 것이었다 — 사용자가 고쳐도 아무 반응이 없고, 서버 로그는 그 손잡이를 가리킨다.
+>
+> 1. **`agent.maxReasoningTokens` 를 아무도 읽지 않았다.** 스키마에 "사고 토큰 상한" 으로
+>    노출되어 있었고 로그도 "설정에서 올리라" 고 안내했다. 실제로는 항상 4,096이었다.
+>    이제 설정에서 실제로 읽는다(범위는 정본이 한 군데서 좁힌다).
+> 2. **웹이 서버의 상한을 몰랐다.** 서버가 64 로 좁혀 강제 전환해도 웹은 4,096 으로 계산해
+>    화면에 아무 설명이 없었다. 이제 턴마다 서버가 정본을 알리고 웹이 따른다.
+
+### 입력창 — 안내문 · 높이 · 히스토리
+
+입력창은 두 가지 정보를 **안내문에 담아서** 보여준다.
+
+```
+무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈 · / 로 명령 · ↑↓ 지난 프롬프트)
+```
+
+- `/ 로 명령` — 슬래시 명령이 **14개** 있는데 발견할 방법이 입력창 밖에 있었다
+- `↑↓ 지난 프롬프트` — 프롬프트를 하나라도 보낸 뒤에만 붙는다 (키만 되는 기능은 알려지지 않는다)
+
+**높이 기본값은 2줄(104px)** 이다. 줄 높이 18px(글꼴 12 × 1.5)를 실제 창에서 재서
+계산했다. 줄 수로 환산하면 이렇다.
+
+| 저장값 | 보이는 줄 |
+|---|---|
+| 70 (최소) | 1줄 |
+| 86 | 1줄 |
+| 104 (기본) | 2줄 |
+| 122 | 3줄 |
+
+> **옛 주석이 틀렸다.** 예전엔 "기본 104 = 3줄 + 패딩 16 + 하단 바 34" 라고 적혀 있었는데,
+> **하단 바는 이 상자의 형제다** — 안에 있는 줄이 아니라서 3이 아니라 **2줄**이었다.
+> 숫자를 적어 두고 확인하지 않은 것이 가장 오래 남는 오류다. 그래서 드래그 간격을 16px 에서
+> **18px(=한 줄)** 로 맞췄다 — 예전 간격으로는 줄 단위 높이가 손잡이로 닿지 않는 값에
+> 걸렸다(86±16 = 102 · 70). 기본 높이는 86(1줄)로 줄였다가 한 줄 더 넓혀 달라는 요청에
+> **104(2줄)** 로 두었다.
+>
+> **최소값도 70 으로 올렸다.** 예전엔 48이었는데, 거기까지 줄이면 타이핑한 글자가
+> **하나도 보이지 않는다**(실측 `clientHeight` 32). 입력을 못 보는 상태는 장식이 아니라 사고다.
+
 ### 단축키
 
 | 키 | 동작 |
@@ -404,24 +459,47 @@ CDP 포트를 **이름으로 지정하지 않으면** 비어 있는 포트를 �
 | `Enter` | 전송 · 슬래시 메뉴가 켜져 있으면 **먼저 완성** |
 | `Shift+Enter` | 줄바꿈 |
 | `Ctrl+K` · `Ctrl+P` | 명령 팔레트 |
-| `↑` `↓` | 후보 이동 (메뉴가 열려 있을 때) |
+| `↑` `↓` | **프롬프트 히스토리** — 지난 말을 되살린다 (아래 절) |
+| `↑` `↓` (메뉴가 열렸을 때) | 슬래시 후보 이동 — **히스토리보다 우선한다** |
 | `Tab` | 후보를 입력창에 완성 |
 | `Esc` | 메뉴 · 팔레트 닫기 |
 | `Alt+` `←` `→` `↑` `↓` | 패널 이동 |
 
+### 프롬프트 히스토리 — `↑` `↓`
+
+입력창에서 `↑` 를 누르면 **지난 프롬프트가 되살아난다.** `↓` 는 반대로 가고,
+최신 다음에 닿으면 **브라우즈하기 전에 쓰던 반쯤 쓴 문장**이 돌아온다.
+
+셸처럼 무조건 과거로 대는 것은 하지 않는다. **커서가 있는 줄을 먼저 본다.**
+
+- `↑` 는 커서가 **첫 줄**일 때만 과거로 간다
+- `↓` 는 커서가 **마지막**일 때만 다음으로 간다
+
+그래서 두 줄로 쓴 프롬프트 **본문을 고치는 중에 과거가 끼어들지 않는다.**
+기능을 넣으면서 편집을 망치는 일은 없다.
+
+`/` 를 치면 슬래시 메뉴가 뜨는데, 그때 `↑` `↓` 는 **후보 이동**이다 — 더 좁고 더 급한
+요구이므로 언제나 먼저다. 메뉴를 `Esc` 로 닫으면 곧바로 히스토리가 된다.
+
+연속으로 같은 말을 두 번 보낸 것은 **한 번만** 꺼낸다. 하지만 떨어져 나온 중복은
+**지우지 않는다** — "1번 · 2번 · 1번" 은 셋 다 실제로 보낸 말이다.
+
+> 이 절의 `↑` `↓` 는 **실제 창에서 눌러서** 확인했다(키가 DOM 에 도착했음을 계측기로
+> 확인하고 결과를 읽었다). 키만 보낸 척하고 성공으로 세지 않는다.
+
 ## Structure
 
 Regenerated from the filesystem (**2026-10-05**). LOC excludes `*.test.ts`;
-the test count is the number of `*.test.ts` files (**180** files, **2160** cases).
+the test count is the number of `*.test.ts` files (**182** files, **2210** cases).
 
 ```
-src/  46,587 total (non-test)
-  server/     13,257  the daemon: 12-step boot, ~70 HTTP routes, WS hub,
+src/  47,161 total (non-test)
+  server/     13,436  the daemon: 12-step boot, ~70 HTTP routes, WS hub,
                           terminal/PTY, approval gate, updater, tmux CLI hosting
   setup/      10,887  hardware + tuning + port planning, llama.cpp build and
                           launch, model catalogue/download/provisioning, the
                           12-step `ensureLocalStack` ladder
-  web/        10,784  the React SPA served into the Chrome window: agent panel,
+  web/        11,156  the React SPA served into the Chrome window: agent panel,
                           IDE frame, file editor, monitors, settings
   agent/       2,413  the turn loop: tool-call stream, retry/repeat detection,
                           plan progress, salvaging truncated tool calls
@@ -430,7 +508,7 @@ src/  46,587 total (non-test)
   models/        983  HuggingFace search, hardware-fit scoring, resumable download
   session/       903  conversation blocks (canonical), session store, autosave
   compaction/    869  context summarisation, checkpoints, durable notes
-  shared/        823  zero-import pure data: slash commands, CLI providers,
+  shared/        846  zero-import pure data: slash commands, CLI providers,
                           metrics formatting, symbols, search ranking, token estimate
   config/        793  settings schema, provenance (where each value came from)
   git/           506  status/diff/commit/push with redaction and conflict stop
@@ -449,8 +527,8 @@ Reproduce with:
 
 ```bash
 find src -name '*.ts' -o -name '*.tsx' | grep -v '\.test\.ts$' \
-  | xargs wc -l | tail -1          # 46587
-find src scripts -name '*.test.ts' | wc -l   # 180
+  | xargs wc -l | tail -1          # 47161
+find src scripts -name '*.test.ts' | wc -l   # 182
 ```
 
 Design rationale, the module map in prose, terminal capability detection, and
@@ -459,15 +537,15 @@ the Hermes loop: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 > ## 구조
 >
 > 파일시스템에서 다시 뽑았다 (**2026-10-05**). LOC 는 테스트(`*.test.ts`) 제외,
-> 테스트 수는 `*.test.ts` 파일 **180개 · 케이스 2160개**다.
+> 테스트 수는 `*.test.ts` 파일 **182개 · 케이스 2210개**다.
 >
 > ```
-> src/  46,587 total (non-test)
->   server/     13,257  데몬: 12단계 부팅, HTTP 라우트 약 70개, WS 허브,
+> src/  47,161 total (non-test)
+>   server/     13,436  데몬: 12단계 부팅, HTTP 라우트 약 70개, WS 허브,
 >                          터미널/PTY, 승인 게이트, 업데이터, tmux CLI 호스팅
 >   setup/      10,887  하드웨어·튜닝·포트 계획, llama.cpp 빌드와 기동,
 >                          모델 카탈로그/다운로드/프로비저닝, 12단계 ensureLocalStack
->   web/        10,784  Chrome 창에 제공되는 React SPA: 에이전트 패널, IDE 프레임,
+>   web/        11,156  Chrome 창에 제공되는 React SPA: 에이전트 패널, IDE 프레임,
 >                          파일 편집기, 계측, 설정
 >   agent/       2,413  턴 루프: 도구 호출 스트림, 재시도/반복 감지, 계획 진행,
 >                          잘린 도구 호출 복구
@@ -477,7 +555,7 @@ the Hermes loop: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 >   session/       903  대화 블록(정본), 세션 저장, 자동 저장
 >   compaction/    869  컨텍스트 요약, 체크포인트, 지속되는 노트
 >   config/        793  설정 스키마, 각 값의 출처(provenance)
->   shared/        823  import 0개인 순수 데이터: 슬래시 명령, CLI 프로바이더,
+>   shared/        846  import 0개인 순수 데이터: 슬래시 명령, CLI 프로바이더,
 >                          계측 포맷, 심볼, 검색 랭킹, 토큰 추정
 >   git/           506  status/diff/commit/push — redact + 충돌 시 중단
 >   fs/            501  루트 이탈 방지 경로 가드, 저장소 전체 검색과 랭킹
@@ -495,8 +573,8 @@ the Hermes loop: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 >
 > ```bash
 > find src -name '*.ts' -o -name '*.tsx' | grep -v '\.test\.ts$' \
->   | xargs wc -l | tail -1          # 46587
-> find src scripts -name '*.test.ts' | wc -l   # 180
+>   | xargs wc -l | tail -1          # 47161
+> find src scripts -name '*.test.ts' | wc -l   # 182
 > ```
 >
 > 설계 근거 · 모듈 해설 · 터미널 capability 감지 · Hermes 루프:

@@ -3,7 +3,7 @@
  *
  * 이 테스트가 지키는 것: **"생각만 하다가 아무것도 안 하는" 버그가 되돌아오지 않는다.**
  * 원본에서 실제로 일어난 일(420토큰 예산을 사고가 다 써서 tool_call 이 0개)이라,
- * 계측 없이 통과하는 테스트는 worthless 다. 전이를 **직접** 검증한다.
+ * 계측 없이 통과하는 테스트는 무의미하다. 전이를 **직접** 검증한다.
  */
 
 import { strict as assert } from "node:assert";
@@ -21,6 +21,8 @@ import {
   retryAfterNoTool,
   exhaustedMessage,
   DEFAULT_MAX_REASONING,
+  thinkNotice,
+  adoptServerThink,
 } from "./think.js";
 
 test("기본값은 thinking **ON** — 사고가 안 보이면 '기능이 없다' 고 읽힌다 (2026-10-01)", () => {
@@ -163,4 +165,101 @@ test("maxAttempts 가 1 이면 한 번 만에 포기한다", () => {
   const a = retryAfterNoTool(r, "e");
   assert.equal(a.exhausted, true);
   assert.equal(a.shouldRetry, false);
+});
+
+// ── 예산 초과 안내 문구 (2026-10-05) ────────────────────────────────────────
+//
+// 사용자가 지목한 그대로: **thinking 은 상시 동작하는데 왜 "꺼짐" 이라 하나.**
+// 화면 문구가 실제로 하는 일을 말하는지, 그리고 **추정치임을 말하는지** 를 고정한다.
+
+test("**추론이 켜져 있고 안전하면 아무 말도 하지 않는다**", () => {
+  const s = initialThink();
+  assert.equal(thinkNotice(s, true), null, "정상인 데 경고를 띄웠다 — 상시 경고는 경고가 아니다");
+});
+
+test("**턴이 끝나면 아무 말도 하지 않는다** — 지난 경고가 다음 턴까지 남으면 안 된다", () => {
+  const s = { ...initialThink(), enabled: false, needsWarning: true };
+  assert.equal(thinkNotice(s, false), null);
+});
+
+test("**꺼졌다고 말하지 않는다** — 설정이 꺼진 것도 사고가 멈춘 것도 아니다", () => {
+  const s = { ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 };
+  const n = thinkNotice(s, true);
+  assert.ok(n, "전환되었는데 말하지 않는다");
+  assert.ok(!n.text.includes("꺼짐"), `라벨이 여전히 꺼졌다고 말한다: ${n.text}`);
+  assert.ok(!n.title.includes("꺼졌"), `툴팁이 아직 꺼졌다고 말한다: ${n.title}`);
+});
+
+test("**무엇이 일어났는지와 다음 무엇을 말하는지**가 둘 다 있다", () => {
+  const s = { ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 };
+  const n = thinkNotice(s, true)!;
+  assert.match(n.text, /추론 예산 초과/, `무엇이 일어났는지 없는다: ${n.text}`);
+  assert.match(n.text, /도구 호출/, `무엇을 하게 되었는지 없다: ${n.text}`);
+  assert.match(n.title, /원래대로 돌아갑니다|이 턴이 끝나면/, "이 전환이 영구적인지 말하지 않는다");
+});
+
+test("**숫자가 추정치라고 말한다** — 서버 로그도 스스로 추정치라고 적어 놓고 있다", () => {
+  const s = { ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 };
+  const n = thinkNotice(s, true)!;
+  assert.equal(n.estimated, true);
+  assert.match(n.text, /추정/, `추정치라는 표시가 없다: ${n.text}`);
+  assert.match(n.title, /추정한 값/, "툴팁에 추정이 없다");
+});
+
+test("**아직 초과하지 않았으면 초과라고 말하지 않는다** — 곧 임을 알린다", () => {
+  const s = { ...initialThink(), enabled: true, needsWarning: true, usedTokens: 3900 };
+  const n = thinkNotice(s, true)!;
+  assert.match(n.text, /곧 초과/, `이미 초과한 것처럼 말한다: ${n.text}`);
+  assert.ok(!n.text.includes("초과 →"), "아직 초과하지 않았는데 전환된 것처럼 말한다");
+});
+
+test("**상한과 추정치를 눈에 보이는 숫자로 함께 보여 준다** — 비교의 근거가 있어야 한다", () => {
+  const s = { ...initialThink(), enabled: false, needsWarning: true, usedTokens: 4321, maxReasoningTokens: 4096 };
+  const n = thinkNotice(s, true)!;
+  assert.match(n.text, /4,321/, `쓴 양이 없다: ${n.text}`);
+  assert.match(n.text, /4,096/, `상한이 없다: ${n.text}`);
+});
+
+// ── 서버 정본을 따른다 (2026-10-05) ────────────────────────────────────────
+//
+// 웹이 자기 기본값(4,096)으로 예산을 세고 있으면, 서버가 설정을 따라 64 로 좁혔어도
+// **서버는 조용히 도구 호출을 강제하는데 화면은 아무 설명도 하지 않는다**(실측).
+
+test("**서버가 알려 준 상한을 따른다** — 이것이 없으면 화면이 거짓말이 된다", () => {
+  const s = initialThink();
+  const next = adoptServerThink(s, { maxReasoningTokens: 64 });
+  assert.equal(next.maxReasoningTokens, 64, "서버 값 대신 자기 기본값을 썼다");
+});
+
+test("**설정을 안 했으면** 기존 값을 유지한다 — 없는 것을 지어내지 않는다", () => {
+  const s = { ...initialThink(), maxReasoningTokens: 2048 };
+  const next = adoptServerThink(s, {});
+  assert.equal(next.maxReasoningTokens, 2048);
+});
+
+test("**잘못된 서버 값은** 정본이 좁힌다 — 웹이 또 다른 규칙을 두지 않는다", () => {
+  assert.equal(adoptServerThink(initialThink(), { maxReasoningTokens: 999999 }).maxReasoningTokens, 8192);
+  // **보내는 값이 있는데** 쓸 수 없는 값이면 정본이 기본값으로 돌린다.
+  assert.equal(adoptServerThink(initialThink(), { maxReasoningTokens: "전부" }).maxReasoningTokens, 4096);
+});
+
+test("**서버가 껐다고 하면** 그 상태도 따른다 — 켜짐 을 계속 보이는 것은 거짓말이다", () => {
+  const next = adoptServerThink(initialThink(), { enabled: false, maxReasoningTokens: 64 });
+  assert.equal(next.enabled, false);
+  assert.equal(next.forcedToolChoice, true, "강제 전환을 모르는 채로 켜짐 을 유지한다");
+});
+
+test("**켜짐/끄짐 정보가 없으면** 기존 상태를 그대로 둔다", () => {
+  const s = { ...initialThink(), enabled: false, forcedToolChoice: true };
+  const next = adoptServerThink(s, { maxReasoningTokens: 512 });
+  assert.equal(next.enabled, false, "값이 없는데 바꿨다");
+  assert.equal(next.maxReasoningTokens, 512);
+});
+
+test("**상한을 맞춘 뒤에는** 임계 비교가 서버 값으로 이뤄진다 — 델타를 받으면 바로 넘는다", () => {
+  let s = adoptServerThink(initialThink(), { maxReasoningTokens: 64 });
+  assert.equal(s.enabled, true);
+  s = ingest(s, { reasoning: "가".repeat(200) }); // 한글 200자 ≈ 300 토큰 추정
+  assert.equal(s.enabled, false, "64 상한인데 임계에 안 미쳤다 — 여전히 4096 으로 계산하고 있다");
+  assert.equal(s.forcedToolChoice, true);
 });
