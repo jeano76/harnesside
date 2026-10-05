@@ -19,6 +19,7 @@ import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js"
 import { openView, toggleView, collapseView, addSlash, finishSlash, toggleSlashFold, restartSlash } from "../session/blocks.js";
 import { ModelPanel } from "./panels/ModelPanel.js";
 import { initialThink, finish, ingest, type ThinkState, type ThinkStyle } from "./agent/think.js";
+import { itemTopInContent, scrollTopToShow } from "./agent/slashScroll.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
 import { MonitorStrip } from "./panels/MonitorPanel.js";
 import { DiffPanel } from "./editor/DiffPanel.js";
@@ -191,6 +192,22 @@ export default function App() {
   const blocksRef = useRef<AgentBlock[]>([]);
   blocksRef.current = blocks;
 
+  /**
+   * WS 핸들러가 **지금 열려 있는 파일**을 알아야 한다.
+   *
+   * 그 effect 의 의존성은 `[pushToast]` 뿐이라(값이 자주 바뀌면 소켓을 다시 붙이므로
+   * 일부러 좁혔다), 핸들러 안의 `openFile` 은 **첫 렌더 값**에 묶여 있다 — 처음에는
+   * `null` 이다. 그대로 읽으면 `openFile && …` 이 **영영 거짓**이 되어, 파일을
+   * 다시 읽는 코드가 도달하지 않는다(실측: 고쳤다고 생각했는데 아무 일도 없었다).
+   *
+   * 그래서 ref 로 읽는다. `blocksRef` 와 같은 관례다 — WS 밖에서 오는 값은 ref,
+   * 렌더에 쓰는 값은 state.
+   */
+  const openFileRef = useRef(openFile);
+  openFileRef.current = openFile;
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+
   /** 열린 탭 목록 — 전환 계획을 서버에 보낼 때 필요하다(탭이 새 루트 밖에 있으면 닫혀야 한다). */
   const openTabs = useMemo(() => (openFile ? [openFile.path] : []), [openFile]);
 
@@ -349,6 +366,8 @@ export default function App() {
   // 후보는 웹에서 실행되는 명령만이다. 프로바이더 이름은 `shared/cliProviders` 가 정본이다.
   interface SlashItem { fill: string; exact: string; label: string; description: string; tip?: string; dim?: boolean }
   const [slashIdx, setSlashIdx] = useState(0);
+  // 슬래시 메뉴의 스크롤 컨테이너. 선택 표시가 화면 밖으로 나가면 **여기**만 움직인다.
+  const slashListRef = useRef<HTMLDivElement | null>(null);
   const [slashHidden, setSlashHidden] = useState(false);
   const [cliInstalled, setCliInstalled] = useState<Record<string, boolean | null>>({});
   const wantsCli = /^\/cli\s/i.test(draft);
@@ -435,6 +454,28 @@ export default function App() {
   }, [draft, cliInstalled, toCli, cliCmds]);
   const slashOpen = slashItems.length > 0 && !slashHidden;
   useEffect(() => { setSlashIdx(0); setSlashHidden(false); }, [draft]);
+
+  // ── 선택 표시가 목록 밖으로 나가지 않게 한다 ───────────────────────────────
+  //
+  // 고장: 리스트박스는 `maxHeight:240, overflowY:auto` 라 스크롤이 되는데
+  // **아무도 스크롤하지 않았다.** 그래서 ArrowDown 을 계속 누르면 **표시만
+  // 화면 아래로 사라지고 목록이 멈춘다**(실측 결함 — 사양: 아래로 갈 때 목록이 따라온다).
+  //
+  // `scrollIntoView` 를 **안 쓰는 이유**: 조상 전체를 스크롤해서 **대화까지 같이
+  // 올라가며** 읽던 자리를 빼앗긴다(§11.3). 컨테이너의 `scrollTop` 만 직접 바꾼다.
+  //
+  // `draft` 가 바뀌면 `slashIdx` 가 0 으로 리셋되므로 **선택 표시가 위로 순간이동**한다.
+  // 그래서 목록이 위로 튀지 않게 **top 은 건드리지 않고 아래쪽 경계만 본다.**
+  useEffect(() => {
+    const box = slashListRef.current;
+    if (!box) return;
+    const sel = box.querySelector<HTMLElement>('[role="option"][aria-selected="true"]');
+    if (!sel) return;
+    const next = slashIdx === 0
+      ? Math.min(box.scrollTop, scrollTopToShow({ scrollTop: 0, clientHeight: box.clientHeight, itemTop: itemTopInContent(box, sel), itemHeight: sel.offsetHeight }))
+      : scrollTopToShow({ scrollTop: box.scrollTop, clientHeight: box.clientHeight, itemTop: itemTopInContent(box, sel), itemHeight: sel.offsetHeight });
+    if (next !== box.scrollTop) box.scrollTop = Math.max(0, next);
+  }, [slashIdx, slashOpen, slashItems.length]);
   /** 후보를 입력창에 **완성**한다 — 실행은 하지 않는다(Enter 로 보낸다). */
   const completeSlash = useCallback((text: string) => {
     setDraft(text);
@@ -621,6 +662,23 @@ export default function App() {
       });
     }
   }, [pushToast]);
+
+  /**
+   * 에디터가 알림을 올릴 때 쓰는 경로 — **안정된 함수**로 둔다.
+   *
+   * 예전에 JSX 안에서 화살표 함수를 그대로 넘겼다. `EditorView` 의 `save` 가 그것을
+   * 의존성으로 잡아 **매 렌더 새로 만들어졌고**, 자동 저장 타이머가 매번 지워졌다 —
+   * 화면에는 "자동 저장" 이라고 적혀 있는데 **실제로는 한 번도 저장되지 않았다**
+   * (WS·계측 스트림이 매초 다시 그리므로 타이머가 끝나기 전에 항상 지워진다).
+   *
+   * 자식 쪽도 참조로 감싸지만(그래야 부모의 갱신 빈도에 묶이지 않는다), 부모가
+   * 처음부터 안정된 함수를 주는 편이 옳다.
+   */
+  const onEditorNotice = useCallback(
+    (kind: "info" | "warn" | "error", title: string, body: string) =>
+      pushToast({ id: "edit:" + title, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: kind === "error", source: "fs" }),
+    [pushToast],
+  );
 
   const openFileByPath = useCallback(async (path: string) => {
     try {
@@ -819,6 +877,46 @@ export default function App() {
               requiresAck: false,
               source: "fs",
             });
+            // **지금 열려 있는 그 파일**이면 내용을 다시 읽는다(2026-10-05 실측으로 고친 결함).
+            //
+            // 예전엔 알림만 남기고 **아무것도 하지 않았다** — 화면에는 계속 옛 내용이
+            // 있었다. 그런데 "알렸으니 직접 새로고침 하라" 는 답이 아니었다.
+            //
+            // ── 경로를 **맞춰야** 한다 (이게 첫 시도에서 놓친 지점) ──────────────
+            // 감시기가 보내는 `ev.path` 는 **루트 기준 상대 경로**다(`src/index.ts`).
+            // 그런데 `openFile.path` 는 **절대 경로**다. 둘을 그대로 `===` 로 비교하면
+            // **영영 맞지 않아** 새 내용을 읽는 코드가 도달하지 않는다 — 계측 없이
+            // "고쳤다"고 말하기 딱 좋은 형태였다. 그래서 워크스페이스 루트로 잇는다.
+            //
+            // **덮어쓸지는 EditorView 가 판단한다**(`planExternalChange`): 안 고친 버퍼면
+            // 디스크를 따르고, **미저장 편집이 있으면 보존한다.** 여기서 곧장
+            // `setOpenFile` 로 갈아끼우면 사용자의 편집을 지운다 — 그래서 읽기만 하고
+            // 판단은 넘긴다.
+            // **ref 로 읽는다** — 이 effect 는 `openFile` 을 의존하지 않으므로
+            // 그대로 읽으면 첫 렌더 값(`null`)에 묶여 있다(위 주석 참고).
+            const root = workspaceRef.current?.root;
+            const abs = root ? `${root.replace(/\/+$/, "")}/${p}` : null;
+            if (abs && openFileRef.current && openFileRef.current.path === abs) {
+              void client
+                .get<{ path: string; content: string; version: number; size: number }>(
+                  `/api/fs/file?path=${encodeURIComponent(abs)}`
+                )
+                .then((f) => setOpenFile(f))
+                .catch(() => {
+                  // **읽기에 실패하면 모르는 상태로 두고 알린다.** 방금 읽은 값이
+                  // 옛 값일 수 있으니 조용히 성공한 것처럼 두지 않는다.
+                  pushToast({
+                    id: `fs:reload:${p}`,
+                    kind: "warn",
+                    title: "바뀐 내용을 다시 읽지 못했습니다",
+                    body: `${p} — 화면은 연 시점의 내용을 그대로 보입니다. 직접 다시 열어 확인하십시오.`,
+                    at: Date.now(),
+                    ttlMs: 12_000,
+                    requiresAck: false,
+                    source: "fs",
+                  });
+                });
+            }
           }
         }
       },
@@ -1120,7 +1218,7 @@ export default function App() {
             <EditorView
               client={client}
               info={openFile}
-              onNotice={(kind, title, body) => pushToast({ id: "edit:" + title, kind, title, body, at: Date.now(), ttlMs: 10_000, requiresAck: kind === "error", source: "fs" })}
+              onNotice={onEditorNotice}
             />
           </div>
         </div>
@@ -1269,7 +1367,7 @@ export default function App() {
         </div>
         {slashOpen && (
           <div style={{ position: "relative", height: 0, flex: "0 0 auto", zIndex: 5 }}>
-            <div role="listbox" aria-label="슬래시 명령 추천" style={{ position: "absolute", left: 8, bottom: 4, minWidth: 380, maxWidth: "calc(100% - 16px)", maxHeight: 240, overflowY: "auto", background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, boxShadow: "0 4px 16px rgba(0,0,0,.5)" }}>
+            <div ref={slashListRef} role="listbox" aria-label="슬래시 명령 추천" style={{ position: "absolute", left: 8, bottom: 4, minWidth: 380, maxWidth: "calc(100% - 16px)", maxHeight: 240, overflowY: "auto", background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, boxShadow: "0 4px 16px rgba(0,0,0,.5)" }}>
               {slashItems.map((c, i) => (
                 <div
                   key={c.fill}

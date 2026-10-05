@@ -44,6 +44,9 @@ import { searchHub, recommend, fillSizes } from "../models/hub.js";
 import { ModelDownloader, modelPathFor } from "../models/download.js";
 import { planSwap } from "../models/manage.js";
 import { UpdateService } from "./updateService.js";
+import type { ReleaseManifest } from "./update/manifest.js";
+import { parseManifest } from "./update/manifest.js";
+import { readBuildInfo } from "./buildInfo.js";
 import { NoticeService } from "./update/noticeService.js";
 import { TerminalManager, exitLabel } from "./terminal.js";
 import type { UpdateChannel, ApplyGuard } from "./update/pipeline.js";
@@ -60,8 +63,10 @@ import { readVersion } from "./version.js";
 import { remoteBaseUrlNotice } from "./baseUrlPolicy.js";
 import { SlashService, SERVER_SLASH_KEYS, type ServerSlashKey } from "./slashService.js";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join, isAbsolute, resolve, relative } from "node:path";
 import { mkdir, access, readdir, stat, readFile, writeFile, rm } from "node:fs/promises";
+import { readFileSync, writeFileSync } from "node:fs";
 import stripAnsi from "strip-ansi";
 
 const argv = process.argv.slice(2);
@@ -257,11 +262,50 @@ async function main(): Promise<number> {
   // §9.1 업데이트. GitHub 를 **실제로** 본다. 네트워크 주입은 테스트에만 쓴다.
   const updateSlotsDir = join(stateDir(projectRoot), "update-slots");
   const updateMarker = join(stateDir(projectRoot), "update-pending.json");
-  const updates: UpdateService = new UpdateService({
+  const updateStatsFile = join(stateDir(projectRoot), "update-stats.json");
+
+  // ── R-2.1: 추정으로 메우지 않는다 ──────────────────────────────────────────
+  // 직전 적용에 걸린 **실측 초**. 저장된 값이 없으면 null — 화면에 "아직 실측한 적 없다".
+  // 예전 값 `estimatedSeconds: 8` 은 **사용자 안내 문구**로 나갔던 숫자였다.
+  const measuredApplySeconds = (): number | null => {
+    try {
+      const raw = JSON.parse(readFileSync(updateStatsFile, "utf8")) as { lastApplySeconds?: unknown };
+      return typeof raw.lastApplySeconds === "number" && Number.isFinite(raw.lastApplySeconds) ? raw.lastApplySeconds : null;
+    } catch {
+      return null;
+    }
+  };
+  /** 이번에 받을 자산의 실제 크기. 받을 자산이 없으면 null(모름). */
+  const pendingAssetBytes = (): number | null => {
+    const st = updates.get();
+    if (st.assets.length === 0) return null;
+    const tgz = st.assets.find((a) => a.name.endsWith(".tar.gz") || a.name.endsWith(".tgz"));
+    const a = tgz ?? st.assets[0];
+    return a.size > 0 ? a.size : null;
+  };
+
+  // ── 자기 경로: **`process.argv[1]` 이 아니라 이 모듈의 실제 경로** ────────────
+//
+// `installRoot()` 는 `selfPath` 의 두 단계 위 = `dist/` 다. 그러므로 `selfPath` 가
+// **진짜 진입 파일** 이어야 한다.
+//
+// `process.argv[1]` 을 쓰면 **전역 설치에서 완전히 틀린다**:
+//   npm 은 `<prefix>/bin/harnesside` 를 **심볼릭 링크**로 만든다.
+//   `$PATH` 로 실행하면 argv[1] 은 그 링크 경로이고,
+//   `resolve(링크, "..", "..")` 는 **`dist/` 가 아니라 npm 전역 prefix 전체**가 된다.
+//   → 셀프업데이트가 **npm 전역 폴더 통째로** 교체하려 한다.
+//
+// `import.meta.url` 은 **노드가 심볼릭 링크를 따라가서** 실제 모듈 경로를 준다.
+// 그래서 전역 설치에서도 `installRoot` 가 패키지 안의 `dist/` 를 정확히 가리킨다.
+// (`src/server/` 와 `dist/server/` 는 둘 다 두 단계 아래라 개발 실행에서도 같다.)
+const selfPath = fileURLToPath(import.meta.url);
+
+const updates: UpdateService = new UpdateService({
     currentVersion: readVersion(),
     channel: (process.env.HARNESSIDE_UPDATE_CHANNEL as UpdateChannel) ?? "stable",
     slotsDir: updateSlotsDir,
-    selfPath: process.argv[1] ?? join(projectRoot, "dist", "server", "index.js"),
+    selfPath,
+    measuredApplySeconds,
     onPhase: (p) => {
       hub?.publish({ type: "update.phase", phase: p } as never);
       const lvl = p.state === "failed" ? "error" : "info";
@@ -272,12 +316,32 @@ async function main(): Promise<number> {
       runningTurns: agent.turn.running ? ["현재 진행 중"] : [],
       // **진행 중 자식은 무엇이든 알려야 한다** — 승인 대기 중인 셸도 포함.
       processes: launcher ? [launcher.baseUrl] : [],
-      dirtyTabs: 0,
+      // ── R-2.1: 추정이 아니라 사실 ──────────────────────────────────────────
+      //
+      // **미저장 편집 탭 수를 서버는 모른다.** 편집 버퍼와 `dirtySince` 은
+      // 브라우저 안에 있다(`src/web/editor/EditorView.tsx` · `autosave.ts`) — 서버는
+      // 그걸 볼 수 없다. 예전엔 `0` 이었다. `0` 은 **"저장 안 한 것이 없다"** 라는
+      // 거짓말이고, 그 거짓말이 사용자에게 "적용 가능" 과 함께 보여도 아무도 모른다.
+      //
+      // 그래서 `null`(모름)이다. `planApply` 는 `null` 을 **차단 사유가 아니라
+      // 알림 항목**으로 말한다 — 사용자가 직접 확인하고 판단할 수 있는 사실이니까.
+      // **결정 기록**: 차단 사유로 만들면 "모른다" 때문에 모든 업데이트가 막히고,
+      // 그러면 사용자는 가짜로 0 을 넣도록 압박받는다. 알림이 옳다.
+      dirtyTabs: null,
       // 슬롯이 하나도 없으면 **되돌릴 곳이 없다** → planApply 가 업데이트를 막는다(D14).
       canRollback: updates.get().slots.length > 0,
       daemon: mode === "daemon",
-      estimatedSeconds: 8,
-      assetBytes: 8 * 1024 * 1024,
+      // **직전 적용 실측**만 말한다. 첫 적용이면 `null` 이고 화면에 "아직 실측한 적 없다" 고
+      // 보인다 — 숫자를 지어내면 그것이 사용자에게 **안내 문구**가 된다(R-2.1).
+      estimatedSeconds: measuredApplySeconds(),
+      // 이번에 **실제로 받을** 자산의 크기. 예전 값 `8 * 1024 * 1024` 은 숫자가 아니라
+      // 희망이었다(구성 §2.2 실측 5번).
+      assetBytes: pendingAssetBytes(),
+      // 의존성은 **여기서 정하지 않는다.** UpdateService.planApply 가 항상 직접 본다
+      // (Raiser R-1) — 호출자가 그 한 줄을 빠뜨려도 조용히 통과하지 않게 하기 위해서다.
+      // 여기에도 넣으면 **정본이 두 개**가 되고, 빠뜨린 쪽이 조용히 놓친다.
+      dependenciesReady: null,
+      missingDependencies: [],
     }),
   });
   // M13 추천 알림 (§5.13.2). 판단 로직은 `update/notify.ts` 에 있었으나
@@ -512,7 +576,26 @@ async function main(): Promise<number> {
     }
   }
 
-  const webDir = join(projectRoot, "dist", "web");
+  // ── 웹 자산 경로: **설치 기준**, 프로젝트 기준이 아니다 ──────────────────
+  //
+  // 예전엔 `join(projectRoot, "dist", "web")` 였다. 프로젝트가 곧 harnesside 저장소일
+  // 때는 우연히 맞아서 **발견되지 않았다.** 전역 설치로 아무 프로젝트에서 실행하면
+  // 이 경로에 **아무것도 없다.**
+  //
+  // 실측(전역 설치): 부팅 9단계가 "dist/web 없음 (실패)" 이었고, IDE 루트가
+  // `{"error":"dist/web 가 없습니다 …","status":404}` 를 반환했다 — **창이 빈 화면이었다.**
+  // §0.2 가 가장 무서워하는 것이 바로 이것("빈 화면 금지")이고, 전역 설치에서 실제로 일어났다.
+  //
+  // 그래서 **설치 위치**로 본다: 이 모듈(`<설치>/dist/server/index.js`)의 두 단계 위가
+  // `dist/` 다. 개발 실행에서는 그게 `<저장소>/dist` 이므로 **예전과 같다.**
+  //
+  // **두 단계가 필요** (실측으로 잡은 내 계산 오류): `join("/…/dist/server/index.js", "..", "web")`
+  // 는 `…/dist/server/web` 다. `..` 는 **파일명만** 상쇄하기 때문이다 — 파일이 있는
+  // 디렉터리까지만 올라간다. 한 단계가 더 필요하다. 그래서 `resolve` 로 `dist/` 를
+  // 먼저 만들고 거기서 `web` 을 뺀다 — **`installRoot()` 와 같은 규칙**이라 두 경로가
+  // 어긋날 수 없다.
+  const installDistDir = resolve(selfPath, "..", "..");
+  const webDir = join(installDistDir, "web");
   let tokenRec: Awaited<ReturnType<typeof issueToken>> | null = null;
 
   // Q-10: 원격 baseUrl 은 지원하지 않는다 — 설정에 있으면 조용히 무시하지 않고 말한다(src/server/baseUrlPolicy.ts).
@@ -642,6 +725,12 @@ async function main(): Promise<number> {
           }))
           .route("GET", "/api/system/version", () => ({
             version: readVersion(),
+            // R-1/R-2.3: 릴리스 식별자 **와** 빌드 신원을 **따로** 말한다.
+            // 한 줄로 이으면 뒤에 뭐가 붙었는지 읽는 사람이 모른다(§0.1).
+            build: (() => {
+              const b = readBuildInfo();
+              return { date: b.date, sha: b.sha, dirty: b.dirty, builtAt: b.builtAt, stamped: b.stamped };
+            })(),
             llama: r.llama?.source ?? null,
             // 채택한 경로에서는 **서버가 스스로 말한 모델 이름** 이 진짜다.
             // 로컬 파일 경로는 그 서버가 지금 serve 하는 것과 다를 수 있다.
@@ -1267,11 +1356,47 @@ async function main(): Promise<number> {
             const st = updates.get();
             const asset = st.assets[Number(body.index ?? -1)];
             if (!asset) throw Object.assign(new Error("자산이 없습니다 — 먼저 확인하십시오"), { status: 400 });
+            // R-5: **아카이브는 그대로 받고 풀지 않는다** — 여기서 트리를 만들지 않는다.
+            // `downloadBundle` 가 매니페스트와 대조한 뒤 **슬롯 안**에만 트리를 만든다.
+            // 검증 전에는 어떤 경로도 교체하지 않는다(§R-5.3).
             return updates.downloadAsset(asset, body.expectHash);
           })
-          // P13 apply route (see PROMPT phases) — swap + marker, no auto-restart.
+          // ── R-5/R-3: 배포물을 **검증된 트리**로 준비한다 ───────────────────
+          // 매니페스트 수신 → 아카이브 수신 → 해시 대조 → 풀기 → **목록 대조**.
+          // 여기서 통과한 것만 `/api/update/apply` 의 입력이 될 수 있다.
+          .route("POST", "/api/update/bundle", async (c) => {
+            const body = (await readBody(c.req)) as { index?: number };
+            const st = updates.get();
+            const asset = st.assets[Number(body.index ?? -1)];
+            if (!asset) throw Object.assign(new Error("자산이 없습니다 — 먼저 확인하십시오"), { status: 400 });
+            const r = await updates.downloadBundle(asset);
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: 400 });
+            ring.info("update", `update-bundle-verified — ${r.detail}`);
+            return {
+              ok: true,
+              tree: r.tree,
+              detail: r.detail,
+              // **매니페스트 전체를 돌려준다.** 클라이언트는 그것을 **그대로** `/apply` 에
+              // 되돌려 보내고, 서버가 **다시** 파싱·검증한다(`parseManifest`).
+              // 경로가 아니라 내용이라 임의 파일 지정은 불가능하고, 재검증하므로
+              // 손으로 바꾼 매니페스트는 자기 검증에서 떨어진다.
+              manifest: r.manifest ?? null,
+              treeSha256: r.manifest?.treeSha256 ?? null,
+            };
+          })
+          // Raiser R-1: 의존성 사실. **추정으로 메우지 않는다**(구성 §13).
+          .route("GET", "/api/update/deps", async () => {
+            // 정본은 `UpdateService` 다 — 여기서 따로 판정하지 않는다(§14 두 정본 금지).
+            return updates.dependencies();
+          })
+          // P13 apply route — 교체 + 마커. **자동 재시작은 하지 않는다.**
+          //
+          // 입력을 바꿨다(R-5): 예전엔 **자산 파일 하나**를 인자로 받았고 `stageSwap` 가
+          // 그것을 실행 파일에 복사했다. 배포물은 `dist/` **트리**이므로, 경로는
+          // `/api/update/bundle` 이 **검증을 통과한 트리 디렉터리**여야 한다.
+          // 슬롯 밖의 경로는 거부한다 — 그게 곧 임의 파일 쓰기다.
           .route("POST", "/api/update/apply", async (c) => {
-            const body = (await readBody(c.req)) as { asset?: string; confirm?: boolean };
+            const body = (await readBody(c.req)) as { tree?: string; manifest?: unknown; confirm?: boolean };
             if (body.confirm !== true) {
               throw Object.assign(new Error("적용하려면 confirm:true 로 명시적으로 확인하십시오"), { status: 400 });
             }
@@ -1279,26 +1404,81 @@ async function main(): Promise<number> {
             if (!decision.ok) {
               throw Object.assign(new Error("APPLY_GUARD: " + decision.blockers.join(" / ")), { status: 409 });
             }
-            const asset = String(body.asset ?? "");
-            const resolved = resolve(asset);
+            const tree = String(body.tree ?? "");
+            const resolved = resolve(tree);
             const rel = relative(updateSlotsDir, resolved);
-            if (asset === "" || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-              throw Object.assign(new Error("슬롯 안의 다운로드된 자산 경로만 적용할 수 있습니다"), { status: 400 });
+            if (tree === "" || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+              throw Object.assign(new Error("슬롯 안에서 검증된 트리만 적용할 수 있습니다 — 먼저 /api/update/bundle 을 통과하십시오"), { status: 400 });
             }
             try {
               await stat(resolved);
             } catch {
-              throw Object.assign(new Error("자산 파일이 없습니다 — 먼저 다운로드하십시오"), { status: 400 });
+              throw Object.assign(new Error("검증된 트리가 없습니다 — 먼저 배포물을 받으십시오"), { status: 400 });
             }
-            const staged = await updates.stageSwap(resolved);
+            const t0 = Date.now();
+            // 매니페스트는 **경로가 아니라 내용** 으로 받는다 — 클라이언트가 경로를
+            // 조작해 임의 파일을 쓰게 하지 않는다. 그래야 설치 루트에 **기록되는** 것이
+            // 우리가 방금 **검증한** 그 매니페스트이다.
+            //
+            // 그리고 **다시 검증한다.** 클라이언트는 `/bundle` 응답을 그대로 돌려보내므로
+            // 원래는 유효하다 — 하지만 그 사이에 아무도 못 고칠 이유는 없다. 재검증하면
+            // 손으로 바꾼 매니페스트는 자기 검증(`parseManifest`)에서 떨어진다.
+            let manifest: ReleaseManifest | null = null;
+            if (body.manifest != null) {
+              const parsed = typeof body.manifest === "object" ? parseManifest(JSON.stringify(body.manifest)) : null;
+              if (!parsed || !parsed.ok) {
+                const why = parsed && !parsed.ok ? parsed.error : "형식이 아닙니다";
+                throw Object.assign(new Error(`매니페스트를 받아들일 수 없습니다: ${why} — 재검증 없이 교체하지 않습니다`), { status: 400 });
+              }
+              manifest = parsed.manifest;
+            }
+            const staged = await updates.stageSwap(resolved, manifest);
+            const tookSec = (Date.now() - t0) / 1000;
             if (!staged.ok) throw Object.assign(new Error(staged.detail), { status: 500 });
-            const marker = { swappedAt: Date.now(), asset: resolved, slot: staged.slot ?? null };
+
+            // R-2.1: 교체를 **실측**하고 저장한다. 다음부터 화면에 숫자가 보인다.
+            // 첫 적용에서는 이 값이 없다 → 화면에 "아직 실측한 적이 없습니다" 가 나온다.
+            try {
+              writeFileSync(updateStatsFile, JSON.stringify({ lastApplySeconds: Math.round(tookSec * 10) / 10 }, null, 2), "utf8");
+            } catch {
+              /* 못 저장해도 교체는 성공이다 — 그저 다음에 숫자가 없을 뿐이다. */
+            }
+
+            // ── R-6.1: 마커에 **빌드 신원**을 함께 담는다 ──────────────────────
+            //
+            // 예전 마커에는 `asset`·`slot`·`swappedAt` 만 있었다. 그래서 다음 기동이
+            // "어느 버전으로 떴는가" 를 **기록으로 남기지 못했다.**
+            // 지금은 이 기동의 신원(`date`·`sha`)을 같이 적는다. 부팅 단계가 이
+            // 마커를 소비할 때 **같은 신원인지** 비교하면, "교체된 파일" 과
+            // "실제로 실행된 파일" 이 같은 대상이라는 **증거**가 남는다.
+            const bi = readBuildInfo();
+            // 교체한 트리의 해시 — `verifyInstalled` 가 **기동 시** 재계산한 값과
+            // 비교할 대상. 여기를 안 적으면 다음 기동이 "무엇이 떴는가" 를 증명 못 한다.
+            const treeSha256 = (await updates.verifyInstalled()).sha;
+            const marker = {
+              swappedAt: Date.now(),
+              tree: resolved,
+              slot: staged.slot ?? null,
+              treeSha256,
+              target: { version: bi.version, date: bi.date, sha: bi.sha, dirty: bi.dirty, builtAt: bi.builtAt },
+            };
             await writeFile(updateMarker, JSON.stringify(marker, null, 2), "utf8");
-            ring.info("update", "update-applied-pending-restart", "server");
+            ring.info("update", "update-applied-pending-restart", "server", {
+              slot: staged.slot ?? null,
+              treeSha256: marker.treeSha256,
+            });
             return {
               ok: true,
               slot: staged.slot,
-              next: "서버를 재시작하면 새 버전으로 기동합니다. 부팅이 적용을 확인하고, 실패하면 /api/update/rollback 으로 되돌리십시오.",
+              treeSha256: marker.treeSha256,
+              // ── R-6.2: 없는 걸 있다고 말하지 않는다 ────────────────────────
+              // 이 서버는 **자기 자신을 재시작할 수 없다.** 재기동·부팅 확인·자동
+              // 롤백은 **상위 감시기(supervisor)** 가 해야 하고, 지금은 없다.
+              // 그래서 사용자에게 정확히 무엇을 시켜야 하는지 말하고 끝낸다.
+              next:
+                "서버를 재시작하면 새 버전으로 기동합니다. 이 기동이 마커를 소비하면 적용이 확인된 것입니다. " +
+                "기동하지 못하면 다음 실행 때 '업데이트 미확인' 으로 알립니다 — 자동으로 되돌리지는 않습니다(상위 감시기가 없습니다). " +
+                "수동 복구: /api/update/rollback",
             };
           })
           .route("POST", "/api/update/rollback", async (c) => {
@@ -1341,17 +1521,53 @@ async function main(): Promise<number> {
           });
         const { port: actual } = await http.start();
         // P13 적용 마커 소비 — 여기까지 부팅됐다는 것이 곧 새 실행 파일의 기동 확인이다.
-        // 마커를 지우고 그 사실을 말한다. 슬롯은 남긴다(수동 롤백용).
-        // 주의: 새 바이너리가 부팅 전에 죽으면 이 코드는 실행되지 않는다 —
-        // 그 경우 슬롯 경로로 수동 복구한다. 완전 자동 복구는 상위 감시기의 몫이다.
+        //
+        // ── R-6.1/R-6.2: 여기서 **무엇을 확인하는가** ────────────────────────
+        //
+        // 예전엔 마커가 **있으면** 지우고 "확인됨" 이라고했다. 그런데 이 기동이
+        // **어느 버전인지** 보지 않았다. 그래서 마커가 남아 있다는 사실이
+        // "이전 부팅이 실패했다" 와 "사람이 되돌렸다" 를 **구분하지 못했다.**
+        //
+        // 지금은 세 가지를 본다:
+        //   1) 지금 기동한 트리 해시가 마커에 적힌 값과 같은가 — 같으면 **이 기동이
+        //      교체된 트리로 떴다.** 그게 "교체한 것" 과 "실행된 것" 의 일치 증거다.
+        //   2) 마커의 대상 빌드와 지금 빌드의 신원이 다른가 — 다르면 **교체된 버전이
+        //      한 번도 확인되지 않았다**(또는 사람이 되돌렸다).
+        //   3) 그때 **되돌릴 곳**(슬롯)이 있는가 — 없으면 "되돌릴 수 없다" 고 **말한다.**
+        //
+        // **자동 롤백은 하지 않는다.** 이 서버는 자기 자신이 아니면 부팅 실패를 알 수 없고,
+        // 재시작도 못 한다. 상위 감시기(supervisor) 가 없으므로 자동 복구는 **불가능**하고,
+        // 없는 걸 있다고 말하지 않는다. 대신 **미확인 사실과 슬롯 경로를 확실히 남긴다.**
         try {
-          const pending = JSON.parse(await readFile(updateMarker, "utf8")) as { asset?: string; slot?: string | null; swappedAt?: number };
-          await rm(updateMarker, { force: true });
-          ring.info("update", `업데이트 적용 확인됨: ${pending.asset ?? "?"} · 슬롯 ${pending.slot ?? "-"}`, "server");
-          emit(`[update] 적용 확인됨 — 실패하면 /api/update/rollback 으로 되돌리십시오 (슬롯: ${pending.slot ?? "-"})`);
+          const pending = JSON.parse(await readFile(updateMarker, "utf8")) as {
+            tree?: string; slot?: string | null; swappedAt?: number;
+            treeSha256?: string | null;
+            target?: { version?: string; date?: string | null; sha?: string | null } | null;
+          };
+          const booted = await updates.verifyInstalled();
+          const biNow = readBuildInfo();
+          const sameBuild = !!(pending.target?.sha && biNow.sha && pending.target.sha === biNow.sha);
+          const sameTree = !!(pending.treeSha256 && booted.sha && pending.treeSha256 === booted.sha);
+          const confirmed = sameBuild && (pending.treeSha256 ? sameTree : true);
+
+          if (confirmed) {
+            await rm(updateMarker, { force: true });
+            ring.info("update", `업데이트 적용 확인됨: ${pending.slot ?? "-"} · 트리 ${booted.sha?.slice(0, 7) ?? "미측정"}`, "server");
+            emit(`[update] 적용 확인됨 — 트리 ${booted.sha?.slice(0, 7) ?? "미측정"} 로 기동했습니다.`);
+          } else {
+            // **마커를 지우지 않는다.** 무엇이 있었는지 모르게 지우면 적용 여부를
+            // 알 수 없게 된다. 대신 **무엇이 달랐는지**를 말하고 UI 에 넘긴다.
+            const why = [
+              sameBuild ? null : `빌드 불일치 (교체된 빌드 ${pending.target?.sha ?? "미상"} ≠ 지금 ${biNow.sha ?? "미상"})`,
+              pending.treeSha256 && !sameTree ? `트리 불일치 (기록 ${String(pending.treeSha256).slice(0, 7)}… ≠ 지금 ${booted.sha?.slice(0, 7) ?? "검증 실패"})` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ");
+            ring.info("update", `업데이트 미확인 — ${why || "사유를 특정할 수 없습니다"}`, "server");
+            emit(`[update] 업데이트 미확인 — ${why || "사유를 특정할 수 없습니다"}. 슬롯이 있으면 /api/update/rollback 으로 되돌리십시오.`);
+          }
         } catch {
-          // 마커 없음 = 일반 부팅. 깨진 마커도 여기서 지우지 않는다 —
-          // 무엇이 있었는지 모른 채 지우면 적용 여부를 알 수 없게 된다.
+          // 마커 없음 = 일반 부팅.
         }
         hub.publish({ type: "sys.logs", limits: ring.status } as never);
         // 컨텍스트 부팅 시 1회 계산 — 복원된 대화가 있으면 유휴 상태에서도 수치가 보인다.
@@ -1376,7 +1592,14 @@ async function main(): Promise<number> {
         }
         const idePort = r.ports?.idePort ?? 7317;
         const mode = r.gpu?.mode ?? "off";
-        const cdpPort = Number(process.env.HARNESSIDE_CDP_PORT ?? 9222);
+        // CDP 포트는 **사용자가 명시했을 때만** 넘긴다.
+//
+// 여기서 예전처럼 기본값 9222 를 넘기면 `BrowserLauncher` 가 그것을 "사용자가 지정한
+// 포트" 로 보고, 다른 인스턴스가 쓰고 있어도 **포기하지 않고** 그대로 쓴다.
+// 그 결과 남의 브라우저에 붙어 새 창이 뜬다(실측). undefined 를 넘겨야
+// "비어 있으면 다음 포트로 간다" 가 동작한다.
+const cdpEnv = process.env.HARNESSIDE_CDP_PORT;
+const cdpPort = cdpEnv !== undefined && cdpEnv.trim() !== "" ? Number(cdpEnv) : undefined;
         browserLaunchAttempted = true;
         browser = new BrowserLauncher(
           {

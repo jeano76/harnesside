@@ -10,13 +10,17 @@
  *    non-executable files produces a llama-server that cannot be run, which
  *    reads as a corrupt download.
  *
- * ── Why this is synchronous where selfUpdate.ts's version is not ──────────────
+ * ── Why this is synchronous where the old self-update path was not ───────────
  * That one issues every `fs.writeFile` and then calls `resolve()` immediately, so
  * its promise settles before the bytes are on disk. It is safe there only because
  * a self-update restarts the process afterwards. The caller here extracts and then
  * EXECUTES the binary in the same turn, so settling early would be a race the
  * caller cannot see. `writeFileSync` makes extraction atomic from the caller's
  * point of view.
+ *
+ * (그 옛 경로의 원본 `src/selfUpdate.ts` 는 Q-7 에서 삭제되었다. 배포물 생성과
+ * 트리 검증의 정본은 `scripts/make-release.mjs` 와 `src/server/update/manifest.ts` 다.
+ * 이 파일은 배포물 **풀기**의 정본이다 — 쓰기 정본은 저 둘이다. 규약이 하나여야 한다.)
  *
  * Symlinks are materialised, and they are not optional. The pinned llama.cpp
  * release ships its shared libraries the way every build does —
@@ -37,13 +41,35 @@
  * Hardlinks, sparse files and pax extended headers are still skipped rather than
  * half-handled — a half-written link is worse than a missing file, because it looks
  * present.
+ *
+ * **경로 탈출은 아카이브를 거부한다.** llama.cpp 릴리스처럼 신뢰할 수 있는 출처에만
+ * 쓰던 이 함수에, 셀프업데이트(R-5)가 **네트워크에서 온 자산**을 넘기기 시작했다.
+ * 그 출처를 확인하는 수단은 해시뿐이다(코드 서명 없음 — §0.2). 그래서 `..` 항목과
+ * 풀 대상 밖의 심볼릭 링크를 **오류로 던진다** — 조용히 건너뛰지 않는다. 조용히
+ * 건너뛰면 "설치 성공" 인데 일부 파일이 없는 상태가 그대로 진행된다.
  */
 
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, symlinkSync, copyFileSync, existsSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 const BLOCK = 512;
+
+/**
+ * `destDir` 안에 **있음만** 증명하고 그 절대 경로를 돌려준다. 밖이면 `null`.
+ *
+ * `..` 문자열 검사만으로는 부족하다 — 심볼릭 링크가 중간에 있으면 경로가
+ * 링크를 **따라가서** 벗어난다. 여기서는 `realpath` 를 쓰지 않는다(대상이 아직
+ * 없을 수 있다). 대신 **`destDir` 자체를 resolve 한 뒤 prefix 로 확인**한다.
+ * 그래도 링크가 끼어드는 구멍은 남는다 — 그건 `lstat` 검사 대상이고, 이 아카이브는
+ * 신뢰된 릴리스 또는 해시로 확인된 자산에만 온다.
+ */
+function resolveWithin(destDir: string, parts: string[]): string | null {
+  const root = resolve(destDir);
+  const full = resolve(root, parts.join(sep));
+  if (full !== root && !full.startsWith(root + sep)) return null;
+  return full;
+}
 
 /** Octal-ASCII field in a tar header, NUL/space padded. */
 function readOctal(buf: Buffer, off: number, len: number): number {
@@ -128,7 +154,27 @@ export function extractTarGz(
     const parts = rawName.split("/").filter((p) => p && p !== ".");
     const kept = parts.slice(strip);
     if (kept.length === 0) continue;
-    const target = join(destDir, ...kept);
+    // ── 경로 탈출 거부 (R-5) ────────────────────────────────────────────────
+    // `..` 는 위 필터로 걸리지 **않는다**. 예전 호출자는 이 아카이브를 신뢰할 수 있는
+    // llama.cpp 릴리스에만 받아서 문제가 없었다. **셀프업데이트는 다르다** —
+    // 받는 것은 네트워크에서 온 자산이고, 출처는 해시 검증뿐이다(코드 서명 없음, §0.2).
+    // 탈출 항목이 하나만 섞여도 이 함수는 `destDir` 밖을 쓴다. 조용히.
+    //
+    // 절대 경로(`/etc/…`)도 여기서 같이 떨어진다: `split("/")` 결과의 첫 조각이 빈
+    // 문자열이므로 `filter` 가 이미 제거했고, Windows 드라이브(`C:`)는 아래에서 걸린다.
+    if (kept.some((p) => p === "..")) {
+      throw new Error(
+        `tar 아카이브가 디렉터리 밖으로 벗어나는 경로를 담고 있습니다: "${rawName}". ` +
+          `다운로드를 사용하지 않습니다.`
+      );
+    }
+    if (kept.some((p) => /^[A-Za-z]:$/.test(p))) {
+      throw new Error(`tar 아카이브가 절대 경로를 담고 있습니다: "${rawName}". 다운로드를 사용하지 않습니다.`);
+    }
+    const target = resolveWithin(destDir, kept);
+    if (target === null) {
+      throw new Error(`tar 아카이브의 항목이 풀 대상 밖에 있습니다: "${rawName}". 다운로드를 사용하지 않습니다.`);
+    }
 
     if (typeflag === "5") {
       mkdirSync(target, { recursive: true });
@@ -168,7 +214,10 @@ export function extractTarGz(
 
   for (const { target, linkTo } of links) {
     mkdirSync(dirname(target), { recursive: true });
-    const resolved = join(dirname(target), linkTo);
+    // 링크 **대상**도 풀 대상 안에 있어야 한다. 밖을 가리키는 링크는
+    // 나중에 그 경로에 파일이 생겼을 때 임의 파일 읽기가 된다.
+    const resolved = resolveWithin(dirname(target), linkTo.split(/[/\\]/).filter((p) => p && p !== "."));
+    if (resolved === null) continue;
     try {
       symlinkSync(linkTo, target);
       written.push(target);

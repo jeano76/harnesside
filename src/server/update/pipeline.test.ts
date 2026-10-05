@@ -138,6 +138,8 @@ test("적용 확인: 진행 중 턴·프로세스·미저장 탭을 **모두** �
     daemon: false,
     estimatedSeconds: 12.4,
     assetBytes: 50 * 1024 * 1024,
+    dependenciesReady: true,
+    missingDependencies: [],
   };
   const d = planApply(g);
   assert.equal(d.ok, true);
@@ -150,17 +152,67 @@ test("적용 확인: 진행 중 턴·프로세스·미저장 탭을 **모두** �
 });
 
 test("데몬 모드와 창 모드의 **결과가 다르다** — §4.4", () => {
-  const base: ApplyGuard = { runningTurns: [], processes: [], dirtyTabs: 0, canRollback: true, daemon: true, estimatedSeconds: 1, assetBytes: 1 };
+  const base: ApplyGuard = {
+    runningTurns: [], processes: [], dirtyTabs: 0, canRollback: true, daemon: true,
+    estimatedSeconds: 1, assetBytes: 1, dependenciesReady: true, missingDependencies: [],
+  };
   assert.ok(planApply(base).items.some((i) => i.includes("계속 살아")), "데몬 모드가 창 모드와 같은 설명을 한다");
   assert.ok(planApply({ ...base, daemon: false }).items.some((i) => i.includes("종료됩니다")));
 });
 
 test("**롤백 불가면 시도 자체를 막는다** — 되돌릴 수 없는 베팅을 하지 않는다", () => {
-  const g: ApplyGuard = { runningTurns: [], processes: [], dirtyTabs: 0, canRollback: false, daemon: true, estimatedSeconds: 1, assetBytes: 1 };
+  const g: ApplyGuard = {
+    runningTurns: [], processes: [], dirtyTabs: 0, canRollback: false, daemon: true,
+    estimatedSeconds: 1, assetBytes: 1, dependenciesReady: true, missingDependencies: [],
+  };
   const d = planApply(g);
   assert.equal(d.ok, false, "롤백 불가한데 진행을 허용했다");
   assert.ok(d.blockers.length > 0, "막는 사유가 없다");
   assert.match(d.blockers[0], /되돌릴 수 없/);
+});
+
+// ── R-2.1: 추정이 아니라 사실 ───────────────────────────────────────────────
+//
+// 아래 셋은 **하나씩만** 성립하면 된다. 서버가 모르는 값을 숫자로 메우면
+// 그 숫자가 사용자에게 **안내 문구**로 나간다(구성 §2.2 실측 5번).
+
+test("**모르는 것은 모른다고 말한다** — 실측 없는데 숫자를 지어내지 않는다", () => {
+  const base: ApplyGuard = {
+    runningTurns: [], processes: [], dirtyTabs: 0, canRollback: true, daemon: true,
+    estimatedSeconds: null, assetBytes: null, dependenciesReady: true, missingDependencies: [],
+  };
+  // 1) 미저장 탭을 세지 못했으면 "0개" 가 아니라 "확인 못 했습니다".
+  const unknownTabs = planApply({ ...base, dirtyTabs: null, estimatedSeconds: 4, assetBytes: 2048 });
+  assert.ok(
+    unknownTabs.items.some((i) => i.includes("확인 못 했") && i.includes("저장되지 않은")),
+    `모르는 미저장 탭을 0개로 말했다: ${unknownTabs.items.join(" / ")}`
+  );
+  assert.equal(unknownTabs.ok, true, "모른다는 사실 하나로 업데이트를 막으면 사용자는 가짜로 0 을 넣게 된다");
+  assert.ok(
+    unknownTabs.items.some((i) => i.includes("직전 적용 실측")),
+    `실측 없는 값을 숫자로 대신 말하지 않는다: ${unknownTabs.items.join(" / ")}`
+  );
+  // 2) 자산 크기를 모르면 "0 MiB" 가 아니라 "미상".
+  const unknownSize = planApply({ ...base, dirtyTabs: 0, estimatedSeconds: null, assetBytes: null });
+  assert.ok(unknownSize.items.some((i) => i.includes("미상")), `모르는 크기를 0 으로 말했다: ${unknownSize.items.join(" / ")}`);
+  // 3) 아는 값은 정확히 말한다 — "모른다" 고 하는 게 전부가 아니다.
+  const known = planApply({ ...base, dirtyTabs: 0, estimatedSeconds: 7, assetBytes: 3 * 1024 * 1024 });
+  assert.ok(known.items.some((i) => i.includes("7초")), `아는 값을 말하지 않는다: ${known.items.join(" / ")}`);
+  assert.ok(known.items.some((i) => i.includes("3.0 MiB")), `실측 크기를 말하지 않는다: ${known.items.join(" / ")}`);
+});
+
+test("**의존성이 없으면 막는다** — 배포물에 node_modules 가 없다(Raiser R-1)", () => {
+  const base: ApplyGuard = {
+    runningTurns: [], processes: [], dirtyTabs: 0, canRollback: true, daemon: true,
+    estimatedSeconds: 1, assetBytes: 1, dependenciesReady: null, missingDependencies: [],
+  };
+  const d = planApply({ ...base, dependenciesReady: false, missingDependencies: ["node-pty", "ws"] });
+  assert.equal(d.ok, false, "의존성이 없는데 적용을 허용했다 — 코드는 갈아끼워졌지만 부팅하지 못한다");
+  assert.ok(d.blockers.some((b) => /node-pty/.test(b) && /ws/.test(b)), `어떤 의존이 없는지 안 말한다: ${d.blockers.join("|")}`);
+  // 확인 방법이 없으면 **차단하지 않는다** — 대신 모른다고 말한다.
+  const unknown = planApply(base);
+  assert.equal(unknown.ok, true, "확인 못 했다는 이유로 모든 업데이트를 막았다");
+  assert.ok(unknown.items.some((i) => i.includes("확인 못 했")), `모르는 의존 상태를 말하지 않는다: ${unknown.items.join(" / ")}`);
 });
 
 test("부팅 판정: **프로세스가 떴다는 것만으로 성공이 아니다**", () => {

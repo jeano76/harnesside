@@ -77,7 +77,87 @@ export const ANSWER_FORMAT_RULES: readonly AnswerFormatRule[] = [
   },
 ] as const;
 
-/** 한 항목이 이 창에서 읽히기에 너무 긴가? — 문단 기준 상한(≈120자, 3줄). */
+/**
+ * **답변 언어** 규칙 — 형식 규칙과 **별도**다.
+ *
+ * 왜 `ANSWER_FORMAT_RULES` 안에 넣지 않는가: 그 목록은 **출력 형식**이고 8줄 상한이
+ * 걸려 있다("규칙이 늘면 답이 변형 규칙에 쓰인다" — 실측 패턴). 이건 형식이 아니라
+ * **무엇이 말하는가** 이다. 같은 자리에 넣으려면 형식 규칙 하나를 빼야 하는데,
+ * 형식을 지우고 언어를 사는 것은 **잘못된 절충**이다 — 둘 다 필요한 규칙이다.
+ *
+ * ── 왜 이 규칙이 필요한가 (실측) ────────────────────────────────────────────
+ *
+ * 한국어 질문에 **일본어로** 답한 사례가 실제로 있었다: 한국어 질문 + 일본어 + 표 +
+ * 불완전 입력(`「1,2」`)이 섞여 들어갔더니 답이 한국어 첫 문장 → 일본어 나머지로
+ * **한 답변 안에서 언어가 바뀌었다.** 규칙이 없으면 모델이 알아서 고르고, 35B 모델은
+ * 그 선택이 안정적이지 않다.
+ *
+ * 화면은 한국어(`src/web/i18n/ko.ts`)인데 모델이 일본어로 답하면 사용자는
+ * "번역이 깨졌나?" 하고 멈춘다.
+ */
+export const LANGUAGE_RULE = {
+  id: "answer-in-korean",
+  text: "답변은 한국어로 쓴다. 사용자가 다른 언어로 물어도 한국어로 답하고, 입력에 여러 언어가 섞여 있어도 한국어를 고른다.",
+} as const;
+
+/** 이 값들이 전부 없으면 **아무것도 아는 것이 아니다.** 그렇게 말한다. */
+export interface LanguageFlag {
+  rule: string;
+  message: string;
+  count: number;
+}
+
+/**
+ * 답변이 한국어인지 **측정**한다 — 규칙을 강제하는 게 아니라, 어겼을 때 **보이게** 한다.
+ *
+ * 왜 이것이 프롬프트 규칙의 짝인가: `readabilityFlags` 의 근거와 같다 —
+ * **규칙은 요청이지 보장이 아니다.** 모델이 어길 수 있다. 그래서 요청이 깨졌을 때의
+ * **증거**를 만든다(저장소 규칙 "조용히 실패하지 않는다").
+ *
+ * 판정 방식: **한글 음절 비율**이 아니라 **다른 언어의 문자 존재**를 본다.
+ * 한국어 답변에는 `Node`·`src/`·`read_file` 같은 영어 식별자가 정상적으로 섞인다 —
+ * 영어가 많다고 "한국어가 아니다" 로 보면 **정상 답변이 전부 걸린다.**
+ * 반면 일본어(히라가나·가타카나)와 한자(현재)는 한국어에 쓰이지 않는다.
+ * 그래서 **한글이 하나도 없는데 다른 CJK 가 있으면** 확실히 한국어가 아니다.
+ *
+ * 단언할 수 없는 경우에도 **단언하지 않는다**: 글자가 적으면 판정 불가로 두고
+ * 아무 플래그도 내지 않는다. "짧은 답" 을 "다른 언어 답" 으로 오진하는 게 나쁘다.
+ */
+export function languageFlags(text: string): LanguageFlag[] {
+  const flags: LanguageFlag[] = [];
+  const masked = maskCode(text ?? "");
+  let hangul = 0;
+  let kana = 0;
+  let hanja = 0;
+  let latin = 0;
+  for (const ch of masked) {
+    const c = ch.codePointAt(0)!;
+    if (c >= 0xac00 && c <= 0xd7a3) hangul++; // 한글 음절
+    else if ((c >= 0x3040 && c <= 0x309f) || (c >= 0x30a0 && c <= 0x30ff)) kana++; // 히라가나·가타카나
+    else if (c >= 0x4e00 && c <= 0x9fff) hanja++; // 한자(중국어·일본어 공용)
+    else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) latin++;
+  }
+  const other = kana + hanja;
+  // **판정할 만큼 글자가 있는가** — 적은 답은 근거가 없다.
+  const total = hangul + other + latin;
+  if (total < 20) return flags;
+  if (other > 0 && hangul === 0) {
+    flags.push({
+      rule: LANGUAGE_RULE.id,
+      message: `한글이 하나도 없는데 일본어·중국어 문자 ${other}자가 보인다 — "${LANGUAGE_RULE.text.split(".")[0]}" 규칙을 어겼다`,
+      count: other,
+    });
+    return flags;
+  }
+  if (other > 0 && hangul / total < 0.1) {
+    flags.push({
+      rule: LANGUAGE_RULE.id,
+      message: `한글 비율이 ${(hangul / total * 100).toFixed(0)}% 에 불과하다 — 답변이 한국어가 아닌 것으로 보인다`,
+      count: other,
+    });
+  }
+  return flags;
+}
 export const PARAGRAPH_CHAR_LIMIT = 120;
 
 /** 문장이 이어지는 것을 끊는 기호. 규칙이 지켜지지 않는 가장 흔한 형태. */
@@ -202,6 +282,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   } else {
     parts.push(`규칙 파일 ${rules.length}개가 적용 중입니다: ${rules.join(", ")}`);
   }
+  parts.push(LANGUAGE_RULE.text);
   parts.push(answerFormatSection());
   if (input.extra) parts.push(input.extra);
   return parts.join("\n");

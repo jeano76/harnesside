@@ -47,9 +47,25 @@ export interface LocalVersion {
   channel: UpdateChannel;
   /** 설치 경로. */
   installPath: string;
-  /** 커밋 SHA 앞 7자리. */
+  /**
+   * **트리 단위** 설치 해시 (R-5.2).
+   *
+   * 예전엔 `selfPath` **한 파일**의 sha256 앞 7자리였다. 배포물은 `dist/` 전체
+   * 트리이므로, 파일 하나만 보고하면 **나머지 파일이 옛 버전인 채로 통과한다** —
+   * 부팅은 성공하고 옛 로직으로 도는 상태가 된다. 조용히 틀어진다.
+   * 그래서 `manifest.json` 의 파일 해시 목록에서 만든다.
+   */
   sha: string | null;
+  /** 빌드일 (UTC `YYYYMMDD`). 모르면 null — **0 이나 오늘 날짜로 메우지 않는다.** */
+  date: string | null;
+  /** 빌드 커밋 앞 7자리. */
+  commit: string | null;
+  /** 더티 트리 빌드인가. `null` = 모른다. */
+  dirty: boolean | null;
+  /** 빌드 시각 (epoch ms). */
   builtAt: number | null;
+  /** 값이 주입되었는가 — false 면 "개발 실행" 이다. */
+  stamped: boolean;
   node: string;
   chrome: string | null;
   llama: string | null;
@@ -113,10 +129,14 @@ export interface Checksum {
 }
 
 /**
- * 해시 2중 검증(원본 `selfUpdate.ts` 설계).
+ * 해시 검증 (원본 `selfUpdate.ts` 설계에서 옮겨옴 · Q-7 에서 그 파일은 삭제됨).
+ *
  * 1) **형식 검증** — 64자리 hex 인지. 형식이 틀리면 일치하지 않은 것이 아니라
  *    "검증할 수 없는 것" 이고, 그것은 **같지 않은 것** 으로 처리해야 한다.
- * 2) **값 비교** — 상수 시간 비교로 타이밍 side channel 을 막는다.
+ * 2) 값 비교는 순수 비교다(타이밍 side channel 은 이 설계의 범위 밖 — §R-10).
+ *
+ * **여기서 검증하는 것은 바이트 하나다.** 트리 전체 대조는 `manifest.ts` 가 한다 —
+ * 파일 하나를 통과시키는 것과 트리를 통과시키는 것은 다른 사실이다(§R-5).
  */
 export function verifyHash(data: Buffer, expected: string): Checksum {
   const actual = createHash("sha256").update(data).digest("hex");
@@ -218,14 +238,33 @@ export interface ApplyGuard {
   runningTurns: string[];
   /** 백그라운드 프로세스 목록. */
   processes: string[];
-  /** 저장되지 않은 탭 수. */
-  dirtyTabs: number;
+  /**
+   * 저장되지 않은 편집 탭 수.
+   *
+   * `null` = **모른다.** `0` 과 다르다. 서버는 브라우저 안의 편집기 버퍼를
+   * 볼 수 없어(§R-2.1) 이 값을 직접 세지 못한다. `0` 으로 두면 "저장 안 한 것이 없다" 는
+   * **거짓말**이 되고, 그 거짓말이 사용자에게 보여도 아무도 모른다.
+   * 그래서 `null` 을 **알려 줄 사실**로 남긴다(아래 `planApply` 참조).
+   */
+  dirtyTabs: number | null;
   /** 롤백 가능한가. */
   canRollback: boolean;
   /** 데몬 모드인가 — 창을 닫아도 llama 가 사는가(§4.4). */
   daemon: boolean;
-  estimatedSeconds: number;
-  assetBytes: number;
+  /**
+   * 적용 예상 시간(초). `null` = **아직 실측한 적이 없다.**
+   * 숫자를 지어내면 사용자에게 안내 문구로 보인다(§R-2.1).
+   */
+  estimatedSeconds: number | null;
+  /** 받을 자산의 **실제** 크기(바이트). `null` = 아직 받을 자산을 모른다. */
+  assetBytes: number | null;
+  /**
+   * 실행에 필요한 외부 의존(`node_modules`)이 준비돼 있는가(Raiser R-1 · 대안 나).
+   * `null` = 확인할 방법이 없다 → 적용을 막지 않는다.
+   */
+  dependenciesReady: boolean | null;
+  /** 확인하지 못한 의존 목록 — 막을 수 없을 때 뭐가 모르는지 말한다. */
+  missingDependencies: string[];
 }
 
 export interface ApplyDecision {
@@ -239,6 +278,9 @@ export interface ApplyDecision {
 /**
  * "지금 적용" 의 확인 모달 내용(§5.13.1). 이 버튼이 **가장 위험**하다 —
  * 실패하면 사용자는 IDE 를 못 쓴다. 그래서 무엇이 일어나는지 한 화면에 모은다.
+ *
+ * **모르는 값은 0 이나 가짜 숫자로 메우지 않는다.** `null` 은 사용자에게
+ * "모른다" 고 **말할 대상**이다 — 그 조용함이 이 프로그램에서 가장 비싼 실패다.
  */
 export function planApply(g: ApplyGuard): ApplyDecision {
   const items: string[] = [];
@@ -246,13 +288,46 @@ export function planApply(g: ApplyGuard): ApplyDecision {
 
   if (g.runningTurns.length) items.push(`진행 중 턴 ${g.runningTurns.length}개: ${g.runningTurns.slice(0, 2).join(", ")} — 취소하거나 기다리십시오.`);
   if (g.processes.length) items.push(`백그라운드 프로세스 ${g.processes.length}개: ${g.processes.slice(0, 2).join(", ")} — 종료됩니다.`);
-  if (g.dirtyTabs > 0) items.push(`저장되지 않은 편집 탭 ${g.dirtyTabs}개 — 저장하거나 버리십시오.`);
-  items.push(`예상 소요 시간 약 ${Math.max(1, Math.round(g.estimatedSeconds))}초 (자산 ${(g.assetBytes / 1024 / 1024).toFixed(1)} MiB 기준).`);
+
+  if (g.dirtyTabs === null) {
+    // **"0개" 로 말하지 않는다.** 서버는 브라우저 안의 편집기 버퍼를 세지 못한다.
+    // 그러면서 "저장 안 한 것이 없다" 고 말하면, 잃어버린 내용을 사용자가 뒤늦게 알게 된다.
+    items.push("저장되지 않은 편집 탭: **확인 못 했습니다** — 서버는 브라우저 안의 편집기 버퍼를 볼 수 없습니다. 직접 저장한 뒤 적용하십시오.");
+  } else if (g.dirtyTabs > 0) {
+    items.push(`저장되지 않은 편집 탭 ${g.dirtyTabs}개 — 저장하거나 버리십시오.`);
+  } else {
+    items.push("저장되지 않은 편집 탭 0개");
+  }
+
+  const seconds = g.estimatedSeconds;
+  const size = g.assetBytes;
+  const sizeText =
+    size === null ? "자산 크기 미상" : size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`;
+  // **첫 적용에서 숫자가 없는 것이 정직한 답이다.** 8초라고 말하면 그것은 희망이다.
+  items.push(
+    seconds === null
+      ? `예상 소요 시간: **아직 실측한 적이 없습니다** (${sizeText} 자산 기준). 첫 적용 뒤 다음부터 표시됩니다.`
+      : `예상 소요 시간 약 ${Math.max(1, Math.round(seconds))}초 (${sizeText} 자산 기준 · 직전 적용 실측 평균).`
+  );
+
   items.push(
     g.daemon
       ? "데몬 모드 — 창을 닫아도 llama-server 는 계속 살아 있습니다."
-      : "창 모드 — 창을 닫으면 llama-server 도 종료됩니다(§4.4).",
+      : "창 모드 — 창을 닫으면 llama-server 도 종료됩니다(§4.4)."
   );
+
+  // ── 의존성 게이트 (Raiser R-1 · 대안 나) ──────────────────────────────────
+  // `package.json` 의 `files` 는 `dist` 뿐이다. 즉 배포물은 **`node_modules` 를 담지 않는다.**
+  // 코드는 갈아끼워졌는데 `node-pty` 가 없으면 **부팅에 실패한다.**
+  // 부팅 확인이 있으면 롤백된다 — 그래도 사용자는 한 번 죽는다.
+  // **조용히 깨뜨리는 경로만 금지**하므로, 없으면 미리 막는다.
+  if (g.dependenciesReady === false) {
+    blockers.push(
+      `설치에 필요한 의존성이 없습니다: ${g.missingDependencies.slice(0, 4).join(", ")} — 새 버전은 실행 파일만 도착하므로 구동하지 못합니다. 이 폴더에서 의존성을 설치한 뒤 다시 시도하십시오.`
+    );
+  } else if (g.dependenciesReady === null) {
+    items.push("의존성 사전 설치 여부: **확인 못 했습니다** — 적용 뒤 기동이 실패할 수 있습니다.");
+  }
 
   // **롤백 불가면 시도 자체를 막는다.** 롤백 없는 업데이트는 "성공/실패" 가 아니라
   // "되돌릴 수 없는 베팅" 이다.
@@ -357,8 +432,13 @@ export function localVersionFrom(pkg: { version: string }, extra: Partial<LocalV
     version: pkg.version,
     channel: "stable",
     installPath: process.cwd(),
+    // **모르면 null** — `sha: ""` 나 "0.0.0" 으로 메우면 업데이트 비교가 조용히 틀어진다.
     sha: null,
+    date: null,
+    commit: null,
+    dirty: null,
     builtAt: null,
+    stamped: false,
     node: process.version,
     chrome: null,
     llama: null,

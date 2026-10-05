@@ -1,0 +1,222 @@
+name: release
+
+# R-4 — 배포는 **태그**로만 일어난다. 브랜치 푸시는 절대 만들지 않는다.
+#
+# 잘못된 빌드가 릴리스되면 **되돌릴 때까지** 사용자가 그 버전을 받는다. 되돌리는 동안
+# 그 버전은 "설치 성공" 으로 보고되고, 해시도 통과하고, 부팅 확인도 통과한다(§5.13.1).
+# 그래서 트리거는 좁게 — 그리고 **게이트 뒤**여야 한다.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# 같은 태그로 새 실행이 오면 이전 실행을 버린다(결과가 조용히 뒤섞이면 안 된다).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # 릴리스 생성에 필요. 더 넓게 주지 않는다.
+
+jobs:
+  # ───────────────────────────────────────────────────────── 선행 게이트
+  # `ci.yml` 의 `gate` 와 **같은 것**을 돌린다. 게이트 실패한 빌드는 올리지 않는다.
+  # 별도 잡으로 안 받고 `needs` 로 묶는 이유: "이번엔 게이트를 건너뛰자" 가 순간 결정으로
+  # 들어갈 틈을 없앤다. 릴리스 경로는 CI 와 **같은 명령**을 쓴다.
+  gate:
+    name: 선행 게이트 (프록시 — ci.yml 과 동일)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 여기서도 **태그의 커밋**을 본다. 기본값(태그 push 에선 태그 ref)이지만
+          # 명시한다 — 게이트가 다른 커밋을 검사하면 **게이트가 무의미**해진다.
+          ref: refs/tags/${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci || npm install
+
+      # **R-1.4: 더티 트리 방어.** 사람이 이 규칙을 지키게 하지 말고 파이프라인이 막는다.
+      # `gen-build-info.mjs --check` 가 `dirty` 를 계산하고, `--require-clean` 가 실패시킨다.
+      # CI 러너의 체크아웃은 원래 깨끗하므로 이 단계는 **거의 항상 통과**한다 —
+      # 그래도 있어야 한다. 한 번만 새는 것으로 충분하다.
+      - name: 트리 상태 확인 (더티면 릴리스 금지)
+        run: node scripts/gen-build-info.mjs --check --require-clean
+
+      - name: typecheck
+        run: npm run typecheck
+      - name: 단위 테스트
+        run: npm test
+      - name: 빌드 (서버 + 웹 자산 + **빌드 신원 주입**)
+        run: npm run build
+      - name: 정적 검사
+        run: node scripts/ci-checks.mjs
+      - name: 커버리지 하한선
+        run: node scripts/coverage-floor.mjs --min 80
+
+      # ── R-3 인수 조건 1: 배포물이 **재현 가능**한가 ─────────────────────────
+      # 이게 없으면 "sha256 이 커밋과 1:1 대응한다" 는 말이 **거짓**이 되고,
+      # R-1 의 "이 빌드가 이 커밋에서 나왔다" 는 전제가 무너진다(§0.1).
+      - name: 배포물 재현성 (두 번 만들어 해시가 같은가)
+        run: npm run release:repro
+
+      # ── R-9: 셀프업데이트 경로 **실측** ─────────────────────────────────────
+      # 이게 없으면 릴리스는 **테스트를 통과하는 배포 시스템** 이다. 유닛 테스트는
+      # 각 함수를 보고, **경로** 는 아무도 보지 않는다.
+      - name: 셀프업데이트 경로 실측 (검증 실패 → 교체 없음까지)
+        run: npm run verify:selfupdate
+
+  # ───────────────────────────────────────────────────────── 배포물 생성
+  build-release:
+    name: 배포물 생성 (manifest + tar.gz + SHA256SUMS)
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # **태그가 가리키는 커밋**을 그대로 쓴다. 여기서 실수했다가 고친다:
+          # 처음엔 `default_branch` 를 적었다. 그 결과 **태그와 릴리스 내용이 어긋난다** —
+          # v0.1.0 을 만들었는데 main HEAD 의 코드가 배포된다. 태그를 **나중에** 만든
+          # 사람이면 반드시 벌어지는 사고이고, 아무도 눈치채지 못한다(릴리스는 정상 배포된다).
+          #
+          # `fetch-depth: 0` 이 있어야 Annotated 태그의 **진짜 커밋**을 물고 온다.
+          # 얕게 가져오면 태그가 가리키는 커밋이 **없어서** 체크아웃이 다른 걸로 대체한다.
+          ref: refs/tags/${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci || npm install
+
+      # `gen-build-info.mjs` 가 여기서 **처음** 실행되고 `dist/server/buildInfo.json` 을
+      # 굽는다. 이 값이 배포물의 신원이다 — `make-release` 은 새로 만들지 않고 읽는다.
+      - run: npm run build
+
+      # 다시 한 번 막는다. 게이트 잡과 빌드가 **다른 잡**이라 그 사이에 상태가
+      # 바뀔 수 있다(그리고 실제로 바뀐다 — 사람이 그사이 push 한다).
+      - name: 트리 상태 재확인
+        run: node scripts/gen-build-info.mjs --check --require-clean
+
+      - name: 배포물 생성
+        run: node scripts/make-release.mjs
+
+      # ── R-3 인수 조건 2: 사람이 확인할 수 있어야 한다 ──────────────────────
+      # `sha256sum -c` 가 로컬에서 통과해야 한다. 스크립트가 스스로 만든 해시를
+      # 스스로 검증하는 것보다 **별도 도구**로 확인하는 편이 낫다 — 같은 코드를
+      # 두 번 실행하면 같은 버그를 두 번 믿게 된다.
+      - name: SHA256SUMS 확인 (sha256sum -c)
+        working-directory: release
+        run: sha256sum -c SHA256SUMS
+
+      # 인수 조건 3: tar 목록과 manifest 목록이 **정확히 일치**해야 한다.
+      # 빠진 파일은 **부팅 실패로만** 나타난다(조용히 빠진다).
+      - name: tar 목록 == manifest 목록
+        run: |
+          set -euo pipefail
+          tar -tzf release/harnesside-dist.tar.gz | sed 's|^dist/||' | grep -v '/$' | sort > /tmp/tar-list.txt
+          node -e '
+            const m = require("./release/manifest.json");
+            console.log(m.files.map(f => f.path).sort().join("\n"));
+          ' | sort > /tmp/manifest-list.txt
+          if ! diff -u /tmp/manifest-list.txt /tmp/tar-list.txt; then
+            echo "tar 목록과 manifest 목록이 다릅니다 — 배포하지 않습니다."; exit 1
+          fi
+          echo "목록 일치: $(wc -l < /tmp/tar-list.txt)개 파일"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────── 릴리스 게시
+  publish:
+    name: GitHub 릴리스 게시
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release
+
+      # R-4.4: 릴리스 본문에 **SemVer, 빌드 날짜, 커밋 해시**를 적는다.
+      # 사용자가 태그만 보고는 무엇이 들어 있는지 알 수 없다.
+      #
+      # 그리고 **아키텍처를 밝힌다**(R-4.5): 배포물은 실행 파일만 담고 `node_modules` 를
+      # 담지 않는다. 안 쓰면 사용자는 설치 직후 ENOENT 를 만나 "설치가 잘못됐다" 고
+      # 생각하고 이슈를 올린다.
+      - name: 릴리스 생성
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("release/manifest.json", "utf8"));
+            const b = m.build;
+            const kb = (n) => (n / 1024).toFixed(1) + " KiB";
+            const lines = [
+              "## 빌드 신원",
+              "",
+              "| 항목 | 값 |",
+              "|---|---|",
+              "| 릴리스 | `" + b.version + "` |",
+              "| 빌드일 (UTC) | `" + (b.date ?? "미상") + "` |",
+              "| 커밋 | `" + (b.sha ?? "미상") + "` |",
+              "| 더티 트리 | " + (b.dirty === true ? "**예**" : b.dirty === false ? "아니오" : "미상") + " |",
+              "| 트리 해시 | `" + m.treeSha256 + "` |",
+              "| 파일 수 | " + m.files.length + " |",
+              "| 배포물 크기 | " + kb(m.asset.bytes) + " |",
+              "",
+              "## 설치에 **반드시** 필요한 것 (Raiser R-1)",
+              "",
+              "이 배포물은 `dist/` 트리만 담습니다. **`node_modules` 는 담지 않습니다.**",
+              "코드는 갈아끼워지지만 의존성은 그대로이므로, 없는 의존이 있으면",
+              "새 버전은 부팅하지 못합니다. 업데이트는 이 상태를 미리 확인하고",
+              "**막습니다** — 조용히 깨뜨리지 않습니다.",
+              "",
+              "```bash",
+              "npm ci",
+              "node dist/server/index.js",
+              "```",
+              "",
+              "## 무엇을 증명하는가 (§0.2)",
+              "",
+              "- **증명한다** 이 바이너리가 어느 커밋·어느 시각(UTC)에 빌드되었는가,",
+              "  그리고 배포물 바이트가 `manifest.json` 이 선언한 것과 같은가.",
+              "- **증명하지 못한다** 그 바이트가 신뢰할 수 있는지. **코드 서명이 없다** —",
+              "  해시는 공격자가 자기 코드와 함께 다시 계산할 수 있다.",
+              "- **의존한다** 빌드 머신의 시계, 그리고 `dirty=false` 라는 주장.",
+              "",
+              "## 셀프업데이트에 대해",
+              "",
+              "- **수동 실행만** 한다. 부팅 시 자동 확인·자동 적용은 없다.",
+              "- 교체는 `entry` 파일이 아니라 **`dist/` 트리 전체**다. 진입 파일만",
+              "  갈아끼우면 나머지가 옛 버전인 채로 도는 조용한 실패가 생긴다.",
+              "- **자동 롤백은 없다.** 이 서버는 자기 자신을 재시작할 수 없다.",
+              "  부팅 실패 시 다음 실행이 '업데이트 미확인' 으로 알리고, 슬롯 경로를 남긴다.",
+            ];
+            fs.writeFileSync("release-notes.md", lines.join("\n") + "\n");
+          '
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            release/harnesside-dist.tar.gz \
+            release/manifest.json \
+            release/SHA256SUMS \
+            || gh release upload "$TAG" --clobber \
+                 release/harnesside-dist.tar.gz \
+                 release/manifest.json \
+                 release/SHA256SUMS
+          echo "릴리스 게시 완료: $TAG"

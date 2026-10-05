@@ -23,7 +23,8 @@ import {
 } from "./daemon.js";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseNdjson } from "./logRing.js";
 
 export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이전트 (웹 IDE)
@@ -205,6 +206,11 @@ export async function cmdDoctor(
     projectRoot: paths.projectRoot,
     home: homedir(),
     configPath: paths.configPath,
+    // **실행 중인 모듈 옆의 `dist`.** projectRoot 는 사용자의 cwd 일 수 있는데,
+    // 그곳에 `dist` 가 없으면 "설치된 바이너리가 없다" 라는 **거짓말**이 나온다
+    // (전역 설치에서 실측). `import.meta.url` 은 심볼릭 링크를 따라가므로
+    // `bin/harnesside` 로 실행해도 패키지 안의 실제 경로를 가리킨다.
+    distDir: resolve(fileURLToPath(import.meta.url), "..", ".."),
     // 포트 판정의 최우선 근거: **인스턴스 파일에 적힌 우리 pid**. 명령줄 매칭은
     // 설치 경로에 따라 틀릴 수 있지만 이건 우리가 직접 쓴 값이다.
     serverPid: s.running ? s.pid : undefined,

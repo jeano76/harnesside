@@ -47,6 +47,45 @@ export function planSave(b: Buffer, now: number, debounceMs = AUTOSAVE_DEBOUNCE_
   return { action: "save", body: { path: b.path, content: b.content, baseVersion: b.baseVersion } };
 }
 
+/* ───────────────────────── 바깥에서 파일이 바뀐 경우 ───────────────────────── */
+
+/**
+ * 디스크의 같은 파일이 **바깥에서** 바뀌었을 때, 버퍼를 어떻게 할 것인가.
+ *
+ * ── 왜 이 판단이 필요한가 (실측으로 본 결함) ─────────────────────────────────
+ *
+ * 에디터의 버퍼는 `EditorView` 안의 ref 다. 그 ref 의 기준은 `info.content` 과
+ * `info.version` 이고, `info` 가 새 값으로 오면 **버퍼를 통째로 갈아끼웠다.**
+ * 즉 바깥에서 파일이 바뀌면 열린 파일이 **아무 말 없이 옛 내용으로 돌아갔다.**
+ * 사용자는 "저장했는데 왜 옛 내용이네" 하고 자기 편집을 잃었다.
+ *
+ * 그런데 **미저장 편집이 있을 때 갱신하면 더 나쁘다** — 바깥 변경이 사용자 편집을
+ * 지운다. 그래서 아무 때나 갱신하는 것도, 아무 때나 말리는 것도 답이 아니다.
+ *
+ * 규칙은 하나다: **사용자가 손대지 않은 버퍼만 따라간다.**
+ *  - 안 고쳤으면 → 디스크를 따른다(그게 사용자가 기대하는 동작이다)
+ *  - 고치는 중이면 → **보존한다.** 대신 왜 그대로인지 **말한다**
+ *
+ * 같은 이유로 **내용이 같으면 갱신하지 않는다** — 버전만 바뀌었을 수 있다.
+ * 커서 위치와 접힌 상태를 잃을 이유가 없다.
+ */
+export type ExternalChangePlan =
+  | { action: "adopt"; why: string }
+  | { action: "keep"; why: string };
+
+export function planExternalChange(b: Buffer, disk: { content: string; version: number }): ExternalChangePlan {
+  if (b.dirtySince !== null) {
+    // **미저장 편집이 있으면 절대 덮지 않는다.** 이 프로그램의 다른 곳
+    // (`planSave` 의 충돌 처리) 도 같은 원칙을 따른다 — 조용히 덮어쓰지 않는다.
+    return { action: "keep", why: "저장하지 않은 편집이 있어 그대로 둡니다" };
+  }
+  if (disk.content === b.content) {
+    // 내용이 같으면 손댈 것이 없다. `mtime` 만 바뀐 경우도 여기 걸린다.
+    return { action: "keep", why: "내용이 같습니다" };
+  }
+  return { action: "adopt", why: "저장하지 않은 편집이 없어 디스크를 따랐습니다" };
+}
+
 export interface LocalDraft {
   path: string;
   content: string;

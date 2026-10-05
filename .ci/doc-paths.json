@@ -100,6 +100,11 @@
       "doc": "docs/soak-2026-10-01.md",
       "path": "src/src",
       "reason": "경로가 아니라 **문장 속 문자열**이다 — S05 는 '이미 src 에 있으면 cd src 를 하면 src/src 이 된다' 는 상대경로 오사용 시나리오의 결과값을 그대로 적었다"
+    },
+    {
+      "doc": "PROMPT_RELEASE_SELFUPDATE.md",
+      "path": "src/selfUpdate.ts",
+      "reason": "R-8 요구 본문 — Q-7 에서 지워졌지만 dist/selfUpdate.js(고아 산출물)의 주석이 아직 이 파일을 가리킨다. 없는 경로를 이름으로 불러야 읽는 사람이 무엇이 사라졌는지 안다. R-8 이 끝나면 이 예외는 자동으로 실패가 되므로 지워진다"
     }
   ]
 }

@@ -221,15 +221,56 @@ export class BrowserLauncher {
   }
 
   /**
+   * **이 인스턴스만 쓸 CDP 포트**를 정한다.
+   *
+   * 왜 필요한가 (실측 결함): 포트가 **고정(9222)** 이면, 다른 인스턴스가 이미 그 포트를
+   * 쓰고 있을 때 여기서도 **같은 포트**를 쓴다. `waitForCdp` 는 **상대편의 CDP** 에 붙고
+   * "기동 성공" 으로 보고한다. 남의 창을 자기 창으로 believing — 이 프로그램에서 가장
+   * 비싼 종류의 거짓말이다(재현: Chrome 하나에 7317 과 7318 페이지가 함께 열려 있었음).
+   *
+   * 그래서 **이미 응답하는 포트면 다음 빈 포트로 간다.** 사용자가 포트를 명시했다면
+   * (env) 그대로 쓴다 — 조용히 다른 포트로 도망가면 "9222 로 지정했는데 왜 9223 이 뜨지"
+   * 하고 혼란스러워한다.
+   */
+  private async resolveCdpPort(requested?: number): Promise<{ port: number; blocked: boolean; note: string | null }> {
+    const want = requested ?? this.opts.cdpPort ?? CDP_DEFAULT_PORT;
+    if (!(await this.cdpServing(want))) return { port: want, blocked: false, note: null };
+    if (requested !== undefined) {
+      // **명시한 포트를 남의 것이 쓰고 있다** — 조용히 바꾸지 않고 **멈춘다.**
+      return { port: want, blocked: true, note: `${want} 포트를 다른 인스턴스가 쓰고 있습니다` };
+    }
+    for (let p = want + 1; p < want + 32; p++) {
+      if (!(await this.cdpServing(p))) {
+        // **분리는 성공이지 실패가 아니다.** blocked=false 라야 계속 진행한다.
+        return { port: p, blocked: false, note: `${want} 포트가 이미 사용 중이라 ${p} 로 분리했습니다` };
+      }
+    }
+    return { port: want, blocked: true, note: `${want} 이후에서 빈 CDP 포트를 찾지 못했습니다` };
+  }
+
+  /** 그 포트에 **누군가의 CDP** 가 이미 떠 있는지. */
+  private async cdpServing(port: number): Promise<boolean> {
+    const f = this.deps.fetchImpl ?? fetch;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 600);
+      const res = await f(`http://127.0.0.1:${port}/json/version`, { signal: ctrl.signal });
+      clearTimeout(t);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * 창을 띄운다. **브라우저가 없으면 예외를 던지지 않고 ok:false 를 돌려준다** —
    * 데몬은 사람이 보지 않는다(§3.7.1) 창 없이도 API/로그는 살아 있어야 한다.
    */
   async launch(): Promise<LaunchResult> {
-    const cdpPort = this.opts.cdpPort ?? CDP_DEFAULT_PORT;
     const bin = await this.resolveBinary();
     if (!bin) {
       return {
-        cdpPort,
+        cdpPort: this.opts.cdpPort ?? CDP_DEFAULT_PORT,
         mode: this.opts.mode,
         flags: [],
         rationale: [],
@@ -238,7 +279,31 @@ export class BrowserLauncher {
       };
     }
 
-    const userDataDir = this.opts.userDataDir ?? profileDir(this.deps.home ?? homedir());
+    // **자기 것인 CDP 포트만 쓴다.** 남의 포트에 붙으면 남의 브라우저에 새 창이 뜬다(실측).
+    const pick = await this.resolveCdpPort(this.opts.cdpPort);
+    const cdpPort = pick.port;
+    if (pick.blocked) {
+      // **조용히 다른 창을 띄우지 않는다.** 포트를 못 정했으면 여기서 멈춘다.
+      // 사유를 그대로 돌려준다 — "바이너리를 못 찾았다" 같은 **다른 말**을 하지 않는다.
+      this.log("error", `창을 띄우지 않았습니다 — ${pick.note}`, { port: cdpPort });
+      return {
+        pid: undefined,
+        cdpPort,
+        mode: this.opts.mode,
+        flags: [],
+        rationale: [pick.note!, "HARNESSIDE_CDP_PORT 로 비어 있는 포트를 지정해 다시 띄우십시오."],
+        verification: null,
+        attached: false,
+      };
+    }
+    if (pick.note) {
+      // **분리는 성공이다.** 로그로 남기고 계속 진행한다 — 조용히 바꾸지도, 멈추지도 않는다.
+      this.log("warn", `CDP 포트 ${cdpPort} — ${pick.note}`, { port: cdpPort });
+    }
+
+    // 프로필은 **이 포트 기준** — 그래야 Chrome 이 남의 브라우저로 URL 을 넘겨 새 창을
+    // 만들지 않는다(실측: 같은 user-data-dir 면 Chrome 이 기존 프로세스에 인계한다).
+    const userDataDir = this.opts.userDataDir ?? profileDir(this.deps.home ?? homedir(), cdpPort);
     await mkdir(userDataDir, { recursive: true }).catch(() => {});
 
     const built = launchFlags({ ...this.opts, userDataDir, cdpPort });

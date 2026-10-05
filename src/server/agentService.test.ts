@@ -153,9 +153,16 @@ test("표시를 꺼도 **예산은 이미 씀** 을 한 번 말한다 — 조용
   try {
     const svc = service(fakeBackend({ reasonChunks: "가".repeat(60) }), events, s.dir, { enableThinking: false });
     await svc.send("생각해봐");
-    const notices = events.filter((e) => e.type === "agent.status" && /예산은 이미 소비/.test(String(e.text)));
+    const notices = events.filter((e) => e.type === "agent.status" && /예산|상한/.test(String(e.text)));
     assert.equal(notices.length, 1, `한 번만 말해야 하는데 ${notices.length}번 했다`);
     assert.equal(svc.thinking.usedTokens > 0, true, "소비된 토큰을 세지 않았다");
+    // 문구가 바뀌어도 **의미**는 지켜져야 한다 — 정규식 하나에 묶지 않는다.
+    // 예전에는 "꺼져 있습니다" 라고만 해서 사용자가 무엇을 해야 하는지 몰랐다(실측 질문).
+    const text = String(notices[0].text);
+    assert.match(text, /이미 쓴|되돌릴 수 없/, "예산이 이미 소비됐다는 사실을 말하지 않는다");
+    assert.match(text, /다음 턴/, "언제 다시 켜지는지 말하지 않는다 — 사용자가 계속 꺼진 것으로 안다");
+    assert.match(text, /상한/, "어떤 상한을 넘었는지 말하지 않는다");
+    assert.match(text, /설정/, "조치 방법을 말하지 않는다");
   } finally {
     await s.cleanup();
   }

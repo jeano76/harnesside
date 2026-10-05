@@ -13,6 +13,7 @@
 import type { LogLevel } from "../server/logRing.js";
 import type { UpdateChannel } from "../server/update/pipeline.js";
 import type { ThinkStyle } from "../web/agent/think.js";
+import { DEFAULT_MAX_REASONING, MAX_REASONING_CEILING, MIN_REASONING_FLOOR } from "../shared/reasoning.js";
 
 export const SCHEMA_VERSION = 3;
 
@@ -175,10 +176,14 @@ export const SETTINGS: SettingDef[] = [
     section: "agent",
     label: "사고 토큰 상한",
     type: "number",
-    default: 1024,
-    min: 64,
-    max: 8192,
-    rationale: "초과하면 thinking 을 끄고 도구 호출을 강제한다(§5.3). 이게 없으면 생각만 하다가 아무것도 안 하는 버그가 된다.",
+    // 정본은 `src/shared/reasoning.ts` — 여기서 숫자를 다시 적지 않는다.
+    default: DEFAULT_MAX_REASONING,
+    min: MIN_REASONING_FLOOR,
+    max: MAX_REASONING_CEILING,
+    rationale:
+      "초과하면 thinking 을 끄고 도구 호출을 강제한다(§5.3). 이게 없으면 생각만 하다가 아무것도 안 하는 버그가 된다. " +
+      "기본을 1,024 → 4,096 으로 올렸다 — 35B 모델의 실제 작업에서 1,027 토큰에 잘려 화면이 죽는 것이 실측됐기 때문이다. " +
+      "토큰은 `estimateTextTokens`(한글은 글자당 1.5)로 센다 — 예전의 '길이/3.4' 은 영문만 맞아 한글 사고의 절반밖에 못 셌다.",
   },
   {
     key: "agent.toolRetryMax",

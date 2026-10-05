@@ -503,6 +503,15 @@ export function defaultPortPlan(env: NodeJS.ProcessEnv = process.env): PortPlan[
 export interface CollectOptions {
   projectRoot: string;
   home: string;
+  /**
+   * **실행 중인 코드가 있는 `dist` 디렉터리.**
+   *
+   * 없으면 `projectRoot/dist` 로 되돌아간다. 전역 설치에서 projectRoot 는 사용자의
+   * cwd(프로젝트가 아닐 수도 있다)라 `dist` 가 없다 → "바이너리가 없다" 라는
+   * **거짓말**이 나온다(전역 설치에서 실측). 그래서 호출자가 **자기 모듈 옆** 경로를
+   * 넘긴다.
+   */
+  distDir?: string;
   ports?: PortPlan[];
   /** 주입점들 — 전부 기본값이 진짜 I/O 다. */
   probe?: PortProbe;
@@ -647,8 +656,18 @@ export async function collectDoctorChecks(opts: CollectOptions): Promise<DoctorC
   }
 
   // 4) dist 가 src 보다 오래됐는가
+  //
+  // **어느 `dist` 를 보는가**가 이 검사의 전부다(전역 설치에서 실측).
+  //
+  // 예전엔 `<projectRoot>/dist` 만 봤다. 전역 설치로 `harnesside doctor` 를 돌리면
+  // projectRoot 에 `dist` 가 없어서 **"설치된 바이너리가 없다 — 곧바로 실행될 것이 없다"**
+  // 라고 말했다. 그런데 **바로 그 명령이 실행 중**이었다 — 이 문장이 거짓이었다.
+  //
+  // 그래서 **실행 중인 모듈 옆**의 `dist` 를 본다(`opts.distDir`). 값이 없으면
+  // 예전처럼 projectRoot 로 되돌아간다. 개발 실행이면 저쪽이 옳고,
+  // 전역 설치면 이쪽이 옳다 — 둘 다 "지금 실행되는 코드가 있는 곳"을 가리킨다.
   const newest = opts.newestMtime ?? newestMtimeIn;
-  const distDir = join(opts.projectRoot, "dist");
+  const distDir = opts.distDir ?? join(opts.projectRoot, "dist");
   const srcDir = join(opts.projectRoot, "src");
   const [distExists, srcExists, distNewest, srcNewest] = await Promise.all([
     stat(distDir).then((s) => s.isDirectory()).catch(() => false),

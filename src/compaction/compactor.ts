@@ -66,29 +66,19 @@ function messageText(m: ChatMessage): string {
 /**
  * Estimates the token weight of text, accounting for CJK (Hangul, Hanzi, Kana)
  * characters which consume ~1.5 to 2.5 tokens per character rather than 0.25 (chars/4).
+ *
+ * **정본은 `src/shared/textTokens.ts`** — 이 함수는 **재-export** 다.
+ *
+ * 왜 옮겼나: 추론 예산(`web/agent/think.ts`)이 이 추정을 쓰려고 여기서 가져오면
+ * **브라우저 번들에 `node:fs` 가 딸려 들어온다**(실측: vite 빌드가
+ * `"join" is not exported by "__vite-browser-external"` 로 깨졌다). 서버 전용
+ * 모듈에 웹이 의존하면 **경계가 뒤집힌다.**
+ * 순수 계산이라 `shared/` 가 원래 자리가었고, 서버는 그걸 그대로 쓴다.
  */
-export function estimateTextTokens(text: string): number {
-  if (!text) return 0;
-  let cjk = 0;
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    // Hangul syllables & jamo: AC00-D7AF, 1100-11FF, 3130-318F
-    // CJK Unified Ideographs: 4E00-9FFF
-    // Hiragana/Katakana: 3040-30FF
-    if (
-      (code >= 0xac00 && code <= 0xd7af) ||
-      (code >= 0x1100 && code <= 0x11ff) ||
-      (code >= 0x3130 && code <= 0x318f) ||
-      (code >= 0x4e00 && code <= 0x9fff) ||
-      (code >= 0x3040 && code <= 0x30ff)
-    ) {
-      cjk++;
-    }
-  }
-  const nonCjk = text.length - cjk;
-  // CJK: ~1.5 tokens/char. Non-CJK (ASCII/Latin/punctuation): ~0.25 tokens/char (4 chars/token).
-  return Math.ceil(cjk * 1.5 + nonCjk * 0.25);
-}
+export { estimateTextTokens } from "../shared/textTokens.js";
+// 재-export 는 **로컬 스코프에 넣지 않는다** — 아래에서 직접 쓴다.
+// 그래서 둘 다 필요하다: 쓰기 위한 import, 남은 호출자를 위한 re-export.
+import { estimateTextTokens } from "../shared/textTokens.js";
 
 function charBasedEstimate(messages: ChatMessage[], extraText: string): number {
   let cjk = 0;

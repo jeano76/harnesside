@@ -12,14 +12,51 @@
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UpdateService } from "./updateService.js";
+import { computeTreeSha, MANIFEST_VERSION, sha256, type ManifestFile, type ReleaseManifest } from "./update/manifest.js";
+
+/** 실제 트리에서 매니페스트를 만든다 — 이론적 해시를 쓰면 아무것도 검증하지 않는다. */
+async function manifestOf(root: string): Promise<ReleaseManifest> {
+  const { readdir: rd } = await import("node:fs/promises");
+  const walk = async (dir: string, prefix: string): Promise<string[]> => {
+    const out: string[] = [];
+    for (const n of await rd(dir)) {
+      const rel = prefix ? `${prefix}/${n}` : n;
+      const abs = join(dir, n);
+      const st = await (await import("node:fs/promises")).stat(abs);
+      if (st.isDirectory()) out.push(...(await walk(abs, rel)));
+      else out.push(rel);
+    }
+    return out;
+  };
+  const files: ManifestFile[] = [];
+  for (const rel of (await walk(root, "")).sort()) {
+    const data = await readFile(join(root, ...rel.split("/")));
+    files.push({ path: rel, sha256: sha256(data), bytes: data.byteLength, mode: 0o644 });
+  }
+  return {
+    manifestVersion: MANIFEST_VERSION,
+    build: { version: "0.1.0", date: "20261005", sha: "08c4467", dirty: false, builtAt: 1 },
+    asset: { name: "harnesside-dist.tar.gz", sha256: sha256("a"), bytes: 1 },
+    files,
+    treeSha256: computeTreeSha(files),
+  };
+}
 
 async function sandbox() {
   const dir = await mkdtemp(join(tmpdir(), "harnesside-upd-"));
-  return { dir, cleanup: async () => rm(dir, { recursive: true, force: true }) };
+  // **실제 설치 모양**을 따른다: `dist/` 는 패키지 루트 아래에 있고, 그 위에
+  // `package.json` 이 있다. 의존성 검사는 `installRoot` 의 **한 단계 위**에서
+  // package.json 을 읽는다(Raiser R-1) — 이 배치가 아니면 그 경로를 못 시험한다.
+  const pkgRoot = join(dir, "install");
+  const root = join(pkgRoot, "dist");
+  await mkdirSafe(join(root, "server"));
+  await writeFile(join(root, "server", "index.js"), "진입점", "utf8");
+  await writeFile(join(pkgRoot, "package.json"), JSON.stringify({ name: "harnesside", version: "0.1.0", dependencies: { "node-pty": "^1.1.0" } }), "utf8");
+  return { dir, root, pkgRoot, selfPath: join(root, "server", "index.js"), cleanup: async () => rm(dir, { recursive: true, force: true }) };
 }
 
 function release(version: string, over: Record<string, unknown> = {}) {
@@ -38,10 +75,13 @@ function svc(dir: string, fetchImpl: typeof fetch, over: Partial<ConstructorPara
   return new UpdateService({
     currentVersion: "0.1.0",
     slotsDir: join(dir, "slots"),
-    selfPath: join(dir, "harnesside"),
+    selfPath: join(dir, "install", "dist", "server", "index.js"),
     fetchImpl,
     baseUrl: "https://example.invalid/api",
-    guard: async () => ({ runningTurns: [], processes: [], dirtyTabs: 0, canRollback: true, daemon: true, estimatedSeconds: 3, assetBytes: 1024 }),
+    guard: async () => ({
+      runningTurns: [], processes: [], dirtyTabs: null, canRollback: true, daemon: true,
+      estimatedSeconds: null, assetBytes: 1024, dependenciesReady: true, missingDependencies: [],
+    }),
     ...over,
   });
 }
@@ -146,7 +186,6 @@ test("크기가 다르면 **쓰지 않는다** — 조용히 쓰면 깨진 파�
 test("롤백 슬롯은 **상한(3개)** 을 지키고 오래된 것부터 지운다", async () => {
   const s = await sandbox();
   try {
-    await writeFile(join(s.dir, "harnesside"), "현재 실행 파일");
     const up = svc(s.dir, (async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch);
     for (const v of ["0.1.0", "0.2.0", "0.3.0", "0.4.0"]) {
       // 버전별로 슬롯 디렉터리를 만든다(파일을 그때 읽으므로 미리 준비).
@@ -168,9 +207,12 @@ test("되돌릴 수 없으면 **적용을 막는다** — D14", async () => {
     const up = new UpdateService({
       currentVersion: "0.1.0",
       slotsDir: join(s.dir, "slots"),
-      selfPath: join(s.dir, "harnesside"),
+      selfPath: s.selfPath,
       fetchImpl: (async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch,
-      guard: async () => ({ runningTurns: [], processes: [], dirtyTabs: 0, canRollback: false, daemon: false, estimatedSeconds: 5, assetBytes: 2048 }),
+      guard: async () => ({
+        runningTurns: [], processes: [], dirtyTabs: null, canRollback: false, daemon: false,
+        estimatedSeconds: null, assetBytes: 2048, dependenciesReady: true, missingDependencies: [],
+      }),
     });
     const { decision } = await up.planApply();
     assert.equal(decision.ok, false, "되돌릴 곳이 없는데 허용했다");
@@ -184,12 +226,54 @@ test("로컬 설치 사실 — **모르면 null** 이지 빈 문자열이 아니
   const s = await sandbox();
   try {
     const up = svc(s.dir, (async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch);
-    const missing = await up.local();
-    assert.equal(missing.sha, null, "파일을 못 읽었는데 해시를 만들었다");
-    await writeFile(join(s.dir, "harnesside"), "binary");
-    const present = await up.local();
-    assert.equal(typeof present.sha, "string");
-    assert.equal(present.version, "0.1.0");
+    // 매니페스트가 없으므로 **검증할 수 없다** → 해시는 null.
+    // 예전엔 `selfPath` **한 파일**의 해시를 "설치 해시" 로 보고했다. 그래서
+    // `agent/loop.js` 가 옛 버전인 상태를 통과시켰다 — §R-5 실측의 그 사고.
+    const unverifiable = await up.local();
+    assert.equal(unverifiable.sha, null, "검증 없이 해시를 만들었다 — 검증하는 것보다 나쁘다");
+    // 이 테스트는 **소스에서** 돈다(tsx). 그때는 주입 파일이 없으므로
+    // "개발 실행" 이 사실로 나오는 게 **맞다** — `0.0.0` 으로 메우지 않는다.
+    // 주입이 된 경우는 R-9 `verify-selfupdate.mjs` 가 실제 빌드로 본다.
+    assert.equal(unverifiable.stamped, false, "주입 파일이 없는데 주입된 것처럼 말한다");
+    assert.equal(unverifiable.date, null, "개발 실행에 빌드 날짜가 있다");
+    assert.equal(unverifiable.commit, null);
+    assert.equal(unverifiable.version, "0.1.0");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("설치된 트리가 자기 매니페스트와 맞으면 **트리 해시**를 보고한다", async () => {
+  const s = await sandbox();
+  try {
+    // 실제 트리에서 매니페스트를 만든다 — 이론적 해시를 쓰지 않는다.
+    const m = await manifestOf(s.root);
+    await writeFile(join(s.root, "manifest.json"), JSON.stringify(m, null, 2), "utf8");
+    const up = svc(s.dir, (async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch);
+    const v = await up.verifyInstalled();
+    assert.equal(v.ok, true, v.detail);
+    assert.equal(v.sha, m.treeSha256);
+    assert.equal((await up.local()).sha, m.treeSha256, "로컬 사실이 검증한 트리 해시와 다르다");
+    // manifest.json 자신은 **검증에서 빠진다** — 자기 해시를 자기 안에 쓸 수는 없다.
+    assert.deepEqual(v.extra, [], "매니페스트 자신을 '목록에 없는 파일' 로 잡았다");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+// ── Raiser R-1: 배포물에 node_modules 가 없다 ─────────────────────────────
+
+test("**의존성이 없으면 적용을 막을 근거**가 생긴다 — 조용히 깨뜨리지 않는다", async () => {
+  const s = await sandbox();
+  try {
+    const up = svc(s.dir, (async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch);
+    const deps = await up.dependencies();
+    // 샌드박스에는 `node_modules` 가 없다 → 없는 것이 사실이다.
+    assert.equal(deps.ready, false, `없는 의존을 '있다' 고 말했다: ${deps.detail}`);
+    assert.ok(deps.missing.length > 0, "어떤 의존이 없는지 말하지 않는다");
+    const { decision } = await up.planApply();
+    assert.equal(decision.ok, false, "의존성이 없는데 적용을 허용했다");
+    assert.ok(decision.blockers.some((b) => /의존성/.test(b)), `차단 사유가 없다: ${decision.blockers.join("|")}`);
   } finally {
     await s.cleanup();
   }

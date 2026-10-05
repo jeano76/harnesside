@@ -22,7 +22,9 @@ import { OpenAICompatibleClient } from "../backend/openaiClient.js";
 import type { ChatMessage, ModelBackend } from "../backend/types.js";
 import type { CompactionThresholds } from "../compaction/compactor.js";
 import type { CompactionDetail } from "../compaction/compactor.js";
+import { estimateTextTokens } from "../shared/textTokens.js";
 import { estimateTokens } from "../compaction/compactor.js";
+import { DEFAULT_MAX_REASONING } from "../shared/reasoning.js";
 import { activeToolDefs } from "../tools/index.js";
 import { applyEvent, normalizeTool, type AgentBlock } from "../session/blocks.js";
 import { resumeInfo, type ResumeInfo } from "../compaction/checkpoint.js";
@@ -115,7 +117,10 @@ export interface ThinkPolicy {
   maxReasoningTokens: number;
 }
 
-export const DEFAULT_THINK: ThinkPolicy = { enabled: true, maxReasoningTokens: 1024 };
+// 정본은 `src/shared/reasoning.ts` — 여기서 숫자를 다시 적지 않는다.
+// 예전엔 이 한 줄과 `think.ts`·`schema.ts` 에 1024 가 각자 적혀 있었다(3벌).
+// 주석이 "값이 달라지면 안 된다" 고 말하면서 정본을 세 개 둔 셈이다.
+export const DEFAULT_THINK: ThinkPolicy = { enabled: true, maxReasoningTokens: DEFAULT_MAX_REASONING };
 
 export class AgentService {
   private loop: AgentLoop | null = null;
@@ -314,7 +319,9 @@ export class AgentService {
         this.emit({ type: "agent.status", text: "모델이 응답 중입니다", at: now() });
       },
       onReasoningDelta: (text) => {
-        this.reasoningTokens += Math.max(1, Math.ceil(text.length / 3.4));
+        // **언어별 추정**을 쓴다 — 예전 `길이 / 3.4` 은 영문 기준이라 한글 사고의
+        // 실제 토큰을 절반밖에 못 세었다. 웹(`think.ts`)과 **같은 함수**를 쓴다.
+        this.reasoningTokens += estimateTextTokens(text);
         if (!this.think.enabled) {
           // **숨겨도 예산은 이미 소비됐다.** 모델 쪽에서 이미 토큰을 썼으므로
           // "안 켜서 안 씁니다" 라고 말하면 그 사실이 사라진다. 한 번만 알린다.
@@ -322,7 +329,12 @@ export class AgentService {
             this.hiddenReasoningNotified = true;
             this.emit({
               type: "agent.status",
-              text: `모델이 사고 델타를 보냈지만 표시가 꺼져 있습니다(예산은 이미 소비됨: ${this.reasoningTokens} 토큰).`,
+              // **조치 방법까지 말한다.** 예전 문구는 "꺼져 있습니다" 라고만 해서
+              // 사용자가 무엇을 해야 하는지 알 수 없었다(실측 질문).
+              text:
+                `사고 상한(${this.think.maxReasoningTokens.toLocaleString("ko-KR")} 토큰)을 넘어 thinking 표시를 껐습니다 ` +
+                `— 모델이 이미 쓴 예산이라 되돌릴 수 없습니다. 다음 턴부터 다시 켜집니다. ` +
+                `더 오래 보고 싶으면 설정의 "사고 토큰 상한" 을 올리십시오.`,
               at: now(),
             });
           }
@@ -336,7 +348,10 @@ export class AgentService {
           this.invalidate();
           // 대화에 상태 줄을 남기지 않는다(사용자 지정: thinking 은 기본 ON 이라 이 안내는 소음).
           // 강제 도구 호출 자체는 그대로 동작한다.
-          this.opts.logger?.(`[think] 사고 토큰이 상한(${this.think.maxReasoningTokens})을 넘어 thinking 을 끄고 도구 호출을 강제합니다`);
+          this.opts.logger?.(
+            `[think] 사고 토큰이 상한(${this.think.maxReasoningTokens})을 넘어 thinking 을 끄고 도구 호출을 강제합니다 ` +
+              `(추정치 ${this.reasoningTokens} — estimateTextTokens 기준, 실제 토큰 카운터가 아니다)`,
+          );
         }
         this.emit({ type: "agent.reasoning", text, at: now() });
       },

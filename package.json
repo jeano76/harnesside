@@ -16,7 +16,12 @@
   "scripts": {
     "build:server": "tsc -p tsconfig.server.json",
     "build:web": "vite build",
-    "build": "npm run build:server && npm run build:web && node scripts/pack-web-assets.mjs",
+    "build": "npm run build:server && npm run build:web && node scripts/pack-web-assets.mjs && npm run build:info",
+    "build:info": "node scripts/gen-build-info.mjs",
+    "release": "node scripts/gen-build-info.mjs && node scripts/make-release.mjs --require-clean",
+    "install:g": "npm run build && npm install -g . && node scripts/install-global.mjs",
+    "release:repro": "node scripts/make-release.mjs --verify-repro",
+    "verify:selfupdate": "tsx scripts/verify-selfupdate.mjs",
     "prepublishOnly": "npm run build",
     "dev": "concurrently \"tsx watch src/server/index.ts\" \"vite\"",
     "start": "node dist/server/index.js",

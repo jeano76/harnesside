@@ -29,6 +29,7 @@ import { IndentGuides } from "./IndentGuides.js";
 import { COLOR } from "../theme/tokens.js";
 import {
   planSave,
+  planExternalChange,
   saveLocalDraft,
   loadLocalDraft,
   clearLocalDraft,
@@ -83,7 +84,37 @@ export function EditorView({
   const [state, setState] = useState<SaveState>({ kind: "clean" });
   const [restore, setRestore] = useState<{ content: string; baseVersion: number } | null>(null);
 
+/**
+   * **`onNotice` 를 안정시킨다** — 실측으로 찾은 결함의 원인.
+   *
+   * 호출자(`main.tsx`)는 `onNotice` 를 JSX 안에서 **매 렌더 새 함수로** 넘긴다.
+   * `save` 의 의존성에 그것이 들어 있으므로 `save` 도 매번 새로 만들어지고, 자동 저장
+   * effect 의 의존성 `[text, save]` 가 **매 렌더 바뀐다.** effect 는 재실행될 때마다
+   * 이전 타이머를 `clearTimeout` 하므로, **타이머가 끝나기 전에 항상 지워진다.**
+   *
+   * 계측: 버퍼에 `바뀜 · 곧 저장` 이 8초 넘게 남고, `지금 저장` 버튼만 남았다.
+   * WS·계측 스트림이 매초 다시 그리므로 타이머는 **영원히 끝나지 않았다.**
+   * 화면에는 "자동 저장" 이라고 적혀 있는데 자동 저장은 일어나지 않았다 — 라벨이
+   * 거짓말이었던 상태다.
+   *
+   * 고치는 곳은 두 군데다: 부모가 함수를 매번 만들지 않게 하고(선택), 여기서는
+   * **참조를 통해 안정된 껍데기**만 쓴다(필수). 어느 쪽을 고쳐도 부모의 갱신 빈도에
+   * 자동 저장이 다시 묶이지 않는다.
+   */
+  const noticeRef = useRef(onNotice);
+  noticeRef.current = onNotice;
+  const stableNotice = useCallback<typeof onNotice>(
+    (kind, title, body) => noticeRef.current(kind, title, body),
+    [],
+  );
+
+  
   // 다른 파일로 바뀌면 버퍼를 갈아끼운다. **이전 버퍼의 미저장 내용은 먼저 경고한다.**
+  //
+  // **의존성을 `info.path` 로만 둔다.** 예전엔 `[info.path, info.version, info.content]`
+  // 였는데, 그러면 **같은 파일이 바깥에서 바뀌기만 해도** 버퍼가 통째로 갈아끼워졌다 —
+  // 사용자가 **미저장 편집을 잃었다.** 그게 실측으로 확인된 결함이며, 같은 파일의 갱신은
+  // 아래 effect 가 `planExternalChange` 로 판단한다.
   useEffect(() => {
     buf.current = { path: info.path, content: info.content, baseVersion: info.version, dirtySince: null };
     setText(info.content);
@@ -93,7 +124,36 @@ export function EditorView({
     // 조용히 버리면 "저장 안 한 것" 이 되어 이유를 알 수 없다.
     if (d && d.path === info.path && d.content !== info.content) setRestore({ content: d.content, baseVersion: d.baseVersion });
     else if (d && d.path === info.path) clearLocalDraft(typeof localStorage === "undefined" ? null : localStorage);
-  }, [info.path, info.version, info.content]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- **경로만 본다.**
+    // 버전·내용까지 넣으면 바깥 변경마다 이 effect 가 돌아 미저장 편집을 지운다.
+    // 같은 파일을 다시 여는 일은 `openFile = null` 로 컴포넌트가 **내려가면서** 이뤄지므로
+    // 여기서는 경로만 바뀌는 경우만 보면 충분하다.
+  }, [info.path]);
+
+  /**
+   * **같은 파일이 바깥에서 바뀌었을 때** (§5.2).
+   *
+   * `info` 의 내용이 바뀌었는데 열려 있는 파일과 같을 때만 돈다 — 위 effect 가
+   * `info.path` 만 보므로 여기서 경로를 다시 비교한다.
+   *
+   * 판단은 `planExternalChange` 가: 안 고친 버퍼면 디스크를 따르고, **고치는 중이면
+   * 보존하며 그 사실을 말한다.** 조용히 갱신하면 편집을 잃고, 조용히 말리면
+   * 사용자가 옛 내용을 편집한 줄 알고 그대로 저장해 버린다.
+   */
+  useEffect(() => {
+    if (info.content === buf.current.content && info.version === buf.current.baseVersion) return;
+    const plan = planExternalChange(buf.current, { content: info.content, version: info.version });
+    if (plan.action === "keep") {
+      // **버린 이유를 말해야 한다.** 미저장 편집이 있으면 그게 최우선이다.
+      if (buf.current.dirtySince !== null) {
+        stableNotice("warn", "바깥에서 파일이 바뀌었습니다", `${info.path} — ${plan.why}. 저장을 시도하면 버전 충돌을 알려 드립니다.`);
+      }
+      return;
+    }
+    buf.current = { path: info.path, content: info.content, baseVersion: info.version, dirtySince: null };
+    setText(info.content);
+    setState({ kind: "clean" });
+  }, [info.path, info.version, info.content, stableNotice]);
 
   /** 실제 저장 — 판정은 `planSave` 가, I/O 는 여기가. */
   const save = useCallback(
@@ -120,10 +180,12 @@ export function EditorView({
         }
         // 실패해도 **내 편집은 버퍼에 남는다.** 버리면 "저장 실패" + 편집 손실 = 이중 손실.
         setState({ kind: "failed", detail: e instanceof ApiError ? e.message : String(e) });
-        onNotice("error", "자동 저장 실패", `${info.path} — ${e instanceof ApiError ? e.message : String(e)}. 편집 내용은 화면에 남아 있습니다.`);
+        stableNotice("error", "자동 저장 실패", `${info.path} — ${e instanceof ApiError ? e.message : String(e)}. 편집 내용은 화면에 남아 있습니다.`);
       }
     },
-    [client, onNotice, info.path]
+    // **안정된 `stableNotice` 만 넣는다** — `onNotice` 를 그대로 넣으면 여기서
+    // `save` 가 매 렌더 새로 만들어져 자동 저장 타이머가 계속 지워진다(위 주석).
+    [client, stableNotice, info.path]
   );
 
   // 디바운스 타이머. 입력 멈춘 뒤에만 저장한다.

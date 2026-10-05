@@ -13,6 +13,9 @@
  * 무한 재시도는 금물 — 2회 재시도 후 명확한 오류로 끝낸다.
  */
 
+import { estimateTextTokens } from "../../shared/textTokens.js";
+import { DEFAULT_MAX_REASONING } from "../../shared/reasoning.js";
+
 export type ThinkStyle = "dots" | "pulse" | "orbit" | "shimmer" | "bar";
 
 export interface ThinkState {
@@ -31,7 +34,9 @@ export interface ThinkState {
   reason: string | null;
 }
 
-export const DEFAULT_MAX_REASONING = 1024;
+// 정본은 `src/shared/reasoning.ts` 다. 여기서 다시 적으면 **값이 두 벌**이 되고,
+// 하나만 고치면 화면과 서버가 어긋난다(실측: 1024 가 세 곳에 따로 적혀 있었다).
+export { DEFAULT_MAX_REASONING };
 
 export function initialThink(opts: Partial<Pick<ThinkState, "enabled" | "style" | "maxReasoningTokens">> = {}): ThinkState {
   // 2026-10-01: **기본 ON.** 사고 표시는 기본이 꺼져 있었다 — 요구 6 은 "Think UI" 라는
@@ -78,7 +83,9 @@ export interface ThinkDeltas {
  */
 export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
   if (!d.reasoning) return s;
-  const used = s.usedTokens + Math.max(1, Math.ceil(d.reasoning.length / 3.4)); // 휴리스틱 토큰 수
+  // **언어별 추정**(`estimateTextTokens`). 예전의 `길이 / 3.4` 은 영문 기준이라
+  // 한글 사고의 실제 토큰을 절반밖에 못 셌다 — 표시된 숫자가 거짓말이 된다.
+  const used = s.usedTokens + estimateTextTokens(d.reasoning);
   if (s.enabled && used > s.maxReasoningTokens && !s.forcedToolChoice) {
     return {
       ...s,

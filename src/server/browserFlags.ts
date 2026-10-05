@@ -251,7 +251,30 @@ export function assertNoDuplicateKeys(args: string[]): void {
   }
 }
 
-/** 프로필 경로 (§6.4: 프로젝트 디렉터리에 두지 않는다). */
-export function profileDir(home: string): string {
-  return `${home.replace(/\/+$/, "")}/.harnesside/chrome-profile`;
+/**
+ * 프로필 경로 (§6.4: 프로젝트 디렉터리에 두지 않는다).
+ *
+ * ── CDP 포트별로 **나눈다** (실측 결함) ─────────────────────────────────────
+ *
+ * 예전엔 인스턴스 몇 개나 **같은 디렉터리**를 썼다. 그래서 두 번째 harnesside 가
+ * Chrome 을 띄울 때 일이 이렇게 벌어졌다(실측, 그대로 재현함):
+ *
+ *   1. 두 번째 인스턴스가 `--user-data-dir=<같은 경로>` 로 Chrome 을 스폰한다
+ *   2. Chrome 은 **이미 그 프로필을 쓰고 있는 브라우저가 있으므로** 새 프로세스를
+ *      만들지 않고, 거기에 `--app=<새 URL>` 을 **넘겨준다**
+ *   3. 첫 번째 인스턴스의 브라우저에 **새 창이 뜬다**
+ *   4. 두 번째 인스턴스는 `waitForCdp` 에 성공하고 **정상 기동했다고 보고한다**
+ *
+ * 사용자가 본 것("새 창으로 웹페이지가 뜨는데")이 정확히 이거다. 창이 열린 게 아니라
+ * **남의 브라우저를 가로챈** 것이고, 남의 세션이 그 창을 닫으면 이쪽도 함께 죽는다.
+ *
+ * 그래서 프로필을 **CDP 포트 기준**으로 나눈다 — 포트가 인스턴스를 유일하게 구분하는
+ * 값이다(같은 프로젝트에서 두 인스턴스가 동시에 돌 수는 없다 — 인스턴스 락).
+ *
+ * **기본 포트(9222)는 예전 경로를 그대로 쓴다** — 한 인스턴스만 돌 때 창 위치·쿠키·
+ * 확장 상태가 유지되어야 하므로, 아무 일도 없는데 경로를 옮기면 사용자만 손해 본다.
+ */
+export function profileDir(home: string, cdpPort?: number): string {
+  const base = `${home.replace(/\/+$/, "")}/.harnesside/chrome-profile`;
+  return cdpPort === undefined || cdpPort === CDP_DEFAULT_PORT ? base : `${base}-${cdpPort}`;
 }
