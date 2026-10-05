@@ -218,11 +218,20 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
   );
 }
 
-function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle }) {  const anim = animationFor(style);
-  if (!state.enabled) return null;
+function ThinkIndicator({ state, style, notice }: { state: ThinkState; style: ThinkStyle; notice?: { short: string; title: string } | null }) {
+  const anim = animationFor(style);
+  // 꺼져 있으면 표시줄 자체가 없다 — 단, 예산 안내가 있으면 그 한 줄은 보인다.
+  if (!state.enabled && !notice) return null;
+  const used = state.usedTokens.toLocaleString("ko-KR");
+  const cap = state.maxReasoningTokens.toLocaleString("ko-KR");
+  // **한 줄로 합친다.** 예전엔 `Thinking · N 토큰` 줄과 `추론 예산 곧 초과 (N/M·추정)` 줄이
+  // 따로 있어 같은 숫자가 두 번 보였다. 현재/최대 쌍은 이 한 곳에만 둔다.
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }}>
-      {anim.dots > 0 && (
+    <div
+      style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }}
+      {...(notice ? { title: notice.title } : {})}
+    >
+      {state.enabled && anim.dots > 0 && (
         <span style={{ display: "inline-flex", gap: 3 }}>
           {Array.from({ length: anim.dots }).map((_, i) => (
             <span
@@ -240,7 +249,9 @@ function ThinkIndicator({ state, style }: { state: ThinkState; style: ThinkStyle
           ))}
         </span>
       )}
-      <span>Thinking · {state.usedTokens.toLocaleString("ko-KR")} 토큰</span>
+      <span>
+        Thinking · {used}/{cap} 토큰(추정){notice ? ` — ${notice.short}` : ""}
+      </span>
     </div>
   );
 }
@@ -633,17 +644,7 @@ export function AgentPanel({
           );
         })}
 
-        {running && think.enabled && <ThinkIndicator state={think} style={style} />}
-        {/* 예산 초과 안내 — **문구는 `thinkNotice` 가 정한다** (판정과 문구를 한 곳에 둔다).
-            예전엔 이 자리에서 `Thinking 꺼짐 (예산 초과)` 라고 직접 적었는데, 그것은
-            틀린 말이었다(사용자가 지목). thinking 은 상시 동작하고, 실제로 바뀐
-            것은 **이 턴을 "생각" 에서 "도구 호출" 로 전환한다** 는 것뿐이다.
-            숫자가 추정치라는 것도 같이 말한다 — 서버 로그도 스스로 추정치라고 적고 있다. */}
-        {budgetNotice && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }} title={budgetNotice.title}>
-            <span>{budgetNotice.text}</span>
-          </div>
-        )}
+        {running && (think.enabled || budgetNotice) && <ThinkIndicator state={think} style={style} notice={budgetNotice} />}
 
         {/* **읽고 있는데 새 내용이 온다** — 조용히 끌지 않는다. */}
         {!pinned && (

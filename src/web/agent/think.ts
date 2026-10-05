@@ -80,6 +80,10 @@ export interface ThinkDeltas {
  * 델타를 먹인다. **사고 예산이 초과되면 강제 전환이 일어난다** — 그리고 그 사실이
  * `state.forcedToolChoice` 로 드러나야 한다. 드러나지 않으면 사용자는 "도구가 왜
  * 안 불리지?" 하고 기다린다.
+ *
+ * `needsWarning` 은 두 경우에 켠다: 이미 넘었거나(초과), 80%에 들어섰거나(곧
+ * 초과). 80% 선행 경고가 없으면 "곧 초과" 분기는 도달 불가능한 죽은 코드가 된다 —
+ * `ingest` 가 초과와 동시에 `enabled` 까지 끄기 때문이다.
  */
 export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
   if (!d.reasoning) return s;
@@ -98,7 +102,14 @@ export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
       reason: `사고 토큰이 상한(${s.maxReasoningTokens.toLocaleString("ko-KR")})을 넘어 thinking 을 끄고 도구 호출을 강제합니다.`,
     };
   }
-  return { ...s, usedTokens: used, startedAt: s.startedAt ?? Date.now() };
+  return {
+    ...s,
+    usedTokens: used,
+    startedAt: s.startedAt ?? Date.now(),
+    // 아직 Enabled인데 상한의 80%를 넘었으면 "곧 초과"를 알린다 — 초과後に
+    // 말하면 이미 전환된 뒤라 예보가 아니다.
+    needsWarning: s.needsWarning || (s.enabled && !s.forcedToolChoice && used >= s.maxReasoningTokens * 0.8),
+  };
 }
 
 /** 경과 초. 0 이 아니라 "시작 전" 을 구분한다. */
@@ -115,7 +126,18 @@ export function speed(s: ThinkState, now = Date.now()): number | null {
 }
 
 export function finish(s: ThinkState): ThinkState {
-  return { ...s, startedAt: null };
+  // 턴이 끝나면 **이번 턴의 계량기를 비운다.** 서버는 매 턴 reasoningTokens 를
+  // 0부터 다시 세는데 웹은 누적만 했다 — 그래서 한 번 초과했거나 여러 턴에 걸쳐
+  // 사고가 쌓이면, 다음 턴에서 쓰지도 않은 예산으로 "곧 초과/초과"가 떴다(실측).
+  // 정책(enabled·style·cap)은 턴 경계를 넘나들지만 계량기는 넘지 않는다.
+  return {
+    ...s,
+    startedAt: null,
+    usedTokens: 0,
+    needsWarning: false,
+    forcedToolChoice: false,
+    reason: null,
+  };
 }
 
 /** `prefers-reduced-motion` 일 때 애니메이션을 멈추고 텍스트만 보여줄지. */
@@ -194,6 +216,8 @@ export function exhaustedMessage(s: RetryState): string {
 export interface ThinkNotice {
   /** 상태 줄에 보이는 짧은 말. */
   text: string;
+  /** Thinking 표시줄에 붙는 한 줄 꼬리표 — 숫자는 표시줄에 이미 있으므로 반복하지 않는다. */
+  short: string;
   /** 마우스를 올렸을 때의 설명. */
   title: string;
   /** 이 값이 추정치인가 — 화면이 "확실한 수치" 처럼 말하지 않게 하는 근거. */
@@ -208,21 +232,25 @@ export interface ThinkNotice {
  */
 export function thinkNotice(s: ThinkState, running: boolean): ThinkNotice | null {
   if (!running) return null;
-  // 켜져 있으면 정상이다. 예전에 이 자리에서 "꺼짐" 을 그리는 길이 두려웠지만,
-  // 켜져 있는 것과 위험한 것은 다르다 — 그래서 켜져 있으면 **아무 말도 하지 않는다**.
-  if (s.enabled && !s.needsWarning) return null;
+  // **경고 조건은 needsWarning 하나다.** 꺼져 있는 것 자체는 경고가 아니다 —
+  // 예전 코드는 `enabled === false` 면 무조건 "초과"를 띄워서, thinking 을 설정에서
+  // 끈 세션도 매 턴 "예산 초과"를 봤다. needsWarning 은 초과·임박을 이번 턴에 실제로
+  // 관측했을 때만 켜지고(ingest), 턴이 끝나면 꺼진다(finish/adoptServerThink).
+  if (!s.needsWarning) return null;
   const cap = s.maxReasoningTokens.toLocaleString("ko-KR");
   const used = s.usedTokens.toLocaleString("ko-KR");
   if (s.enabled) {
     // 켜져 있지만 위험 — 곧 전환된다는 뜻. 아직 "꺼졌다"고 말할 단계가 아니다.
     return {
       text: `추론 예산 곧 초과 (${used}/${cap}·추정)`,
+      short: "곧 초과",
       title: `추론이 예산에 가까워졌습니다. 상한(${cap})을 넘으면 이번 턴은 도구 호출로 전환합니다. 숫자는 길이에서 추정한 값이라 실제 토큰 수와 다릅니다.`,
       estimated: true,
     };
   }
   return {
     text: `추론 예산 초과 → 도구 호출로 전환 (${used}/${cap}·추정)`,
+    short: "초과 → 도구 호출로 전환",
     title:
       `추정 ${used} 토큰이 상한 ${cap}을 넘어서, 이번 턴은 "더 생각하기" 대신 "직접 도구를 호출하기" 로 전환했습니다. ` +
       `thinking 설정이 꺼진 것이 아니며 이 턴이 끝나면 원래대로 돌아갑니다. 숫자는 길이에서 추정한 값이라 실제 토큰 수와 다릅니다.`,
@@ -250,7 +278,15 @@ export function adoptServerThink(
   s: ThinkState,
   server: { enabled?: unknown; maxReasoningTokens?: unknown },
 ): ThinkState {
-  const next: ThinkState = { ...s };
+  // 턴 시작 신호이기도 하다 — 이전 턴의 계량기가 `finish` 를 거치지 않고 남았어도
+  // (취소·재연결·자동재개) 여기서 비운다. 정책만 따르고 계량은 이번 턴부터다.
+  const next: ThinkState = {
+    ...s,
+    usedTokens: 0,
+    needsWarning: false,
+    forcedToolChoice: false,
+    reason: null,
+  };
   if (typeof server.enabled === "boolean") next.enabled = server.enabled;
   // **값이 실제로 왔을 때만** 따른다. 못 받았는데 기본값으로 덮으면, 이미 맞춰 둔
   // 상한이 조용히 **기본값으로 되돌아가며** 임계 비교가 또 어긋난다(테스트가 잡았다).

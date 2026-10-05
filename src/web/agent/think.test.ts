@@ -263,3 +263,68 @@ test("**상한을 맞춘 뒤에는** 임계 비교가 서버 값으로 이뤄진
   assert.equal(s.enabled, false, "64 상한인데 임계에 안 미쳤다 — 여전히 4096 으로 계산하고 있다");
   assert.equal(s.forcedToolChoice, true);
 });
+
+// ── 턴 경계를 넘는 계량기 (실측 버그) ────────────────────────────────────────
+// 서버는 매 턴 reasoningTokens 를 0부터 세는데, 웹은 finish/adopt 어디에서도
+// usedTokens·needsWarning 을 비우지 않았다. 그래서 한 번 초과했거나 여러 턴에
+// 걸쳐 사고가 쌓이면, 다음 턴에서 쓰지도 않은 예산으로 경고가 떴다.
+
+test("상한의 80%에 들면 **끄지 않고** 곧 초과를 알린다 — 예보가 예보답게", () => {
+  let s = initialThink({ enabled: true, maxReasoningTokens: 100 });
+  s = ingest(s, { reasoning: "a".repeat(320) }); // ≈80 토큰 추정
+  assert.equal(s.enabled, true, "80%인데 벌써 껐다");
+  assert.equal(s.needsWarning, true, "임박했는데 조용하다");
+  assert.equal(s.forcedToolChoice, false, "임박했는데 강제 전환했다");
+  const n = thinkNotice(s, true)!;
+  assert.match(n.text, /곧 초과/, `예보가 아니다: ${n.text}`);
+});
+
+test("80% 미만이면 조용하다 — 상시 경고는 경고가 아니다", () => {
+  let s = initialThink({ enabled: true, maxReasoningTokens: 10000 });
+  s = ingest(s, { reasoning: "짧게" });
+  assert.equal(s.needsWarning, false);
+  assert.equal(thinkNotice(s, true), null);
+});
+
+test("finish 는 **이번 턴의 계량기**를 비운다 — 정책은 그대로", () => {
+  let s = initialThink({ enabled: true, maxReasoningTokens: 10 });
+  s = ingest(s, { reasoning: "가나다라마바사아자차카타파하".repeat(10) });
+  assert.equal(s.needsWarning, true);
+  const done = finish(s);
+  assert.equal(done.usedTokens, 0, "다음 턴이 전날 턴의 사용량을 물려받는다");
+  assert.equal(done.needsWarning, false, "다음 턴이 전날 턴의 경고를 물려받는다");
+  assert.equal(done.forcedToolChoice, false);
+  assert.equal(done.reason, null);
+  assert.equal(done.maxReasoningTokens, 10, "상한(정책)까지 초기화했다");
+  assert.equal(thinkNotice(done, true), null, "끝난 턴의 경고가 다음 턴에 보인다");
+});
+
+test("adoptServerThink 는 턴 시작이므로 계량기를 비운다 — 상한 동기화와 별개", () => {
+  let s = { ...initialThink(), usedTokens: 5000, needsWarning: true, forcedToolChoice: true, enabled: false };
+  const next = adoptServerThink(s, { enabled: true, maxReasoningTokens: 4096 });
+  assert.equal(next.usedTokens, 0);
+  assert.equal(next.needsWarning, false);
+  assert.equal(next.enabled, true);
+});
+
+test("그냥 꺼져 있는 것은 경고가 아니다 — 초과 관측이 있어야 말한다", () => {
+  const off = { ...initialThink(), enabled: false };
+  assert.equal(thinkNotice(off, true), null, "설정 OFF인데 매 턴 초과가 뜬다");
+});
+
+test("초과 → 턴 종료 → 다음 턴: 경고가 따라오지 않는다 (실측 시나리오)", () => {
+  let s = initialThink({ enabled: true, maxReasoningTokens: 50 });
+  for (let i = 0; i < 50; i++) s = ingest(s, { reasoning: "가나다라마바사아자차카타파하" });
+  assert.ok(thinkNotice(s, true) !== null, "초과했는데 조용하다");
+  s = finish(s); // 턴 끝
+  s = adoptServerThink(s, { enabled: true, maxReasoningTokens: 50 }); // 다음 턴 시작
+  assert.equal(thinkNotice(s, true), null, "지난 턴의 초과가 다음 턴에 보인다");
+});
+
+test("안내에 한 줄 꼬리표가 있다 — 표시줄과 숫자를 반복하지 않기 위해서", () => {
+  const soon = thinkNotice({ ...initialThink(), enabled: true, needsWarning: true, usedTokens: 3900 }, true)!;
+  assert.equal(soon.short, "곧 초과");
+  assert.ok(!soon.short.includes("3,900"), `꼬리표에 숫자가 또 들어간다: ${soon.short}`);
+  const over = thinkNotice({ ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 }, true)!;
+  assert.match(over.short, /초과/);
+});
