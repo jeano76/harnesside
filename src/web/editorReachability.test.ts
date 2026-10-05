@@ -40,8 +40,6 @@ const previewSrc = read("panels/FilePreview.tsx");
  * 않겠다는 뜻이다. 연결하면 이 목록에서 지운다(누가 연결했든).
  */
 const KNOWN_UNREACHABLE: Record<string, string> = {
-  DiffPanel:
-    "diff 검토 화면(§5.2). import 만 있고 렌더되지 않는다 — 연결은 별도 요구(미결). 사용자가 'diff 를 볼 방법이 없다' 고 말해야만 알게 되는 상태라, 숨기지 않고 여기에 적는다",
   CommitBox:
     "커밋 입력 상자(§9.3). import 만 있고 렌더되지 않는다 — 어디에 둘지(설정 블록? 대화 블록?)가 정해지지 않았다. 배치는 별도 요구(미결)",
 };

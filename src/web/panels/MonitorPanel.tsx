@@ -304,6 +304,8 @@ export function MonitorStrip({ latest }: { latest: Metrics | null }) {
       {cell("CPU", latest.cpu.cores.length ? latest.cpu.overall : null, `${latest.cpu.overall.toFixed(0)}%`)}
       {cell("RAM", latest.mem.usedPct, `${latest.mem.usedPct.toFixed(0)}%`)}
       {cell("VRAM", latest.gpu ? latest.gpu.memPct : null, latest.gpu ? `${latest.gpu.memPct.toFixed(0)}%` : "?")}
+      {/* GPU 사용률 — `null` 은 "모른다"(nvidia-smi 가 값을 안 줬거나 GPU 없음)이지 0 이 아니다. */}
+      {cell("GPU", latest.gpu?.utilPct ?? null, latest.gpu?.utilPct === null || !latest.gpu ? "?" : `${latest.gpu.utilPct.toFixed(0)}%`)}
       {cell("CTX", ctx?.pct ?? null, ctx ? `${ctx.pct.toFixed(0)}%` : "—", !!ctx && ctx.pct > 80)}
       {cell("DISK", 100 - latest.disk.usedPct, fmtBytes(latest.disk.freeBytes))}
     </div>
