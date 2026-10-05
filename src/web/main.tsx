@@ -242,6 +242,8 @@ export default function App() {
   const [blocks, setBlocks] = useState<AgentBlock[]>([]);
   const [think, setThink] = useState<ThinkState>(() => initialThink());
   const [turnRunning, setTurnRunning] = useState(false);
+  /** 파일 생성 중 실시간 초안(도구 인자 조각). 블록이 아니라 별도 줄로 보인다 — 끝나면 비운다. */
+  const [liveDraft, setLiveDraft] = useState<{ index: number; name: string; args: string } | null>(null);
   /** 실행 중 들어온 입력의 대기열 — 서버 `agent.queue` 이벤트를 그대로 보여준다. */
   const [queueItems, setQueueItems] = useState<string[]>([]);
   /** 압축 진행·결과 — 서버 `agent.compaction` 이벤트. null이면 숨김. */
@@ -901,14 +903,24 @@ export default function App() {
             // 상한(예산) 계산에는 쓰지 않는다(ingest가 text를 예산에서 뺀다).
             setThink((s) => ({ ...ingest(s, { text: ev.text as string }), startedAt: s.startedAt ?? Date.now() }));
           }
-          if (evType === "agent.tool") {
-            // 도구 호출(호출명+인자)도 출력이므로 속도 분자에 넣는다. 결과 본문이
-            // 아니라 호출 인자만 센다 — 결과는 별도 tool-result 이벤트가 아니라
-            // 다음 모델 입력이 되므로 여기서 셀 수 없다.
-            const t = ev.tool as { name?: string; args?: string } | undefined;
-            const callText = t && (t.name || t.args) ? `${t.name ?? ""}(${t.args ?? ""})` : "";
-            if (callText) setThink((s) => ({ ...ingest(s, { tool: callText }), startedAt: s.startedAt ?? Date.now() }));
+          if (evType === "agent.tool.draft") {
+            // 파일 본문이 생성되는 순간 — 두 가지를 같이 한다.
+            //  1. 별도 초안 줄에 보여 준다(Thinking 과 분리된 UI 요소).
+            //  2. 인자 조각을 출력 토큰으로 세서 tok/s 에 반영한다. 호출이 끝난 뒤에 세면
+            //     파일을 쓰는 동안의 속도가 0 으로 보이고, 한꺼번에 튀어 오른다.
+            const d = ev.draft as { index: number; name: string; args: string } | undefined;
+            if (d) {
+              setLiveDraft((prev) => ({ index: d.index, name: d.name || prev?.name || "", args: (prev && prev.index === d.index ? prev.args : "") + d.args }));
+              setThink((s) => ({ ...ingest(s, { tool: d.args }), startedAt: s.startedAt ?? Date.now() }));
+            }
+            return;
           }
+          if (evType === "agent.tool" && (ev.tool as { done?: boolean } | undefined)?.done) {
+            // 호출이 끝나면 초안은 사라지고 완성된 블록(아래 applyEvent)이 그 자리를 잇는다.
+            setLiveDraft(null);
+          }
+          if (evType === "agent.status" && /응답 중/.test(String(ev.text ?? ""))) setLiveDraft(null);
+          if (evType === "agent.done" || evType === "agent.error") setLiveDraft(null);
           if (evType === "agent.done" || evType === "agent.error") {
             // 대기열이 남았으면 다음 턴이 바로 돈다 — 실행 중 표시를 내리면 깜빡인다.
             const pending = typeof ev.queue === "number" ? ev.queue : 0;
@@ -1269,6 +1281,7 @@ export default function App() {
         onEditFile={(p: string) => void openFileByPath(p)}
         overlay={approvalOverlay}
         running={turnRunning}
+        liveDraft={liveDraft}
         // 상태바 — 이미 **앱 전체가 하나씩** 붙들고 있는 값을 **읽기만** 넘긴다.
         // 여기서 WS 를 새로 붙들면 소켓이 두 개 생기고 재연결이 두 배가 된다.
         wsState={wsState}

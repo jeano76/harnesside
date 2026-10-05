@@ -46,10 +46,12 @@ export function resolveThresholds(
 }
 
 export interface AgentEvent {
-  type: "agent.delta" | "agent.reasoning" | "agent.done" | "agent.error" | "agent.tool" | "agent.status" | "agent.queue" | "agent.compaction" | "agent.thinking";
+  type: "agent.delta" | "agent.reasoning" | "agent.done" | "agent.error" | "agent.tool" | "agent.status" | "agent.queue" | "agent.compaction" | "agent.thinking" | "agent.tool.draft";
   /** `agent.reasoning` 은 사고 델타, `agent.delta` 는 답변 델타다. */
   text?: string;
   tool?: { name: string; args?: string; done?: boolean; ok?: boolean; /** edit/write/append 결과 diff (성공 시만). 같은 블록에서 보여준다. */ diff?: string; /** 호출·완료를 묶는 id — 같으면 시간 창과 무관하게 합친다. */ callId?: string };
+  /** `agent.tool.draft` — 파일 생성 중 인자 조각(실시간 초안). 블록이 아니라 화면의 별도 줄이다. */
+  draft?: { index: number; name: string; args: string };
   /** `agent.queue` 의 대기 목록. `agent.done` 에는 남은 개수. */
   thinking?: { enabled: boolean; forcedToolChoice: boolean };
   queue?: string[] | number;
@@ -413,6 +415,7 @@ export class AgentService {
         this.emit({ type: "agent.reasoning", text, at: now() });
       },
       onAssistantDelta: (text) => this.emit({ type: "agent.delta", text, at: now() }),
+      onToolArgsDelta: (d) => this.emit({ type: "agent.tool.draft", draft: d, at: now() }),
       onAssistantDone: () => undefined,
       onToolCall: (name, args, callId) => {
         this.toolCalls++;
