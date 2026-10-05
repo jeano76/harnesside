@@ -32,7 +32,6 @@ import {
 } from "./agent/promptHistory.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
 import { MonitorStrip } from "./panels/MonitorPanel.js";
-import { DiffPanel } from "./editor/DiffPanel.js";
 import { EditorView } from "./editor/EditorView.js";
 import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";

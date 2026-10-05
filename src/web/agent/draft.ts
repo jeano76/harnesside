@@ -49,3 +49,35 @@ export function draftView(args: string): DraftView {
   if (!body) return { path, text: args, hasBody: false };
   return { path, text: unescapeUntilQuote(args.slice(body.index + body[0].length)), hasBody: true };
 }
+
+/** 인자에서 임의 키의 문자열 값을 꺼낸다 — 아직 도착하지 않았으면 `undefined`. */
+export function fieldAfter(args: string, key: string): string | undefined {
+  const m = new RegExp(`"${key}"\\s*:\\s*"`).exec(args);
+  if (!m) return undefined;
+  return unescapeUntilQuote(args.slice(m.index + m[0].length));
+}
+
+/**
+ * 도구 호출 하나가 파일을 **어떤 모습으로 만들지** 지금까지 본 만큼 계산한다.
+ *
+ * - `write_file`: 본문이 곧 파일 전체다.
+ * - `append_file`: 기존 파일 뒤에 본문이 붙는다.
+ * - `edit_file`: 기존 파일에서 `old_text` 한 곳을 `new_text` 로 바꾼다. `new_text` 가
+ *   아직 없으면 `predicted` 는 `null` — 아직 아무것도 바뀌지 않았다고 **말하지** 지어내지 않는다.
+ *
+ * `disk` 는 지금 디스크의 파일 내용이다(없으면 `null`).
+ */
+export function predictEdit(name: string, args: string, disk: string | null): { path: string | null; predicted: string | null } {
+  const path = draftView(args).path;
+  if (name === "edit_file") {
+    const oldPart = fieldAfter(args, "old_text");
+    const newPart = fieldAfter(args, "new_text");
+    if (disk === null || oldPart === undefined || newPart === undefined) return { path, predicted: null };
+    return { path, predicted: disk.includes(oldPart) ? disk.replace(oldPart, newPart) : disk };
+  }
+  const view = draftView(args);
+  if (!view.hasBody) return { path, predicted: null };
+  if (name === "write_file") return { path, predicted: view.text };
+  if (name === "append_file") return { path, predicted: (disk ?? "") + view.text };
+  return { path, predicted: null };
+}

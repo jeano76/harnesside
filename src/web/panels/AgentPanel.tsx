@@ -18,7 +18,10 @@ import type { ApiClient } from "../api.js";
 import { ToolBlock } from "./ToolBlock.js";
 import { Markdown } from "./Markdown.js";
 import { Ide } from "./Ide.js";
-import { draftView } from "../agent/draft.js";
+import { draftView, predictEdit } from "../agent/draft.js";
+import { CodeBlock } from "./CodeBlock.js";
+import { DiffPanel } from "../editor/DiffPanel.js";
+import { languageFor } from "../editor/highlight.js";
 import { useI18n } from "../i18n/index.js";
 import type { Toast } from "./notify.js";
 
@@ -221,32 +224,57 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
 
 /**
  * 파일을 쓰는 중의 실시간 초안. Thinking(추론)과 **다른 요소**다 — 추론은 모델이
- * 생각하는 글이고, 이것은 **결과물이 만들어지는 중인 본문**이다. 완성되면 도구 블록이
- * 그 자리를 잇는다(main.tsx 가 호출 완료 때 비운다).
+ * 생각하는 글이고, 이것은 **결과물이 만들어지는 중인 파일**이다.
+ *
+ * - 기존 파일을 고치는 중이면 **디스크 내용과 나란히 diff** 를 실시간으로 그린다
+ *   (`DiffPanel` — 기존 검토 화면과 같은 렌더러).
+ * - 새 파일이면 **IDE 처럼**(색·줄번호·인덴트 가이드) `CodeBlock` 으로 한 줄씩 자란다.
+ *
+ * 완성되면 도구 블록이 그 자리를 잇는다(main.tsx 가 호출 완료 때 비운다).
  */
-function LiveDraft({ name, args }: { name: string; args: string }) {
+function LiveDraft({ name, args, client }: { name: string; args: string; client?: ApiClient }) {
   const view = draftView(args);
-  const chars = view.text.length.toLocaleString("ko-KR");
-  // 끝이 보여야 "지금 쓰는 중" 이 드러난다 — 긴 본문은 마지막 줄을 따라 내려간다.
-  const ref = useRef<HTMLPreElement | null>(null);
+  const path = view.path;
+  // 디스크의 현재 내용. `undefined` = 아직 안 읽었다, `null` = 파일이 없다.
+  const [disk, setDisk] = useState<{ path: string; text: string | null } | null>(null);
   useEffect(() => {
-    const el = ref.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [view.text]);
+    if (!path || !client) return;
+    let alive = true;
+    client
+      .get<{ content: string }>(`/api/fs/file?path=${encodeURIComponent(path)}`)
+      .then((r) => { if (alive) setDisk({ path, text: r.content }); })
+      .catch(() => { if (alive) setDisk({ path, text: null }); });
+    return () => { alive = false; };
+  }, [path, client]);
+  const known = disk && disk.path === path ? disk.text : undefined;
+  const edit = predictEdit(name, args, known ?? null);
+  const chars = view.text.length.toLocaleString("ko-KR");
+  // 기존 파일이 있고 크기가 감당될 때만 diff — LCS 는 줄 수의 곱에 비례한다.
+  const canDiff = typeof known === "string" && (known.split("\n").length * (edit.predicted ?? known).split("\n").length) <= 2_000_000;
+  const lang = languageFor(path ?? "");
+
   return (
     <div style={{ borderLeft: "2px solid #3fb950", paddingLeft: 6, margin: "4px 0" }}>
       <div style={{ fontSize: 10, color: "#3fb950", display: "flex", gap: 6, alignItems: "baseline" }}>
-        <span>✎ 작성 중</span>
-        {view.path && <span style={{ color: "#c9d1d9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{view.path}</span>}
+        <span>✎ {typeof known === "string" ? "수정 중" : "작성 중"}</span>
+        {path && <span style={{ color: "#c9d1d9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>}
         <span style={{ color: "#6e7681" }}>{name}{view.hasBody ? ` · ${chars}자` : ""}</span>
       </div>
-      <pre
-        ref={ref}
-        aria-live="off"
-        style={{ margin: "3px 0 0", maxHeight: 180, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word", font: "11px/1.5 ui-monospace, monospace", color: "#8b949e" }}
-      >
-        {view.text}
-      </pre>
+      {canDiff ? (
+        <DiffPanel
+          path={path ?? ""}
+          oldText={known}
+          newText={edit.predicted ?? known}
+          source="tool"
+          leftLabel="기존"
+          rightLabel="작성 중"
+          layout="inline"
+          width={900}
+          height={220}
+        />
+      ) : (
+        <CodeBlock lang={lang} text={edit.predicted ?? (view.hasBody ? view.text : "")} lineNumbers maxHeight={220} />
+      )}
     </div>
   );
 }
@@ -687,7 +715,7 @@ export function AgentPanel({
 
         {/* 진행 중에는 실시간 줄, 끝나면 끝난 추론의 최종 속도 줄(다음 턴까지).
             둘 다 한 줄이다 — 예전 두 줄(Thinking 줄 + 예산 줄) 중복은 없앴다. */}
-        {running && liveDraft && <LiveDraft name={liveDraft.name} args={liveDraft.args} />}
+        {running && liveDraft && <LiveDraft name={liveDraft.name} args={liveDraft.args} client={client} />}
         {running && (think.enabled || budgetNotice) && <ThinkIndicator state={think} style={style} notice={budgetNotice} live />}
         {!running && think.lastSpeedTokPerSec !== null && think.lastSpeedTokPerSec > 0 && (
           <ThinkIndicator state={think} style={style} notice={null} live={false} />
