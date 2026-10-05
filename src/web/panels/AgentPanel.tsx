@@ -18,6 +18,7 @@ import type { ApiClient } from "../api.js";
 import { ToolBlock } from "./ToolBlock.js";
 import { Markdown } from "./Markdown.js";
 import { Ide } from "./Ide.js";
+import { draftView } from "../agent/draft.js";
 import { useI18n } from "../i18n/index.js";
 import type { Toast } from "./notify.js";
 
@@ -218,6 +219,38 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
   );
 }
 
+/**
+ * 파일을 쓰는 중의 실시간 초안. Thinking(추론)과 **다른 요소**다 — 추론은 모델이
+ * 생각하는 글이고, 이것은 **결과물이 만들어지는 중인 본문**이다. 완성되면 도구 블록이
+ * 그 자리를 잇는다(main.tsx 가 호출 완료 때 비운다).
+ */
+function LiveDraft({ name, args }: { name: string; args: string }) {
+  const view = draftView(args);
+  const chars = view.text.length.toLocaleString("ko-KR");
+  // 끝이 보여야 "지금 쓰는 중" 이 드러난다 — 긴 본문은 마지막 줄을 따라 내려간다.
+  const ref = useRef<HTMLPreElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [view.text]);
+  return (
+    <div style={{ borderLeft: "2px solid #3fb950", paddingLeft: 6, margin: "4px 0" }}>
+      <div style={{ fontSize: 10, color: "#3fb950", display: "flex", gap: 6, alignItems: "baseline" }}>
+        <span>✎ 작성 중</span>
+        {view.path && <span style={{ color: "#c9d1d9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{view.path}</span>}
+        <span style={{ color: "#6e7681" }}>{name}{view.hasBody ? ` · ${chars}자` : ""}</span>
+      </div>
+      <pre
+        ref={ref}
+        aria-live="off"
+        style={{ margin: "3px 0 0", maxHeight: 180, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word", font: "11px/1.5 ui-monospace, monospace", color: "#8b949e" }}
+      >
+        {view.text}
+      </pre>
+    </div>
+  );
+}
+
 function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; style: ThinkStyle; notice?: { short: string; title: string } | null; live: boolean }) {
   const anim = animationFor(style);
   // 꺼져 있으면 표시줄 자체가 없다 — 단, 예산 안내가 있으면 그 한 줄은 보인다.
@@ -304,9 +337,12 @@ export function AgentPanel({
   onDismissNotice,
   compaction,
   onDismissCompaction,
+  liveDraft,
 }: {
   blocks: AgentBlock[];
   running: boolean;
+  /** 파일 생성 중 도구 인자 조각 — 있으면 Thinking 과 **별도 줄**에 본문을 흘린다. */
+  liveDraft?: { index: number; name: string; args: string } | null;
   think: ThinkState;
   onCancel: () => void;
   /** 빈 상태의 예시를 **입력창에 채운다**(보내지는 않는다 — 사용자가 고쳐서 보낸다). */
@@ -651,6 +687,7 @@ export function AgentPanel({
 
         {/* 진행 중에는 실시간 줄, 끝나면 끝난 추론의 최종 속도 줄(다음 턴까지).
             둘 다 한 줄이다 — 예전 두 줄(Thinking 줄 + 예산 줄) 중복은 없앴다. */}
+        {running && liveDraft && <LiveDraft name={liveDraft.name} args={liveDraft.args} />}
         {running && (think.enabled || budgetNotice) && <ThinkIndicator state={think} style={style} notice={budgetNotice} live />}
         {!running && think.lastSpeedTokPerSec !== null && think.lastSpeedTokPerSec > 0 && (
           <ThinkIndicator state={think} style={style} notice={null} live={false} />

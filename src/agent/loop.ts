@@ -275,6 +275,11 @@ export interface AgentLoopOptions {
    *  it within the SAME generation by construction; re-feeding it as input
    *  on a LATER turn would only cost tokens for no benefit. */
   onReasoningDelta?: (text: string) => void;
+  /** Streamed tool-call argument fragments as the model generates them —
+   *  e.g. the body of a file being written. Display-only, like
+   *  onReasoningDelta: the completed call still goes through onToolCall once
+   *  it is fully parsed. `name` is the accumulated name so far for `index`. */
+  onToolArgsDelta?: (d: { index: number; name: string; args: string }) => void;
   /** Fires whenever the queued-message list changes (see queueMessage), so
    *  the UI's own display of it (the /queue command) stays in sync with
    *  the authoritative copy this class now owns. */
@@ -737,6 +742,8 @@ export class AgentLoop {
         this.opts.onTurnStart?.();
       };
 
+      // 도구 호출 이름은 첫 조각에만 온다 — 인덱스별로 모아 둬야 뒤의 인자 조각에도 이름을 붙인다.
+      const draftNames = new Map<number, string>();
       let res;
       try {
         res = await this.opts.backend.chat(
@@ -794,6 +801,18 @@ export class AgentLoop {
             if (delta?.content) this.opts.onAssistantDelta?.(delta.content);
             const reasoning = (delta as any)?.reasoning_content;
             if (typeof reasoning === "string" && reasoning) this.opts.onReasoningDelta?.(reasoning);
+            // 도구 호출 인자(파일 본문 포함)도 **생성되는 순간** 보낸다. 서버는 이걸 끝까지
+            // 모아 두므로, 여기서 흘리지 않으면 파일은 다 쓰인 뒤에야 화면에 나온다.
+            if (Array.isArray(delta?.tool_calls) && this.opts.onToolArgsDelta) {
+              for (const tc of delta.tool_calls as any[]) {
+                const index = tc.index ?? 0;
+                if (tc.function?.name) draftNames.set(index, (draftNames.get(index) ?? "") + tc.function.name);
+                const args = tc.function?.arguments;
+                if (typeof args === "string" && args) {
+                  this.opts.onToolArgsDelta({ index, name: draftNames.get(index) ?? "", args });
+                }
+              }
+            }
           }
         );
       } catch (err: any) {

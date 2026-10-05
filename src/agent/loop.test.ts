@@ -2164,6 +2164,32 @@ test("chain-of-thought is enabled by default (panel improvement 2026-10-01: Thin
     );
   }));
 
+test("도구 호출 인자 조각은 생성되는 순간 onToolArgsDelta 로 나간다 — 파일 작성 중 실시간 초안", () =>
+  withTempProject(async (dir) => {
+    // read_file, not write_file: the loop really executes the call, and this test is about streaming, not writing.
+    const call = { id: "c1", type: "function" as const, function: { name: "read_file", arguments: '{"path":"missing-draft-probe.txt"}' } };
+    // 루프는 기록용으로 이 객체의 인자를 고쳐 쓴다 — 기대값은 보내기 전에 잡아 둔다.
+    const sent = call.function.arguments;
+    const { backend } = scriptedBackend({
+      turnResponses: [assistantMessage(null, [call]), assistantMessage("done")],
+      tokenCounts: [10],
+    });
+    const drafts: Array<{ index: number; name: string; args: string }> = [];
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: { autoTriggerRatio: 0.99, contextWindowTokens: 16384 },
+      onToolArgsDelta: (d) => drafts.push(d),
+    });
+
+    await loop.send("write a file");
+
+    assert.equal(drafts.length, 1, "expected the streamed argument fragment to be forwarded");
+    assert.deepEqual(drafts[0], { index: 0, name: "read_file", args: sent });
+  }));
+
 test("enableThinking: false opts out, sending the disable flag", () =>
   withTempProject(async (dir) => {
     const { backend, turnRequests } = scriptedBackend({ turnResponses: [assistantMessage("done")], tokenCounts: [10] });

@@ -142,7 +142,7 @@ export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
     ...s,
     ...withOutput,
     usedTokens: used,
-    // 아직 Enabled인데 상한의 80%를 넘었으면 "곧 초과"를 알린다 — 초과後に
+    // 아직 Enabled인데 상한의 80%를 넘었으면 "곧 초과"를 알린다 — 초과 후에
     // 말하면 이미 전환된 뒤라 예보가 아니다.
     needsWarning: s.needsWarning || (s.enabled && !s.forcedToolChoice && used >= s.maxReasoningTokens * 0.8),
   };
