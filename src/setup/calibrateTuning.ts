@@ -36,6 +36,7 @@
 
 import { tuneForHardware, threadPlan, type LlamaTuning } from "./tuning.js";
 import { kvBytesPerElement } from "./ggufMeta.js";
+import { recommendThresholds } from "../compaction/compactor.js";
 import type { Hardware } from "./hardware.js";
 import type { ParsedServerArgs } from "./modelSwitch.js";
 
@@ -407,6 +408,32 @@ export function planCalibration(
         changes.push({ label: "컨텍스트", from: before.contextSize, to: tuned.contextSize });
       }
       unmeasured.push("KV 비용 (헤더를 못 읽었습니다 — 컨텍스트는 모델 크기 추정값으로만 조정)");
+    }
+  }
+
+  // ── Compaction follows the context ────────────────────────────────────
+  //
+  // The trigger/summary/tail numbers are meaningless as absolutes — they are
+  // fractions of THIS window. A context change without a compaction change
+  // leaves the old assumption in place (the hardcoded {0.6, 32768} this
+  // replaced): a grown window then compacts far too often, a shrunk one far
+  // too late. So the recommendation is recomputed from the context this plan
+  // actually launches with, and recorded here — server/index.ts applies the
+  // same function live, so the two cannot disagree about what "adapted" means.
+  // A note, not a tuning field: ParsedServerArgs carries only llama-server
+  // flags, and compaction thresholds are not one.
+  {
+    const ctx = tuning.contextSize ?? before.contextSize;
+    if (ctx !== undefined) {
+      const rec = recommendThresholds(ctx);
+      notes.push(
+        `컴팩션(적응형): 컨텍스트 ${ctx.toLocaleString()} 토큰 → 트리거 ${(rec.autoTriggerRatio * 100).toFixed(0)}%` +
+          `(${Math.floor(ctx * rec.autoTriggerRatio).toLocaleString()} 토큰), 요약 예산 ${rec.summaryMaxTokens} 토큰` +
+          `, 압축 후 목표 트리거의 ${Math.round((rec.postCompactionTargetRatio ?? 0.4) * 100)}%` +
+          ` — 서버 기동 시 같은 규칙으로 자동 적용됩니다.`
+      );
+    } else {
+      unmeasured.push("컴팩션 권장값 (컨텍스트를 정하지 못했습니다)");
     }
   }
 

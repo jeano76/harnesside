@@ -37,6 +37,7 @@ import { liveModelPath, applyModelSwitch, loadThinkBudget } from "./modelIdentit
 import { WorkspaceService } from "./workspaceService.js";
 import { formatCrashReport, writeCrashLogSync, readCrashTail, acknowledgeCrashLog, archiveHarmlessCrashLog } from "../crashHandler.js";
 import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
+import { recommendThresholds, type CompactionThresholds } from "../compaction/compactor.js";
 // 시스템 프롬프트 정본(출력 형식 규칙 포함). 여기서 문자열을 두지 않는다 — 2026-10-05.
 import { buildSystemPrompt } from "../agent/systemPrompt.js";
 import { ApprovalGate } from "./approval.js";
@@ -415,7 +416,14 @@ const updates: UpdateService = new UpdateService({
     // 모델 이름도 **호출 시점**에 읽는다 — 부팅이 끝나야 정해진다(`boot` 이 아직 없다).
     model: () => boot?.model?.path ?? process.env.HARNESSIDE_MODEL ?? "",
     systemPrompt,
-    thresholds: { autoTriggerRatio: 0.6, contextWindowTokens: 32_768 },
+    // 컴팩션 임계값은 **캘리브레이션에 적응**한다: 부팅이 정한 컨텍스트
+    // (`boot.tuning.contextSize`)를 recommendThresholds()에 넣어 트리거·요약
+    // 예산·압축 후 목표를 그 창에 맞게 잡는다. 예전 하드코딩 `{0.6, 32768}` 은
+    // 16k 서버에서는 늦게(넘쳐서야) 터지고 98k 서버에서는 세 번에 한 번꼴로
+    // 헛터졌다. 팩토리인 이유: 이 서비스는 부팅 전에 만들어지고 루프는 턴마다
+    // 지연 생성되므로, 읽는 시점에는 이미 `boot` 가 있다(위 model/baseUrl 과
+    // 같은 패턴). config.yaml 명시값이 있으면 그 키만 덮는다.
+    thresholds: () => ({ ...recommendThresholds(boot?.tuning?.contextSize ?? 32_768), ...compactionOverrides }),
     // 읽어 온 설정값만 넘긴다 — 없는 키를 `undefined` 로 넘기면 기본값과 섞인다.
     ...(thinkCfg.set ? { maxReasoningTokens: thinkCfg.maxReasoningTokens } : {}),
     emit: (e) => {
@@ -630,6 +638,9 @@ const updates: UpdateService = new UpdateService({
   let tokenRec: Awaited<ReturnType<typeof issueToken>> | null = null;
 
   // Q-10: 원격 baseUrl 은 지원하지 않는다 — 설정에 있으면 조용히 무시하지 않고 말한다(src/server/baseUrlPolicy.ts).
+  // config.yaml 의 compaction 명시값도 여기서 한 번만 읽는다 — 아래 thresholds
+  // 팩토리가 적응형 추천값 위에 덮는다(명시값 우선, 없는 키는 추천값).
+  let compactionOverrides: Partial<CompactionThresholds> = {};
   {
     const raw = await readFile(join(projectRoot, ".harnesside", "config.yaml"), "utf8").catch(() => null);
     if (raw) {
@@ -638,6 +649,20 @@ const updates: UpdateService = new UpdateService({
       try { cfg = parseYaml(raw); } catch { cfg = null; }
       const notice = remoteBaseUrlNotice(cfg);
       if (notice) emit(`[warn] ${notice}`);
+      const c = (cfg as { compaction?: Record<string, unknown> } | null)?.compaction;
+      if (c && typeof c === "object") {
+        const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+        const pick: Partial<CompactionThresholds> = {};
+        const r = num(c.autoTriggerRatio);
+        if (r !== undefined && r > 0 && r < 1) pick.autoTriggerRatio = r;
+        const s = num(c.summaryMaxTokens);
+        if (s !== undefined && s > 0) pick.summaryMaxTokens = Math.floor(s);
+        const p = num((c as Record<string, unknown>).postCompactionTargetRatio);
+        if (p !== undefined && p > 0 && p < 1) pick.postCompactionTargetRatio = p;
+        const m = num((c as Record<string, unknown>).minGrowthFraction);
+        if (m !== undefined && m >= 0 && m < 1) pick.minGrowthFraction = m;
+        compactionOverrides = pick;
+      }
     }
   }
   boot = await bootstrap({

@@ -37,6 +37,14 @@ import { resumeInfo, type ResumeInfo } from "../compaction/checkpoint.js";
  */
 export const DEFAULT_THRESHOLDS: CompactionThresholds = { autoTriggerRatio: 0.6, contextWindowTokens: 32_768 };
 
+/** thresholds 옵션이 값이면 그대로, 팩토리면 호출 시점에 푼다. */
+export function resolveThresholds(
+  t: CompactionThresholds | (() => CompactionThresholds) | undefined
+): CompactionThresholds {
+  if (typeof t === "function") return t();
+  return t ?? DEFAULT_THRESHOLDS;
+}
+
 export interface AgentEvent {
   type: "agent.delta" | "agent.reasoning" | "agent.done" | "agent.error" | "agent.tool" | "agent.status" | "agent.queue" | "agent.compaction" | "agent.thinking";
   /** `agent.reasoning` 은 사고 델타, `agent.delta` 는 답변 델타다. */
@@ -115,7 +123,17 @@ export interface AgentServiceOptions {
    * 규칙이다. 값을 세 군데에서 각각 좁히면 셋이 어긋난다.
    */
   maxReasoningTokens?: number;
-  thresholds?: CompactionThresholds;
+  /**
+   * Compaction thresholds, or a factory returning them.
+   *
+   * A factory (rather than a snapshot) because the calibrated context size is
+   * only known AFTER bootstrap, while this service is constructed BEFORE it —
+   * the same reason `baseUrl`/`model` above are already factories. The loop is
+   * created lazily per turn (ensureLoop), so by the time thresholds are read
+   * the calibration has landed. server/index.ts passes
+   * `recommendThresholds(boot?.tuning?.contextSize ?? fallback)` here.
+   */
+  thresholds?: CompactionThresholds | (() => CompactionThresholds);
   logger?: (line: string) => void;
   /** 턴이 끝났을 때(성공/실패/취소 무관) — 세션 저장 훅이 이걸 듣는다(§5.10). */
   onTurnEnd?: (s: TurnState) => void;
@@ -318,7 +336,7 @@ export class AgentService {
       // 프롬프트도 **호출 시점**의 값을 쓴다. 규칙 파일 전환이 반영되려면
       // 상수를 캡처해서는 안 된다.
       systemPrompt: typeof this.opts.systemPrompt === "function" ? this.opts.systemPrompt() : this.opts.systemPrompt,
-      thresholds: this.opts.thresholds ?? DEFAULT_THRESHOLDS,
+      thresholds: resolveThresholds(this.opts.thresholds),
       // 기본 ON(사용자 명시). 예산 폭주는 상한+강제 전환이 받는다.
       enableThinking: this.think.enabled,
       now,
@@ -469,7 +487,7 @@ export class AgentService {
       const backend = this.backend;
       const tools = activeToolDefs();
       const used = await estimateTokens(msgs, backend ?? undefined, JSON.stringify(tools), tools);
-      const total = this.opts.thresholds?.contextWindowTokens ?? DEFAULT_THRESHOLDS.contextWindowTokens;
+      const total = resolveThresholds(this.opts.thresholds).contextWindowTokens;
       this.lastUsage = { usedTokens: used, totalTokens: total };
     } catch {
       // 계산 실패는 조용히 둔다 — 다음 턴의 실측이 덮는다. 빈 화면보다 낫지 않으므로

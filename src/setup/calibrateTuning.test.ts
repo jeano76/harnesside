@@ -236,3 +236,12 @@ test("the plan says what it measured, so the user can check it rather than trust
   assert.match(notes, /층당 150 MiB/, "the per-block cost it derived is stated");
   assert.match(notes, /계산 버퍼 여유 384 MiB/, "the allowance for what the header cannot express is stated");
 });
+test("the plan carries an adaptive compaction recommendation for the context it launches", () => {
+  const plan = planCalibration(running(), box());
+  const ctx = plan.tuning.contextSize ?? running().contextSize;
+  const note = plan.notes.find((n) => n.includes("컴팩션(적응형)"));
+  assert.ok(note, `expected a compaction note, got ${JSON.stringify(plan.notes)}`);
+  assert.match(note!, new RegExp(ctx!.toLocaleString().replace(/,/g, ",")), "the note must name the context it recommends for");
+  assert.match(note!, /트리거/, "the trigger must be stated");
+  assert.match(note!, /요약 예산/, "the summary budget must be stated");
+});

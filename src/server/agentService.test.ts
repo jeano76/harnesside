@@ -397,3 +397,29 @@ test("강제 OFF는 다음 턴 시작에 ON 으로 돌아온다 — Thinking 상
   assert.match(noComments, /wasForced/, "턴 시작 재활성 코드가 없다 — 한 번 꺼지면 영영 꺼진다");
   assert.match(noComments, /enabled: true/, "ON 복원이 없다");
 });
+
+test("thresholds 팩토리는 호출 시점에 풀린다 — 부팅 뒤 정해진 컨텍스트가 루프에 닿는다", async () => {
+  const events: AgentEvent[] = [];
+  const s = await sandbox();
+  try {
+    let size = 32_768;
+    const svc = service(fakeBackend({ text: "ok" }), events, s.dir, {
+      thresholds: () => ({ autoTriggerRatio: 0.6, contextWindowTokens: size }),
+    });
+    await svc.send("hi");
+    const firstTotal = events.find((e) => e.type === "agent.status" && /^컨텍스트 \d+\/\d+$/.test(e.text ?? ""))?.text;
+    assert.match(firstTotal ?? "", /\/32768$/, `첫 턴은 32768이어야: ${firstTotal}`);
+    // 부팅이 끝나고 컨텍스트가 16384로 정해졌다 — 루프를 버리면 다음 턴이 새 값을 본다.
+    size = 16_384;
+    svc.invalidate();
+    await svc.send("hi again");
+    const totals = events
+      .filter((e) => e.type === "agent.status" && /^컨텍스트 \d+\/\d+$/.test(e.text ?? ""))
+      .map((e) => e.text);
+    assert.ok(totals.some((t) => /\/16384$/.test(t ?? "")), `스냅샷이면 16384이 절대 안 보인다: ${totals.join(", ")}`);
+    const { resolveThresholds } = await import("./agentService.js");
+    assert.equal(resolveThresholds(undefined).contextWindowTokens, 32_768);
+  } finally {
+    await s.cleanup();
+  }
+});
