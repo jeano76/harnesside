@@ -4,7 +4,7 @@
  * prints the lines.
  */
 import type { ServerReport } from "./serverReport.js";
-import { parseLlamaServerArgs, type PortOwner, type ResolvedServerPort, type SwitchOptions, type SwitchResult } from "./modelSwitch.js";
+import { parseLlamaServerArgs, type ParsedServerArgs, type PortOwner, type ResolvedServerPort, type SwitchOptions, type SwitchResult } from "./modelSwitch.js";
 import { diffServer, gateServerReplacement, type ServerGate } from "./serverPolicy.js";
 
 export interface RestartDeps {
@@ -27,6 +27,11 @@ export interface RestartInput {
 export interface RestartOutcome {
   /** A server was (re)started. */
   restarted: boolean;
+  /** What the NEW server was launched with, once it is up. Absent when nothing
+   *  started. This is the only accurate description of the running server after a
+   *  restart — `report.serverArgs` is the command line of the process that was
+   *  just stopped, and reading it as the current one calibrates against a ghost. */
+  launched?: ParsedServerArgs;
   lines: string[];
 }
 
@@ -61,6 +66,11 @@ export async function runServerRestart(input: RestartInput, deps: RestartDeps): 
     calibrate: true,
     retune: async () => ({ lines: await deps.describePlan(tuning) }),
   });
+  // What the new server was launched with, so a caller can calibrate against the
+  // server that is REALLY up rather than the one that was replaced. `report.serverArgs`
+  // describes the old process — its command line is gone the moment it is stopped,
+  // and `reportServer` already ran before the switch.
+  const launched = sw.launched ? { ...(sw.launched.tuning as ParsedServerArgs), modelPath: sw.launched.modelPath } : undefined;
   if (sw.ok && sw.launched) {
     await deps.record({
       port: sw.port, binPath: sw.launched.binPath, modelPath: sw.launched.modelPath,
@@ -69,7 +79,7 @@ export async function runServerRestart(input: RestartInput, deps: RestartDeps): 
     }).catch(() => false);
   }
   const synced = sw.ok ? await deps.sync(report.configuredModel, { contextSize: tuning.contextSize }) : [];
-  return { restarted: sw.ok, lines: [...sw.lines, ...synced] };
+  return { restarted: sw.ok, launched, lines: [...sw.lines, ...synced] };
 }
 
 /**

@@ -113,7 +113,7 @@ const SLASH_TIPS: Record<string, string> = {
   term: "/term — 터미널/브라우저 정보\n이 창의 브라우저, 플랫폼, 화면 크기·배율, 클립보드 사용 가능 여부를 보여줍니다.\n콘솔 전용 항목(제어문자·대체화면 등)은 웹 창에 해당이 없습니다.",
   cli: "/cli — AI CLI 를 tmux 탭으로\n/cli : 설치된 CLI 와 살아 있는 세션 목록 (아무것도 만들지 않음)\n/cli claude | gemini | codex | shell : 해당 CLI 탭을 하단에 엽니다. 같은 폴더의 살아 있는 세션이 있으면 새로 만들지 않고 붙습니다.\n/cli <이름> new : 새 세션 · /cli <이름> resume : 지난 대화 이어가기(확인된 CLI만)\n/cli kill <세션명> confirm : hs-… 세션 종료(confirm 없으면 미리보기)\n탭을 닫아도 CLI 는 tmux 안에서 계속 실행됩니다. 이 탭의 작업은 harnesside 승인 게이트 밖에서 실행됩니다.",
   models: "/models — 구동 가능한 로컬 모델\n이 PC의 VRAM·RAM 기준으로 모델별 구동 가능 여부(✅ VRAM / ⚠️ RAM 스트리밍 / ❌)를 표로 보여줍니다.\n선택: 입력창에 /models <번호>. 실행 중인 서버를 바꾸려면 /models <번호> confirm 이 필요합니다(서버가 잠시 내려갑니다).",
-  server: "/server — 모델 서버 상태\n지금 떠 있는 llama-server의 포트·모델·빌드와 재시작 시 계획을 보여줍니다.\n재시작: 입력창에 /server restart (변경 내용 미리보기) → /server restart confirm 으로 확정. 확정하면 실행 중인 서버를 내렸다 올립니다.",
+  server: "/server — 모델 서버 상태\n지금 떠 있는 llama-server의 포트·모델·빌드와 재시작 시 계획을 보여줍니다.\n재시작: 입력창에 /server restart (변경 내용 미리보기) → /server restart confirm 으로 확정. 확정하면 실행 중인 서버를 내렸다 올립니다.\n캘리브레이션: /server calibrate 는 지금 실제로 남은 VRAM과 모델 헤더(KV 비용·레이어 수)를 읽어 -ngl·컨텍스트·--n-cpu-moe·KV 캐시·스레드를 다시 계산합니다. 산술 추정 대신 실측 기준이라, 계산이 틀린 값(예: -ngl 999 → 32)을 잡아냅니다. 미리보기 → /server calibrate confirm 으로 적용하며, 새 설정으로 뜨지 않으면 예전 설정으로 되돌립니다.",
   reset: "/reset — 설정 초기화\n현재 GPU·VRAM·RAM에 맞게 컨텍스트·스레드·오프로드 등 llama 설정을 다시 계산합니다.\n그냥 실행하면 미리보기만 하며 아무것도 바꾸지 않습니다. 적용은 /reset confirm (설정 파일을 덮어쓰며, 실행 중인 서버에는 /server restart 로 따로 반영).",
 };
 
@@ -475,7 +475,7 @@ export default function App() {
     // ── 인자를 받는 harnesside 명령(`/models` `/server` `/reset`) — 버튼이 뒤에 공백을 남기므로 **공백 뒤에도**
     // 추천이 이어져야 한다. 첫 항목은 "인자 없이 실행"이라 Enter 로 바로 목록/상태/미리보기를 볼 수 있다.
     if (!toCli) {
-      const arg3 = /^\/(server\s+restart|models\s+\S+)\s+(\S*)$/i.exec(draft);
+      const arg3 = /^\/(server\s+(?:restart|calibrate)|models\s+\S+)\s+(\S*)$/i.exec(draft);
       if (arg3) {
         const q = arg3[2]!.toLowerCase();
         const base = `/${arg3[1]!.replace(/\s+/g, " ").toLowerCase()}`;
@@ -489,7 +489,11 @@ export default function App() {
         const q = arg2[2]!.toLowerCase();
         const none: SlashItem = { fill: `/${cmd}`, exact: `/${cmd}`, label: `/${cmd}`, description: cmd === "models" ? "인자 없이 실행 — 구동 가능한 모델 목록" : cmd === "server" ? "인자 없이 실행 — 서버 상태 보기" : "인자 없이 실행 — 변경 미리보기(아무것도 바꾸지 않음)", tip: SLASH_TIPS[cmd] };
         const more: SlashItem[] =
-          cmd === "server" ? [{ fill: "/server restart", exact: "/server restart", label: "restart", description: "재시작 미리보기 → 이어서 confirm" }]
+          cmd === "server"
+            ? [
+                { fill: "/server restart", exact: "/server restart", label: "restart", description: "재시작 미리보기 → 이어서 confirm" },
+                { fill: "/server calibrate", exact: "/server calibrate", label: "calibrate", description: "실측(남은 VRAM·모델 헤더)으로 최적값 재계산 → 이어서 confirm" },
+              ]
           : cmd === "reset" ? [{ fill: "/reset confirm", exact: "/reset confirm", label: "confirm", description: "설정을 다시 계산해 덮어씁니다(확정)" }]
           : ["1", "2"].map((n) => ({ fill: `/models ${n}`, exact: `/models ${n}`, label: n, description: `목록의 ${n}번으로 교체 — 먼저 /models 로 목록을 확인하세요` }));
         // 이미 쓴 글이 어느 후보와 정확히 같으면 그것을 맨 위로 — Enter 가 곧바로 실행된다.

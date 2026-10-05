@@ -27,6 +27,7 @@ import { tuneForHardware } from "../setup/tuning.js";
 import { switchModelAndServer, detectPortOwner, resolveLiveServerPort, parseLlamaServerArgs } from "../setup/modelSwitch.js";
 import { reportServer } from "../setup/serverReport.js";
 import { runServerRestart, gateModelSwitch } from "../setup/serverCommand.js";
+import { runServerCalibration, measureForCalibration } from "./calibrateCommand.js";
 import { provisionForSwitch } from "../setup/provision.js";
 import { formatProgress, type TransferProgress } from "../setup/download.js";
 import { baseName } from "../shared/path.js";
@@ -60,6 +61,15 @@ export interface SlashServiceOptions {
    * 맞추지 않으면 에이전트는 옛 모델 이름으로 요청한다. 보여줄 줄을 돌려준다.
    */
   onModelSwitched?: (modelPath: string, contextSize?: number) => Promise<string[]> | string[];
+  /**
+   * `reportServer` 자리. 주입 이유가 장식이 아니다: 이 명령들은 **기동 중인 서버를
+   * 내린다.** 기본 구현이 실제 프로세스를 훑기 때문에, 테스트가 `calibrate confirm`
+   * 을 한 번 돌리는 것으로 개발_box 의 진짜 서버를 죽일 수 있었다 — 정확히
+   * hardware.ts 가 경고한 "머신을 시험하는 것"이다. 그래서 조회를 갈아 끼운다.
+   */
+  reportServer?: typeof reportServer;
+  /** `switchModelAndServer` 자리 — 같은 이유. 주입하면 아무 서버도 뜨지 않는다. */
+  switchServer?: typeof switchModelAndServer;
 }
 
 function recordedTuning(config: unknown) {
@@ -312,9 +322,32 @@ export class SlashService {
   private async server(j: Job, config: unknown, argument: string, say: (t: string) => void) {
     const projectRoot = this.opts.projectRoot;
     const arg = argument.trim().toLowerCase().split(/\s+/).filter(Boolean).join(" ");
-    const report = await reportServer({ config: config as Record<string, any>, projectRoot });
+    const report = await (this.opts.reportServer ?? reportServer)({ config: config as Record<string, any>, projectRoot });
+    // Every path below that can stop a live server goes through this one call, so a
+    // test double here is enough to make the whole command inert.
+    const switchServer = this.opts.switchServer ?? switchModelAndServer;
+
+    if (arg === "calibrate" || arg === "calibrate confirm") {
+      const confirmed = arg === "calibrate confirm";
+      const configBin = (config as any)?.llama?.binPath;
+      const out = await runServerCalibration(
+        { report, configBin, confirmed, projectRoot },
+        {
+          read: (rep, modelPath) => measureForCalibration(rep, modelPath, configBin),
+          switchServer: (o) => switchServer(o),
+          record: (st) => recordServerState(projectRoot, st),
+          sync: async (m, c) => Promise.resolve(this.opts.onModelSwitched?.(m, c?.contextSize) ?? []),
+        }
+      );
+      if (!out.recalibrated && out.rolledBack) j.ok = false;
+      // The command's own lines already carry the `[server]` tag on their first line
+      // (they are also used standalone), so it is not added a second time here.
+      say(out.lines.join("\n"));
+      return;
+    }
 
     if (arg === "restart" || arg === "restart confirm") {
+      const confirmed = arg === "restart confirm";
       const sa = report.serverArgs;
       const configHasTuning = typeof (config as any)?.llama?.contextSize === "number";
       const recorded = configHasTuning || !sa
@@ -324,9 +357,9 @@ export class SlashService {
             ...Object.fromEntries(Object.entries(sa).filter(([k, v]) => v !== undefined && k !== "modelPath" && k !== "port")),
           } as ReturnType<typeof recordedTuning>);
       const out = await runServerRestart(
-        { report, configBin: (config as any)?.llama?.binPath, tuning: recorded, confirmed: arg === "restart confirm" },
+        { report, configBin: (config as any)?.llama?.binPath, tuning: recorded, confirmed },
         {
-          switchServer: (o) => switchModelAndServer(o),
+          switchServer: (o) => switchServer(o),
           record: (st) => recordServerState(projectRoot, st),
           sync: async (m, o) => Promise.resolve(this.opts.onModelSwitched?.(m, o?.contextSize) ?? []),
           describePlan: async (t) =>
@@ -338,6 +371,28 @@ export class SlashService {
         }
       );
       say(`[server] ${out.lines.join("\n")}`);
+
+      // ── 재시작 직후 자동 캘리브레이션 ─────────────────────────────────────
+      // `restart confirm` 은 사용자가 이미 "설정을 다시 적용해도 된다" 고 승인한
+      // 상태다. 그런데 그 설정은 **재시작 전에 계산한 예측**이고, 실측은 서버가
+      // 뜬 뒤에야 가능하다. `-ngl: 999 → 32` 같은 값이 여기서 잡힌다.
+      //
+      // 게이트는 **같은 규칙**(`needs-confirm`)을 그대로 쓴다 — 즉 승인 없이
+      // 서버를 또 내리지 않는다. 승인 없이 켜지는 것은 'already optimal' 판정과
+      // "아무것도 하지 않는다" 뿐이며, 그것도 사용자에게 한 줄로 보인다.
+      if (out.restarted) {
+        say("[server] 올라간 서버를 실측해 최적값을 다시 계산합니다…");
+        const cal = await runServerCalibration(
+          { report, configBin: (config as any)?.llama?.binPath, confirmed, projectRoot, running: out.launched },
+          {
+            read: (rep, modelPath) => measureForCalibration(rep, modelPath, (config as any)?.llama?.binPath),
+            switchServer: (o) => switchServer(o),
+            record: (st) => recordServerState(projectRoot, st),
+            sync: async (m, c) => Promise.resolve(this.opts.onModelSwitched?.(m, c?.contextSize) ?? []),
+          }
+        );
+        if (cal.lines.length) say(cal.lines.join("\n"));
+      }
       return;
     }
 
@@ -349,6 +404,7 @@ export class SlashService {
         "",
         `[server] 재시작 시: ${report.restartPlan}`,
         "  · 지금 재시작하려면 /server restart (변경 내용을 보여주고 /server restart confirm 으로 확정)",
+        "  · 설정이 계산값과 어긋나면 /server calibrate — 실제로 남은 VRAM과 모델 헤더로 다시 계산합니다 (→ /server calibrate confirm).",
       ]
         .filter(Boolean)
         .join("\n")

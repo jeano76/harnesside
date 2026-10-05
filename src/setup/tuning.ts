@@ -115,6 +115,30 @@ function kvBytesPerToken(modelBytes?: number): number {
   return 0.3 * MiB; // 35B-class MoE and up
 }
 
+export interface ThreadPlan {
+  /** `-t`: generation threads. */
+  threads: number;
+  /** `-tb`: prompt-processing threads. */
+  threadsBatch: number;
+}
+
+/**
+ * `-t` / `-tb` from a core count. Extracted so `/server calibrate` re-derives
+ * them from the SAME rule instead of a second copy of the arithmetic — two
+ * copies of a rule is how `-t 2` on a 1-core box (more threads than cores)
+ * came to exist in the first place.
+ */
+export function threadPlan(cpuCount: number, hasGpu: boolean): ThreadPlan {
+  const cores = Math.max(1, cpuCount);
+  return hasGpu
+    ? {
+        // Leave physical half the cores for the OS and the offloaded expert compute.
+        threads: Math.min(cores, Math.max(2, Math.floor(cores / 2))),
+        threadsBatch: Math.min(cores, Math.max(2, cores - 1)),
+      }
+    : { threads: Math.min(cores, Math.max(1, cores - 1)), threadsBatch: Math.min(cores, Math.max(1, cores - 1)) };
+}
+
 export function tuneForHardware(
   hw: Hardware,
   opts?: {
@@ -353,15 +377,12 @@ export function tuneForHardware(
   // it by sweeping 1/2/3-core machines — the dev box is 12 cores, where
   // `max(2, 6)` accidentally lands on a legal value and hides the bug entirely.
   // The floor is now clamped to the core count rather than assuming >= 2.
-  const threads = gpu
-    ? Math.min(cpuCount, Math.max(2, Math.floor(cpuCount / 2)))
-    : Math.min(cpuCount, Math.max(1, cpuCount - 1));
+  const plan = threadPlan(cpuCount, gpu !== null);
+  const threads = plan.threads;
   // Prompt processing is not GPU-bound in the same way (it's a big batched
   // matmul that does use the GPU, but is far more sensitive to thread count),
   // so it gets the full complement when there's a GPU to share with.
-  const threadsBatch = gpu
-    ? Math.min(cpuCount, Math.max(2, cpuCount - 1))
-    : Math.min(cpuCount, Math.max(1, cpuCount - 1));
+  const threadsBatch = plan.threadsBatch;
   rationale.push(
     gpu
       ? `스레드는 생성 ${threads} / 프롬프트 처리 ${threadsBatch} 로 나눴습니다 (코어 ${cpuCount}개, GPU가 계산하므로 CPU 스레드 과할당은 역효과).`

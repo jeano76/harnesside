@@ -32,6 +32,22 @@ export function describeGpuPlan(hw: Hardware, tuning: Pick<LlamaTuning, "gpuLaye
 }
 
 /**
+ * What the server's OWN load log says about how many layers it put on the GPU.
+ *
+ * A number, not prose: `summarizeGpuOffload` turns it into a sentence for the
+ * user, and `/server calibrate` feeds it back into the tuner — "asked for
+ * `-ngl 999`" and "the GPU actually took N layers" are different facts, and only
+ * the second one is a measurement. Undefined when the log says neither, which is
+ * NOT zero: a missing line is an unknown, and treating it as 0 would send the
+ * tuner off to raise `-ngl` on a card the server never used.
+ */
+export function readOffloadedLayers(gpuLog: string): { offloaded: number; total: number } | undefined {
+  const m = /offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers\s+to\s+GPU/i.exec(gpuLog);
+  if (!m) return undefined;
+  return { offloaded: Number(m[1]), total: Number(m[2]) };
+}
+
+/**
  * The RESULT, from what the new llama-server itself printed while loading.
  *
  * Matches the three lines llama.cpp prints and nothing speculative: the device it
@@ -40,12 +56,12 @@ export function describeGpuPlan(hw: Hardware, tuning: Pick<LlamaTuning, "gpuLaye
  * are different facts, and a CPU fallback is silent on a full or unsupported device.
  */
 export function summarizeGpuOffload(gpuLog: string, tuning: Pick<LlamaTuning, "gpuLayers">): string {
-  const off = /offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers\s+to\s+GPU/i.exec(gpuLog);
+  const off = readOffloadedLayers(gpuLog);
   const device = /(?:using device|found \d+ (?:CUDA|ROCm|Vulkan)[^\n]*|ggml_(?:cuda|vulkan)_init:[^\n]*)\s*([A-Za-z0-9_:() .\-]+)?/i.exec(gpuLog);
   const dev = /using device\s+(\S+)\s*\(([^)]*)\)/i.exec(gpuLog);
   const devText = dev ? `${dev[1]} ${dev[2]}` : undefined;
   if (off) {
-    const [n, m] = [Number(off[1]), Number(off[2])];
+    const { offloaded: n, total: m } = off;
     if (n === 0) return `GPU 적용: 아니오 — 서버가 레이어를 GPU 에 올리지 않았습니다 (0/${m}). CPU 로 실행 중입니다.`;
     return `GPU 적용: 예 — ${n}/${m} 레이어를 GPU 에 올렸습니다${devText ? ` (${devText})` : ""}.`;
   }

@@ -93,8 +93,24 @@ test("a failed start is reported and the record/sync steps are skipped", async (
   d.switchServer = async (o) => { calls.push("switch"); return { ok: false, port: o.port, ready: false, lines: ["새 모델로 서버를 띄우지 못했습니다: x"] }; };
   const out = await runServerRestart({ report: report(), tuning, confirmed: true }, d);
   assert.equal(out.restarted, false);
+  assert.equal(out.launched, undefined, "no server is up, so nothing may describe one");
   assert.deepEqual(calls, ["switch"]);
   assert.match(out.lines.join("\n"), /띄우지 못/);
+});
+
+test("a restart reports what the NEW server launched with, so calibration reads it instead of the dead command line", async () => {
+  // `report.serverArgs` is parsed from the process this restart is about to kill.
+  // Anyone calibrating afterwards must not use it, or they "correct" a server
+  // that no longer exists. `launched` is the only accurate description of the
+  // running server afterwards, so it is returned rather than left to be guessed.
+  const { d } = deps();
+  const r = report();
+  const out = await runServerRestart({ report: r, tuning: { contextSize: 16384, threads: 6, gpuLayers: 999 }, confirmed: true }, d);
+  assert.equal(out.restarted, true);
+  assert.equal(out.launched?.modelPath, "/m/B.gguf");
+  assert.equal(out.launched?.contextSize, 16384);
+  assert.equal(out.launched?.gpuLayers, 999);
+  assert.notEqual(r.serverArgs?.contextSize, out.launched?.contextSize, "the fixture's old value must differ, or this proves nothing");
 });
 
 // ── /models side + the cross-command sequence (C2, C3, C5, C15) ─────────────
