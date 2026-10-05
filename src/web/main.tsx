@@ -896,6 +896,19 @@ export default function App() {
           if (evType === "agent.reasoning") {
             setThink((s) => ({ ...ingest(s, { reasoning: String(ev.text ?? "") }), startedAt: s.startedAt ?? Date.now() }));
           }
+          if (evType === "agent.delta" && typeof ev.text === "string" && ev.text) {
+            // 답변 토큰도 속도 분자에 넣는다 — 사고만 재면 답변이 긴 턴이 느리게 보인다.
+            // 상한(예산) 계산에는 쓰지 않는다(ingest가 text를 예산에서 뺀다).
+            setThink((s) => ({ ...ingest(s, { text: ev.text as string }), startedAt: s.startedAt ?? Date.now() }));
+          }
+          if (evType === "agent.tool") {
+            // 도구 호출(호출명+인자)도 출력이므로 속도 분자에 넣는다. 결과 본문이
+            // 아니라 호출 인자만 센다 — 결과는 별도 tool-result 이벤트가 아니라
+            // 다음 모델 입력이 되므로 여기서 셀 수 없다.
+            const t = ev.tool as { name?: string; args?: string } | undefined;
+            const callText = t && (t.name || t.args) ? `${t.name ?? ""}(${t.args ?? ""})` : "";
+            if (callText) setThink((s) => ({ ...ingest(s, { tool: callText }), startedAt: s.startedAt ?? Date.now() }));
+          }
           if (evType === "agent.done" || evType === "agent.error") {
             // 대기열이 남았으면 다음 턴이 바로 돈다 — 실행 중 표시를 내리면 깜빡인다.
             const pending = typeof ev.queue === "number" ? ev.queue : 0;

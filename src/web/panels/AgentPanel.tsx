@@ -234,7 +234,7 @@ function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; sty
   return (
     <div
       style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }}
-      {...(notice ? { title: notice.title } : { title: "토큰 수는 길이 추정치, 속도는 실제로 흐른 시간 기준" })}
+      {...(notice ? { title: notice.title } : { title: "토큰 수는 길이 추정치(사고+답변+도구호출 합산), 속도는 실제로 흐른 시간 기준" })}
     >
       {live && state.enabled && anim.dots > 0 && (
         <span style={{ display: "inline-flex", gap: 3 }}>

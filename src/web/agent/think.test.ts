@@ -110,7 +110,7 @@ test("속도: 시간이 0 이거나 미측정이면 null — **0 tok/s 는 거�
   const fast = speed(s, s.startedAt! + 1000);
   assert.ok(fast !== null && fast > 0, `속도가 잘못됐다: ${fast}`);
   // 토큰 0 이면 속도도 없다(0/0 = 0 으로 쓰면 "정지" 처럼 보인다)
-  assert.equal(speed({ ...s, usedTokens: 0 }, s.startedAt! + 1000), null);
+  assert.equal(speed({ ...s, usedTokens: 0, outputTokens: 0 }, s.startedAt! + 1000), null);
 });
 
 test("애니메이션: 기본은 3개 파동 도트 1.2s (§5.3)", () => {
@@ -357,4 +357,23 @@ test("adoptServerThink 는 지난 턴의 속도 기록을 지운다", () => {
   const next = adoptServerThink(s, { enabled: true, maxReasoningTokens: 4096 });
   assert.equal(next.lastSpeedTokPerSec, null);
   assert.equal(next.lastUsedTokens, 0);
+});
+
+test("속도 분자는 전체 출력이다 — 답변·도구호출도 들어간다", () => {
+  let s = initialThink({ enabled: true });
+  s = ingest(s, { text: "abcdefgh" }); // ≈2 토큰 추정
+  assert.ok(s.outputTokens > 0, "답변이 속도 분자에 안 들어간다");
+  assert.equal(s.usedTokens, 0, "답변이 예산(상한) 계산에 섞였다");
+  assert.equal(s.needsWarning, false);
+  s = ingest(s, { tool: "run_shell({\"command\":\"ls\"})" });
+  const out2 = s.outputTokens;
+  assert.ok(out2 > 0 && s.usedTokens === 0, "도구호출이 예산에 섞였다");
+});
+
+test("답변만 길어도 예산 경고는 안 뜬다 — 상한은 사고에만 건다", () => {
+  let s = initialThink({ enabled: true, maxReasoningTokens: 10 });
+  for (let i = 0; i < 100; i++) s = ingest(s, { text: "가나다라마바사아자차카타파하".repeat(10) });
+  assert.equal(s.enabled, true, "답변이 thinking 을 껐다");
+  assert.equal(s.forcedToolChoice, false);
+  assert.equal(thinkNotice(s, true), null, "답변이 경고을 띄웠다");
 });

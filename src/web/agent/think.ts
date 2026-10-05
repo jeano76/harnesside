@@ -27,6 +27,8 @@ export interface ThinkState {
   needsWarning: boolean;
   /** 지금까지 본 사고 토큰. */
   usedTokens: number;
+  /** 지금까지 본 전체 출력 토큰(사고+답변+도구호출) 추정 — 속도 분자. 상한 비교에는 쓰지 않는다. */
+  outputTokens: number;
   startedAt: number | null;
   /** 강제 도구 호출 모드인가. */
   forcedToolChoice: boolean;
@@ -63,6 +65,7 @@ export function initialThink(opts: Partial<Pick<ThinkState, "enabled" | "style" 
     maxReasoningTokens: opts.maxReasoningTokens ?? DEFAULT_MAX_REASONING,
     needsWarning: false,
     usedTokens: 0,
+    outputTokens: 0,
     startedAt: null,
     forcedToolChoice: false,
     reason: null,
@@ -77,10 +80,12 @@ export function toolChoiceFor(s: ThinkState): "auto" | "required" {
 }
 
 export interface ThinkDeltas {
-  /** reasoning_content 델타. */
+  /** reasoning_content 델타. 예산(상한) 계산에 쓴다. */
   reasoning?: string;
-  /** 일반 답변 델타. */
+  /** 일반 답변 델타. 예산이 아니라 속도 분자에만 쓴다. */
   text?: string;
+  /** 도구 호출(호출명+인자 텍스트). 예산이 아니라 속도 분자에만 쓴다. */
+  tool?: string;
 }
 
 /**
@@ -88,18 +93,28 @@ export interface ThinkDeltas {
  * `state.forcedToolChoice` 로 드러나야 한다. 드러나지 않으면 사용자는 "도구가 왜
  * 안 불리지?" 하고 기다린다.
  *
+ * 계량기는 두 개다: `usedTokens`(사고만 — 상한 비교용)와 `outputTokens`(사고+
+ * 답변+도구호출 전부 — 속도 분자용). 속도가 사고만 재면, 답변이 긴 턴은 실제보다
+ * 느리게 보인다. 상한은 사고에만 건다 — 긴 답변이 "예산 초과"를 띄우면 거짓말이다.
+ *
  * `needsWarning` 은 두 경우에 켠다: 이미 넘었거나(초과), 80%에 들어섰거나(곧
  * 초과). 80% 선행 경고가 없으면 "곧 초과" 분기는 도달 불가능한 죽은 코드가 된다 —
  * `ingest` 가 초과와 동시에 `enabled` 까지 끄기 때문이다.
  */
 export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
-  if (!d.reasoning) return s;
+  const out = (d.reasoning ? estimateTextTokens(d.reasoning) : 0)
+    + (d.text ? estimateTextTokens(d.text) : 0)
+    + (d.tool ? estimateTextTokens(d.tool) : 0);
+  if (!d.reasoning && out === 0) return s;
   // **언어별 추정**(`estimateTextTokens`). 예전의 `길이 / 3.4` 은 영문 기준이라
   // 한글 사고의 실제 토큰을 절반밖에 못 셌다 — 표시된 숫자가 거짓말이 된다.
-  const used = s.usedTokens + estimateTextTokens(d.reasoning);
-  if (s.enabled && used > s.maxReasoningTokens && !s.forcedToolChoice) {
+  const used = s.usedTokens + (d.reasoning ? estimateTextTokens(d.reasoning) : 0);
+  const output = s.outputTokens + out;
+  const withOutput = { outputTokens: output, startedAt: s.startedAt ?? Date.now() };
+  if (s.enabled && d.reasoning && used > s.maxReasoningTokens && !s.forcedToolChoice) {
     return {
       ...s,
+      ...withOutput,
       usedTokens: used,
       // §5.3: 초과하면 thinking 을 끄고 강제 도구 호출 모드로 전환한다.
       forcedToolChoice: true,
@@ -111,8 +126,8 @@ export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
   }
   return {
     ...s,
+    ...withOutput,
     usedTokens: used,
-    startedAt: s.startedAt ?? Date.now(),
     // 아직 Enabled인데 상한의 80%를 넘었으면 "곧 초과"를 알린다 — 초과後に
     // 말하면 이미 전환된 뒤라 예보가 아니다.
     needsWarning: s.needsWarning || (s.enabled && !s.forcedToolChoice && used >= s.maxReasoningTokens * 0.8),
@@ -125,11 +140,11 @@ export function elapsedSec(s: ThinkState, now = Date.now()): number | null {
   return Math.max(0, (now - s.startedAt) / 1000);
 }
 
-/** tok/s. 시간이 0 이면 **무한대나 0 이 아니라 null** — 0 은 "속도가 0" 이라는 거짓말. */
+/** tok/s — 전체 출력 추정 ÷ 실측 초. 시간이 0 이면 **무한대나 0 이 아니라 null** — 0 은 "속도가 0" 이라는 거짓말. */
 export function speed(s: ThinkState, now = Date.now()): number | null {
   const e = elapsedSec(s, now);
-  if (e === null || e <= 0 || s.usedTokens === 0) return null;
-  return s.usedTokens / e;
+  if (e === null || e <= 0 || s.outputTokens === 0) return null;
+  return s.outputTokens / e;
 }
 
 export function finish(s: ThinkState): ThinkState {
@@ -143,6 +158,7 @@ export function finish(s: ThinkState): ThinkState {
     ...s,
     startedAt: null,
     usedTokens: 0,
+    outputTokens: 0,
     needsWarning: false,
     forcedToolChoice: false,
     reason: null,
@@ -295,6 +311,7 @@ export function adoptServerThink(
   const next: ThinkState = {
     ...s,
     usedTokens: 0,
+    outputTokens: 0,
     needsWarning: false,
     forcedToolChoice: false,
     reason: null,
