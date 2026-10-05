@@ -450,9 +450,10 @@ export class AgentService {
         });
       },
       onContextUsage: (used, total) => {
-        // 실측값을 들고 있는다 — 계측기(1Hz)가 읽는다. 텍스트 상태 줄도 유지한다.
+        // 실측값만 들고 있는다 — 하단 상태바(1Hz 계측기 + AgentPanel)가 읽는다.
+        // 예전엔 텍스트 상태 줄(`컨텍스트 N/M`)도 함께 내보냈는데, 출력마다
+        // `· 컨텍스트 …` 가 붙어 상태바와 중복이었다(실측 지적). 말하지 않는다.
         this.lastUsage = { usedTokens: used, totalTokens: total };
-        this.emit({ type: "agent.status", text: `컨텍스트 ${used}/${total}`, at: now() });
       },
       approvalGate: this.opts.approvalGate ?? undefined,
     });

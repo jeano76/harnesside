@@ -202,18 +202,73 @@ export function ToolBlock({
   }
   if (isFileTool(name, args) && path) return <FileBlock label={labelFor(name)} path={path} done={done} client={client} />;
 
-  // **판별할 수 없는 도구** — 한 줄로 말한다. 추측해서 에디터를 열지 않는다.
-  // 헤더 계약(BlockHeader): 도형+이름+대상+상태+복사. 색만으로 알리지 않는다.
+  // **판별할 수 없는 도구** — 한 줄로 말하고 펼치면 호출 내용을 보여준다.
+  // 예전엔 헤더 줄 + 결과 미리보기 줄의 두 줄이었고, 정작 "어떻게 호출됐는지"
+  // (인자)는 어디에도 없었다. 헤더 계약(도형+이름+상태)은 접힌 한 줄에 두고,
+  // 호출 인자와 결과는 펼쳤을 때만 보여준다.
+  return <GenericToolBlock name={name} argsText={typeof args === "string" ? args : undefined} done={done} text={block.text} />;
+}
+
+/** 인자를 사람이 읽는 모양으로 — 못 읽으면 원문 그대로(지어내지 않는다). */
+export function formatToolCall(name: string, argsText?: string): string {
+  if (!argsText) return `${name}()`;
+  try {
+    return `${name}(${JSON.stringify(JSON.parse(argsText), null, 2)})`;
+  } catch {
+    return `${name}(${argsText})`;
+  }
+}
+
+/** 판별 불가 도구 한 줄 — 펼치면 호출(인자)과 결과를 보여준다. */
+function GenericToolBlock({ name, argsText, done, text }: { name: string; argsText?: string; done: boolean; text: string }) {
+  const [open, setOpen] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const callText = formatToolCall(name, argsText);
   return (
     <div>
-      <BlockHeader
-        kind={isShell(name, args) ? "shell" : isFileTool(name, args) ? "file" : /search/i.test(name) ? "search" : "tool"}
-        target={labelFor(name)}
-        status={done ? "완료" : "실행 중"}
-        done={done}
-        copyText={block.text || undefined}
-      />
-      {block.text ? <div style={{ color: DIM, fontSize: FONT.AUX }}>{block.text.slice(0, 120)}</div> : null}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: FONT.META, color: COLOR.DIM, marginBottom: open ? 2 : 0, minWidth: 0 }}>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          title={open ? "호출 내용 접기" : "호출 내용 펼치기"}
+          style={{ background: "none", border: 0, color: done ? COLOR.GOOD : COLOR.DIM, cursor: "pointer", font: "inherit", fontSize: FONT.META, padding: 0, display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: "1 1 auto" }}
+        >
+          <span aria-hidden="true">🔧</span>
+          <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+          <span style={{ color: COLOR.DIM, flexShrink: 0 }}>{labelFor(name)}</span>
+          <span style={{ flexShrink: 0 }}>{done ? "완료" : "실행 중"}</span>
+        </button>
+        <button
+          type="button"
+          aria-label="호출 내용 복사"
+          title={copied ? "복사됨" : "복사"}
+          onClick={() => {
+            try {
+              void navigator.clipboard?.writeText(callText);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            } catch {
+              /* 클립보드 실패는 조용히 둔다 */
+            }
+          }}
+          style={{ flexShrink: 0, background: "transparent", color: copied ? COLOR.GOOD : COLOR.DIM, border: 0, cursor: "pointer", font: "inherit", fontSize: FONT.META, padding: "0 2px" }}
+        >
+          {copied ? "✓" : "⧉"}
+        </button>
+      </div>
+      {open && (
+        <div style={{ border: `1px solid ${BORDER}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1, overflow: "hidden" }}>
+          <pre style={{ margin: 0, padding: "6px 8px", maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word", font: "11px/1.5 ui-monospace, monospace", color: FG }}>
+            {callText}
+          </pre>
+          {text ? (
+            <div style={{ borderTop: `1px solid ${BORDER}`, padding: "6px 8px", color: DIM, fontSize: FONT.AUX, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {text.slice(0, 2000)}
+            </div>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

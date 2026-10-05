@@ -711,9 +711,14 @@ export async function buildResumePrompt(
   // agent seems to be picking up mid-task.
   const resumeReasonText = checkpoint.reason === "plan-progress" ? "resuming previous session" : "resuming after compaction";
   const lines = [
+    // 이 텍스트는 모델 입력であると 동시에 화면 출력이다: injectResumeContextIfPending()이
+    // 그대로 onStatus → status 블록으로 흘린다. `label:\n내용` 평문이면 화면에서
+    // 수천 자 벽으로 보인다(실측). 섹션 라벨만 **굵게**로 구조화한다. 첫 줄은
+    // loop.test.ts 가 `startsWith("[resuming")`·`previous goal: ...` 원문으로
+    // 고정하므로 손대지 않는다 — 화면에서는 Markdown 이 대괄호를 그대로 보여준다.
     `[${resumeReasonText}] previous goal: ${stripResumePrefix(checkpoint.goal)}`,
     remaining.length
-      ? `remaining steps:\n${remaining.map((s) => `- (${s.status}) ${s.description}`).join("\n")}`
+      ? `**remaining steps:**\n${remaining.map((s) => `- (${s.status}) ${s.description}`).join("\n")}`
       : checkpoint.steps.length
         ? "All plan steps were already done — re-verifying before wrapping up."
         : // No plan was declared. Saying "all steps done" here (the tool
@@ -721,21 +726,21 @@ export async function buildResumePrompt(
           // nothing left to do.
           "No plan was recorded for this work.",
     includeSummary && checkpoint.summary
-      ? `summary of the previous session:\n${
+      ? `**summary of the previous session:**\n${
           checkpoint.summary.length > RESUME_SUMMARY_MAX_CHARS
             ? checkpoint.summary.slice(0, RESUME_SUMMARY_MAX_CHARS) + " …"
             : checkpoint.summary
         }`
       : "",
-    includeSummary && notes ? `working notes (findings recorded before; trust these over re-deriving them):\n${notes}` : "",
-    checkpoint.recentActions?.length ? `recent actions:\n${checkpoint.recentActions.map((a) => `- ${a}`).join("\n")}` : "",
+    includeSummary && notes ? `**working notes** (findings recorded before; trust these over re-deriving them):\n${notes}` : "",
+    checkpoint.recentActions?.length ? `**recent actions:**\n${checkpoint.recentActions.map((a) => `- ${a}`).join("\n")}` : "",
     checkpoint.pendingToolCall
-      ? `interrupted tool call: ${checkpoint.pendingToolCall.name} (${checkpoint.pendingToolCall.reason})`
+      ? `**interrupted tool call:** ${checkpoint.pendingToolCall.name} (${checkpoint.pendingToolCall.reason})`
       : "",
     checkpoint.files.length
-      ? `files touched:\n${checkpoint.files.map((f) => `- (${f.status}) ${f.path}`).join("\n")}`
+      ? `**files touched:**\n${checkpoint.files.map((f) => `- (${f.status}) ${f.path}`).join("\n")}`
       : "",
-    "Continue the task from where it stopped. If it is already complete, verify that and report the result.",
+    "*Continue the task from where it stopped. If it is already complete, verify that and report the result.*",
   ].filter(Boolean);
 
   return lines.join("\n\n");

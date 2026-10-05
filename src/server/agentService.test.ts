@@ -407,16 +407,17 @@ test("thresholds 팩토리는 호출 시점에 풀린다 — 부팅 뒤 정해�
       thresholds: () => ({ autoTriggerRatio: 0.6, contextWindowTokens: size }),
     });
     await svc.send("hi");
-    const firstTotal = events.find((e) => e.type === "agent.status" && /^컨텍스트 \d+\/\d+$/.test(e.text ?? ""))?.text;
-    assert.match(firstTotal ?? "", /\/32768$/, `첫 턴은 32768이어야: ${firstTotal}`);
+    assert.equal(svc.contextUsage()?.totalTokens, 32_768, "첫 턴은 32768이어야");
+    // 상태 줄에는 더 이상 컨텍스트가 붙지 않는다 — 하단 상태바가 보여준다.
+    assert.ok(
+      !events.some((e) => e.type === "agent.status" && /^컨텍스트 \d+\/\d+$/.test(e.text ?? "")),
+      "출력마다 컨텍스트 줄이 붙는다"
+    );
     // 부팅이 끝나고 컨텍스트가 16384로 정해졌다 — 루프를 버리면 다음 턴이 새 값을 본다.
     size = 16_384;
     svc.invalidate();
     await svc.send("hi again");
-    const totals = events
-      .filter((e) => e.type === "agent.status" && /^컨텍스트 \d+\/\d+$/.test(e.text ?? ""))
-      .map((e) => e.text);
-    assert.ok(totals.some((t) => /\/16384$/.test(t ?? "")), `스냅샷이면 16384이 절대 안 보인다: ${totals.join(", ")}`);
+    assert.equal(svc.contextUsage()?.totalTokens, 16_384, "스냅샷이면 16384이 절대 안 보인다");
     const { resolveThresholds } = await import("./agentService.js");
     assert.equal(resolveThresholds(undefined).contextWindowTokens, 32_768);
   } finally {

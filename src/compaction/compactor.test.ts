@@ -1164,3 +1164,30 @@ test("recommendThresholds tightens the post-compaction target only when overhead
   assert.equal(recommendThresholds(32_768).postCompactionTargetRatio, 0.4);
   assert.equal(recommendThresholds(4096).postCompactionTargetRatio, 0.3);
 });
+
+test("buildResumePrompt structures sections as markdown but keeps the first line machine-readable", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
+  try {
+    await writeCheckpoint(dir, {
+      version: 1,
+      timestamp: new Date().toISOString(),
+      reason: "auto-threshold",
+      goal: "do the thing",
+      steps: [{ description: "x", status: "todo" }],
+      files: [{ path: "a.ts", status: "modified" }],
+      pendingToolCall: null,
+      mustPreserve: [],
+      summary: "S",
+    });
+    const prompt = (await buildResumePrompt(dir))!;
+    // 화면 렌더(Markdown)용 구조 — 라벨이 굵게여야 한다.
+    assert.match(prompt, /\*\*remaining steps:\*\*/);
+    assert.match(prompt, /\*\*files touched:\*\*/);
+    // 기계 계약은 그대로 — loop.test.ts 가 startsWith/정확 문구로 고정한다.
+    assert.ok(prompt.startsWith("[resuming"), "first line must stay machine-readable");
+    assert.equal(prompt.match(/previous goal:/g)!.length, 1);
+    assert.match(prompt, /previous goal: do the thing/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

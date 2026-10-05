@@ -721,7 +721,20 @@ function BlockBody({
       </div>
     );
   }
-  if (b.kind === "status") return <div style={{ color: "#6e7681", fontSize: 11 }}>· {b.text}</div>;
+  // 한 줄 상태는 그대로. 여러 줄 상태(재개 안내문·압축 보고 등)는 구조가 있는
+  // 글이므로 Markdown 으로 그린다 — 평문으로 두면 수천 자 벽이 된다(실측).
+  // 짧은 한 줄까지 Markdown 에 넣으면 앞의 `·` 약 속 표기가 문단으로 바뀌어
+  // 로그 흐름이 끊기므로, 개행이 있을 때만 분기한다.
+  if (b.kind === "status") {
+    if (b.text.includes("\n")) {
+      return (
+        <div style={{ borderLeft: "2px solid #30363d", paddingLeft: 8, margin: "4px 0", wordBreak: "break-word" }}>
+          <Markdown text={b.text} />
+        </div>
+      );
+    }
+    return <div style={{ color: "#6e7681", fontSize: 11 }}>· {b.text}</div>;
+  }
   if (b.kind === "error") return <div style={{ color: "#f85149", fontSize: 11 }}>오류: {b.text}</div>;
   return (
     <ToolBlock
