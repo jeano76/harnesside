@@ -143,7 +143,7 @@ export function WorkspaceBar({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !preview) void plan();
                 }}
-                placeholder="/home/jeano/내-프로젝트"
+                placeholder="/home/사용자/내-프로젝트"
                 style={{ flex: 1, background: BG, color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "4px 8px", font: "inherit", outline: "none" }}
               />
               <button
