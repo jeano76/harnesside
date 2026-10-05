@@ -328,3 +328,33 @@ test("안내에 한 줄 꼬리표가 있다 — 표시줄과 숫자를 반복하
   const over = thinkNotice({ ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 }, true)!;
   assert.match(over.short, /초과/);
 });
+
+test("finish 는 끝난 추론의 최종 속도를 남긴다 — 다음 턴까지 보인다", () => {
+  let s = initialThink({ enabled: true });
+  s = ingest(s, { reasoning: "abc" });
+  const t1 = s.startedAt!;
+  const done = { ...s, startedAt: t1 };
+  // 1초 뒤 끝났다고 치면 속도가 기록된다.
+  const realNow = Date.now;
+  try {
+    (Date as unknown as { now: () => number }).now = () => t1 + 1000;
+    const f = finish(done);
+    assert.ok(f.lastSpeedTokPerSec !== null && f.lastSpeedTokPerSec > 0, `속도가 없다: ${f.lastSpeedTokPerSec}`);
+    assert.equal(f.lastUsedTokens, done.usedTokens);
+    assert.equal(f.usedTokens, 0, "계량기는 비워야 한다");
+  } finally {
+    (Date as unknown as { now: () => number }).now = realNow;
+  }
+});
+
+test("아무것도 안 봤으면 끝난 속도도 없다 — 0 tok/s 라고 말하지 않는다", () => {
+  const f = finish(initialThink());
+  assert.equal(f.lastSpeedTokPerSec, null);
+});
+
+test("adoptServerThink 는 지난 턴의 속도 기록을 지운다", () => {
+  const s = { ...initialThink(), lastSpeedTokPerSec: 38.2, lastUsedTokens: 1000 };
+  const next = adoptServerThink(s, { enabled: true, maxReasoningTokens: 4096 });
+  assert.equal(next.lastSpeedTokPerSec, null);
+  assert.equal(next.lastUsedTokens, 0);
+});

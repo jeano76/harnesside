@@ -11,7 +11,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { animationFor, initialThink, ingest, finish, thinkNotice, type ThinkState, type ThinkStyle } from "../agent/think.js";
+import { animationFor, initialThink, ingest, finish, thinkNotice, speed, type ThinkState, type ThinkStyle } from "../agent/think.js";
 // 블록 규칙의 **정본**은 여기다. 이 파일은 그려 줄 뿐이다(두 곳에 판단을 두면 어긋난다).
 import { appendToBlock, applyEvent, groupTurns, type AgentBlock } from "../../session/blocks.js";
 import type { ApiClient } from "../api.js";
@@ -218,20 +218,25 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
   );
 }
 
-function ThinkIndicator({ state, style, notice }: { state: ThinkState; style: ThinkStyle; notice?: { short: string; title: string } | null }) {
+function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; style: ThinkStyle; notice?: { short: string; title: string } | null; live: boolean }) {
   const anim = animationFor(style);
   // 꺼져 있으면 표시줄 자체가 없다 — 단, 예산 안내가 있으면 그 한 줄은 보인다.
   if (!state.enabled && !notice) return null;
   const used = state.usedTokens.toLocaleString("ko-KR");
   const cap = state.maxReasoningTokens.toLocaleString("ko-KR");
+  // 속도는 **실측 시간 ÷ 추정 토큰**이다. 토큰 수는 길이 추정치라 서버의 실제
+  // 카운터와 다를 수 있지만, 시간은 진짜 흐른 시간이다 — 그래서 `tok/s` 로
+  // 말하고 `(추정)` 꼬리표는 뗀다. 측정 전(첫 델타 전)에는 속도가 없다.
+  const sp = live ? speed(state) : state.lastSpeedTokPerSec;
+  const pace = sp === null || !(sp > 0) ? "" : ` · ${sp.toFixed(1)} tok/s`;
   // **한 줄로 합친다.** 예전엔 `Thinking · N 토큰` 줄과 `추론 예산 곧 초과 (N/M·추정)` 줄이
   // 따로 있어 같은 숫자가 두 번 보였다. 현재/최대 쌍은 이 한 곳에만 둔다.
   return (
     <div
       style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }}
-      {...(notice ? { title: notice.title } : {})}
+      {...(notice ? { title: notice.title } : { title: "토큰 수는 길이 추정치, 속도는 실제로 흐른 시간 기준" })}
     >
-      {state.enabled && anim.dots > 0 && (
+      {live && state.enabled && anim.dots > 0 && (
         <span style={{ display: "inline-flex", gap: 3 }}>
           {Array.from({ length: anim.dots }).map((_, i) => (
             <span
@@ -250,7 +255,7 @@ function ThinkIndicator({ state, style, notice }: { state: ThinkState; style: Th
         </span>
       )}
       <span>
-        Thinking · {used}/{cap} 토큰(추정){notice ? ` — ${notice.short}` : ""}
+        Thinking · {live ? `${used}/${cap}` : `${state.lastUsedTokens.toLocaleString("ko-KR")}/${cap}`} 토큰{pace}{notice ? ` — ${notice.short}` : ""}
       </span>
     </div>
   );
@@ -644,7 +649,12 @@ export function AgentPanel({
           );
         })}
 
-        {running && (think.enabled || budgetNotice) && <ThinkIndicator state={think} style={style} notice={budgetNotice} />}
+        {/* 진행 중에는 실시간 줄, 끝나면 끝난 추론의 최종 속도 줄(다음 턴까지).
+            둘 다 한 줄이다 — 예전 두 줄(Thinking 줄 + 예산 줄) 중복은 없앴다. */}
+        {running && (think.enabled || budgetNotice) && <ThinkIndicator state={think} style={style} notice={budgetNotice} live />}
+        {!running && think.lastSpeedTokPerSec !== null && think.lastSpeedTokPerSec > 0 && (
+          <ThinkIndicator state={think} style={style} notice={null} live={false} />
+        )}
 
         {/* **읽고 있는데 새 내용이 온다** — 조용히 끌지 않는다. */}
         {!pinned && (

@@ -32,6 +32,11 @@ export interface ThinkState {
   forcedToolChoice: boolean;
   /** 전환 사유 — 사용자에게 **왜** 바뀌었는지 말해야 한다. */
   reason: string | null;
+  /** 마지막으로 끝난 추론의 속도(추정 토큰 ÷ 실측 초). 턴이 끝나도 다음 턴
+   *  시작 전까지 남긴다 — "끝날 때마다 t/s" 를 보여주기 위해서다. */
+  lastSpeedTokPerSec: number | null;
+  /** 그때의 사용량(위 속도의 분자). */
+  lastUsedTokens: number;
 }
 
 // 정본은 `src/shared/reasoning.ts` 다. 여기서 다시 적으면 **값이 두 벌**이 되고,
@@ -61,6 +66,8 @@ export function initialThink(opts: Partial<Pick<ThinkState, "enabled" | "style" 
     startedAt: null,
     forcedToolChoice: false,
     reason: null,
+    lastSpeedTokPerSec: null,
+    lastUsedTokens: 0,
   };
 }
 
@@ -130,6 +137,8 @@ export function finish(s: ThinkState): ThinkState {
   // 0부터 다시 세는데 웹은 누적만 했다 — 그래서 한 번 초과했거나 여러 턴에 걸쳐
   // 사고가 쌓이면, 다음 턴에서 쓰지도 않은 예산으로 "곧 초과/초과"가 떴다(실측).
   // 정책(enabled·style·cap)은 턴 경계를 넘나들지만 계량기는 넘지 않는다.
+  // 끝난 순간의 속도는 남긴다 — 다음 턴 시작 전까지 "이번 추론은 몇 tok/s 였나" 를 본다.
+  const finalSpeed = speed(s);
   return {
     ...s,
     startedAt: null,
@@ -137,6 +146,8 @@ export function finish(s: ThinkState): ThinkState {
     needsWarning: false,
     forcedToolChoice: false,
     reason: null,
+    lastSpeedTokPerSec: finalSpeed,
+    lastUsedTokens: s.usedTokens,
   };
 }
 
@@ -280,12 +291,15 @@ export function adoptServerThink(
 ): ThinkState {
   // 턴 시작 신호이기도 하다 — 이전 턴의 계량기가 `finish` 를 거치지 않고 남았어도
   // (취소·재연결·자동재개) 여기서 비운다. 정책만 따르고 계량은 이번 턴부터다.
+  // 끝난 추론의 속도 기록도 비운다 — 다음 턴이 시작되면 "지난번" 은 없다.
   const next: ThinkState = {
     ...s,
     usedTokens: 0,
     needsWarning: false,
     forcedToolChoice: false,
     reason: null,
+    lastSpeedTokPerSec: null,
+    lastUsedTokens: 0,
   };
   if (typeof server.enabled === "boolean") next.enabled = server.enabled;
   // **값이 실제로 왔을 때만** 따른다. 못 받았는데 기본값으로 덮으면, 이미 맞춰 둔
