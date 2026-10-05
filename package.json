@@ -1,6 +1,6 @@
 {
   "name": "harnesside",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local llama.cpp coding agent: a daemon that drives a CDP-launched browser IDE (OpenAI-compatible, self-healing, memory-compaction with auto-resume)",
   "repository": "https://github.com/jeano76/harnesside",
   "license": "MIT",

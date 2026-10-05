@@ -38,6 +38,11 @@ asserting nothing, and one of these did exactly that before it was caught.
 
 ### Packaged install (2026-10-04 · Q-11)
 
+> **이 절의 `0.1.0` 은 2026-10-04 에 잰 값이다.** 릴리스 식별자는 그 뒤
+> `0.2.0` 으로 올렸고(2026-10-05 · `/server calibrate`), 위 표의 숫자는 **고치지
+> 않았다.** 측정 기록의 날짜를 지우면 그 기록이 무엇을 말하던지가 사라진다.
+> 최신 배포물의 확인은 `release/SHA256SUMS` 와 `harnesside --version` 이 정본이다.
+
 `npm pack` → install the tarball into a clean prefix → run it from an unrelated
 directory. Not `npm link`, which would have hidden the failure below.
 

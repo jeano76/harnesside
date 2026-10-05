@@ -347,7 +347,7 @@ config 에 기록되어 다음 부팅마다 그대로 재사용된다.
 **업데이트**
 
 ```
-설치됨      0.1.0
+설치됨      0.2.0
 빌드        20261005  08c4467  더티
 설치 해시   검증 안 됨 — 전체 트리를 자기 매니페스트로 대조하지 못했습니다
 설치 경로   /home/jeano/.npm-global/lib/node_modules/harnesside/dist
@@ -892,7 +892,7 @@ knew they existed, nothing did.
 없어서 커밋을 물을 수 없습니다).
 
 ```
-릴리스 식별자   0.1.0              ← package.json. 정본. 업데이트 비교가 본다.
+릴리스 식별자   0.2.0              ← package.json. 정본. 업데이트 비교가 본다.
 빌드 신원       2026.10.05-08c4467  ← dist/server/buildInfo.json. 화면·로그·검증이 본다.
 ```
 
