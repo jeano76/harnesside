@@ -24,7 +24,7 @@ import { isMoeModel, readGgufKvShape } from "../setup/ggufMeta.js";
 import { probeModelCompatibility } from "../setup/llamaCpp.js";
 import { detectHardware, findOwnLlamaServerPids, ownLlamaServerVramGiB } from "../setup/hardware.js";
 import { tuneForHardware } from "../setup/tuning.js";
-import { switchModelAndServer, detectPortOwner, resolveLiveServerPort, parseLlamaServerArgs } from "../setup/modelSwitch.js";
+import { switchModelAndServer, detectPortOwner, resolveLiveServerPort, parseLlamaServerArgs, type ParsedServerArgs } from "../setup/modelSwitch.js";
 import { reportServer } from "../setup/serverReport.js";
 import { runServerRestart, gateModelSwitch } from "../setup/serverCommand.js";
 import { runServerCalibration, measureForCalibration } from "./calibrateCommand.js";
@@ -125,6 +125,24 @@ export class SlashService {
   get(id: string): SlashJobView | null {
     const j = this.jobs.get(id);
     return j ? this.view(j) : null;
+  }
+
+  /**
+   * 서버를 내렸다 올리는 유일한 통로.
+   *
+   * 테스트가 여기서 실제 프로세스를 만지지 않도록 **한 곳**으로 모았다. `/models` 와
+   * `/server` 가 각자 `switchModelAndServer` 를 직접 부르면, 주입은 어느 한쪽에만
+   * 걸리고 다른 쪽은 그대로 진짜 서버를 잡는다 — 실제로 그렇게 지났습니다: `/server`
+   * 쪽만 막아 놓고 `/models` 경로가 열려 있었다.
+   */
+  private switcher(): typeof switchModelAndServer {
+    return this.opts.switchServer ?? switchModelAndServer;
+  }
+
+  /** 지금 떠 있는 서버를 다시 읽는다. 교체 **뒤**에는 반드시 새로 읽어야 한다 —
+   *  처음에 읽은 것은 그 교체에서 죽은 프로세스의 명령줄이다. */
+  private async serverReport(config: unknown): Promise<Awaited<ReturnType<typeof reportServer>>> {
+    return (this.opts.reportServer ?? reportServer)({ config: config as Record<string, any>, projectRoot: this.opts.projectRoot });
   }
 
   private view(j: Job, extra?: string): SlashJobView {
@@ -291,7 +309,7 @@ export class SlashService {
       }
     }
     say(`  · 새 모델을 올리기 위해 기존 서버를 종료하고 VRAM 을 비웁니다 (포트 ${result.port}).`);
-    const sw = await switchModelAndServer({
+    const sw = await this.switcher()({
       modelPath,
       port: result.port,
       binPath,
@@ -316,6 +334,33 @@ export class SlashService {
     const synced = sw.ok ? await Promise.resolve(this.opts.onModelSwitched?.(modelPath, switchTuning.contextSize) ?? []) : [];
     if (!sw.ok) j.ok = false;
     say([...head, ...sw.lines.map((l) => `  · ${l}`), ...synced.map((l) => `  · ${l}`)].join("\n"));
+
+    // ── 모델을 바꾼 직후: 이제서야 **실측**할 수 있다 ──────────────────────
+    //
+    // 위의 `retune` 은 타이밍이 맞다 — 기존 서버를 내고 VRAM 이 반환된 직후에 다시
+    // 계산한다. 그런데 그건 여전히 **예측**이고, `-ngl 32` 를 만들어 낸 바로 그
+    // 함수다. 그리고 `/models` 는 그 예측을 **기록하는** 명령이다.
+    //
+    // 읽기 전용인 `/server restart` 에만 보정을 붙여둔 것은 급수구를 잠그고
+    // 우회 파이프만 열어둔 셈이었다. 실측은 서버가 뜬 뒤에야 가능하므로
+    // 여기서 한다: 직전에 올라간 설정이 곧 보정이 실패했을 때 되돌아갈 값이다.
+    //
+    // `confirmed` 는 `/models <n> confirm` 으로 이미 받은 승일을 재사용한다. 게이트도
+    // 같은 규칙이라 승인 없이 서버를 또 내리지 않는다.
+    if (sw.ok && sw.launched) {
+      say("[server] 새 모델을 실측해 최적값을 다시 계산합니다…");
+      const fresh = await this.serverReport(config);
+      const cal = await runServerCalibration(
+        { report: fresh, configBin: binPath, confirmed, projectRoot, running: sw.launched.tuning as ParsedServerArgs },
+        {
+          read: (rep, mPath) => measureForCalibration(rep, mPath, binPath),
+          switchServer: (o) => this.switcher()(o),
+          record: (st) => recordServerState(projectRoot, st),
+          sync: async (m, c) => Promise.resolve(this.opts.onModelSwitched?.(m, c?.contextSize) ?? []),
+        }
+      );
+      if (cal.lines.length) say(cal.lines.join("\n"));
+    }
   }
 
   // ── /server ───────────────────────────────────────────────────────────────
