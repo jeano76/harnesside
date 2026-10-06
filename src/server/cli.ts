@@ -38,6 +38,7 @@ export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이
   harnesside down            우아한 종료 (체크포인트 기록 후)
   harnesside doctor          환경 진단 (읽기 전용 · 아래 판정을 그대로 보여준다)
   harnesside setup           설치 마무리 — 모델·서버·튜닝 확보 + 바탕화면 바로가기
+  harnesside measure         이 머신에서 실측 — 기동·처리량·메모리를 재고 빠른 설정을 기록 (--full · --no-apply)
   harnesside version         버전 (= --version, package.json 의 version)
   harnesside doctor --install  없으면 설치 · 모델이 없으면 받는다 [포트]
 
@@ -77,7 +78,7 @@ export interface ParsedArgs {
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
-  const known = ["up", "open", "status", "logs", "down", "doctor", "setup", "version", "help", "--help", "-h"];
+  const known = ["up", "open", "status", "logs", "down", "doctor", "setup", "measure", "version", "help", "--help", "-h"];
   const first = argv[0];
   const command = first && known.includes(first) ? first : "up";
   const rest = command === "up" && first && !known.includes(first) ? argv : argv.slice(1);
@@ -357,6 +358,129 @@ export async function cmdSetup(paths: Paths, rest: string[] = []): Promise<numbe
   return report.ok ? 0 : 1;
 }
 
+/**
+ * `harnesside measure` — **설치 시 실측**. 설치 스크립트가 `setup` 다음에 부른다.
+ *
+ * 이 머신에서 엔진을 실제로 띄워 같은 프롬프트로 처리량·메모리를 재고, 빠른 설정을 채택해
+ * 프로젝트 설정과 머신 프로필(`~/.harnesside/machine-profile.json`)에 기록한다.
+ * 문서·추정 수치가 아니라 **이 머신의 측정값**이 설정이 된다(PROMPT_PLATFORM_ENGINES §4).
+ *
+ * 종료 코드: 0 = 측정·기록 완료, 1 = 준비 안 됨(setup 먼저), 2 = 엔진이 기준 설정으로 뜨지 않음.
+ */
+export async function cmdMeasure(paths: Paths, rest: string[] = []): Promise<number> {
+  const flags = new Set(rest.filter((a) => a.startsWith("-")));
+  const mode = flags.has("--full") ? "full" : "quick";
+  const maxSecArg = rest.find((a) => a.startsWith("--max-seconds="))?.slice("--max-seconds=".length);
+  const { readFile, writeFile, mkdir, rename } = await import("node:fs/promises");
+  const { join, dirname } = await import("node:path");
+  const { parse } = await import("yaml");
+  const { homeDir } = await import("../setup/hostEnv.js");
+  const { detectHardware } = await import("../setup/hardware.js");
+  const { probeMachine, describeMachine } = await import("../setup/machineProbe.js");
+  const m = await import("../setup/measure.js");
+  const { writeConfig } = await import("../setup/bootstrap.js");
+  const { LlamaServerManager } = await import("../backend/llamaServer.js");
+  const { isMoeModel, readGgufKvShape } = await import("../setup/ggufMeta.js");
+  const { tcpPortProbe } = await import("../setup/ports.js");
+
+  emit(C.bold(`harnesside measure — 이 머신에서 실측 (${mode})`));
+  const cfgPath = join(paths.projectRoot, ".harnesside", "config.yaml");
+  const config = (await readFile(cfgPath, "utf8").then((t) => parse(t) as Record<string, any>).catch(() => null)) ?? {};
+  const llama = config.llama ?? {};
+  if (typeof llama.binPath !== "string" || typeof llama.modelPath !== "string") {
+    emit(C.yellow("  설정에 엔진·모델이 없습니다 — 먼저 `harnesside setup` 을 실행하십시오."));
+    return 1;
+  }
+
+  const [hw, machine] = await Promise.all([detectHardware(), probeMachine()]);
+  emit(`  ${C.dim(describeMachine(machine))}`);
+  const memory = m.memoryProbeFor(hw);
+  emit(`  ${C.dim(`메모리 측정: ${memory.source === "none" ? "수단 없음 — 미측정으로 기록" : `${memory.source} (${memory.pool})`}`)}`);
+
+  // 측정용 포트 — 사용 중인 서버(8080 등)를 건드리지 않는다.
+  let port = 0;
+  for (let p = 18080; p < 18120; p++) {
+    if ((await tcpPortProbe(p)) === "free") {
+      port = p;
+      break;
+    }
+  }
+  if (!port) {
+    emit(C.red("  측정용 빈 포트(18080-18119)를 찾지 못했습니다."));
+    return 1;
+  }
+
+  const { calibratedFor: _c, port: _p, measuredFor: _m, ...tuning } = llama;
+  const base = {
+    ...tuning,
+    binPath: llama.binPath,
+    modelPath: llama.modelPath,
+    host: "127.0.0.1",
+    port,
+    contextSize: typeof llama.contextSize === "number" ? llama.contextSize : 8192,
+    threads: typeof llama.threads === "number" ? llama.threads : Math.max(2, Math.floor(machine.cpu.logicalCores / 2)),
+    gpuLayers: typeof llama.gpuLayers === "number" ? llama.gpuLayers : 0,
+  };
+  const moe = await isMoeModel({ path: base.modelPath });
+  const moeLayers = moe ? (await readGgufKvShape(base.modelPath))?.layers : undefined;
+
+  const result = await m.runMeasure({
+    base,
+    cpu: machine.cpu,
+    mode,
+    moeLayers,
+    make: (c) => new LlamaServerManager(c),
+    memory,
+    say: (line) => emit(`  ${C.dim(line)}`),
+    maxSeconds: maxSecArg ? Number(maxSecArg) : mode === "quick" ? 600 : 3600,
+  });
+
+  const at = new Date();
+  const stored = m.toStored(result, at);
+  // 원본 기록 — 실패여도 남긴다(무엇이 왜 실패했는지가 다음 사람의 출발점이다).
+  const report = { at: stored.at, key: result.key, machine, hardware: { gpuBackend: hw.gpuBackend, gpus: hw.gpus, ramTotalBytes: hw.ramTotalBytes }, result: stored, skipped: result.skipped, calibration: result.calibration ?? null, seconds: Math.round(result.seconds) };
+  const stateDir = join(paths.projectRoot, ".harnesside", "state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(join(stateDir, "measurements.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+
+  if (!result.ok) {
+    emit(C.red(`  기준 설정으로 서버가 뜨지 않았습니다: ${result.samples[0]?.error ?? "원인 미상"}`));
+    emit(C.dim(`  기록: ${join(stateDir, "measurements.json")}`));
+    return 2;
+  }
+
+  const chosen = m.chosenConfig(result);
+  if (!flags.has("--no-apply")) {
+    const next = {
+      ...config,
+      llama: {
+        ...llama,
+        threads: chosen.threads,
+        ...(chosen.cpuMoeLayers !== undefined ? { cpuMoeLayers: chosen.cpuMoeLayers } : {}),
+        ...(result.calibration ? { calibratedFor: result.calibration.calibratedFor } : {}),
+        measuredFor: result.key,
+      },
+    };
+    await writeConfig(paths.projectRoot, next);
+    const home = homeDir();
+    const profilePath = m.machineProfilePath(home);
+    const prev = m.parseMachineProfile(await readFile(profilePath, "utf8").catch(() => null));
+    const merged = m.mergeMachineProfile(prev, machine, result.key, stored);
+    await mkdir(dirname(profilePath), { recursive: true });
+    await writeFile(`${profilePath}.tmp`, JSON.stringify(merged, null, 2) + "\n", "utf8");
+    await rename(`${profilePath}.tmp`, profilePath);
+  }
+
+  emit("");
+  for (const s of result.samples) {
+    emit(`  ${s.ok ? C.green("✓") : C.red("✗")} ${s.label}${s.bench ? ` — 프리필 ${s.bench.promptTps.toFixed(0)} · 생성 ${s.bench.genTps.toFixed(1)} tok/s` : s.error ? ` — ${s.error}` : ""}`);
+  }
+  for (const k of result.skipped) emit(`  ${C.yellow("·")} 건너뜀: ${k}`);
+  emit(`  ${result.pick.changed ? C.green("채택") : C.dim("유지")} — ${result.pick.reason}`);
+  emit(C.dim(`  기록: ${join(stateDir, "measurements.json")}${flags.has("--no-apply") ? " (--no-apply: 설정은 바꾸지 않음)" : " · 설정 · ~/.harnesside/machine-profile.json"}`));
+  return 0;
+}
+
 /** `status`/`logs`/`down`/`doctor`/`setup` 은 부팅 없이 동작한다. doctor만 읽기 전용이다. */
 export async function runStandalone(argv: string[]): Promise<number | null> {
   const paths = defaultPaths();
@@ -394,6 +518,9 @@ export async function runStandalone(argv: string[]): Promise<number | null> {
   }
   if (command === "setup") {
     return cmdSetup(paths, rest);
+  }
+  if (command === "measure") {
+    return cmdMeasure(paths, rest);
   }
   return null; // up 은 index.ts 가 처리
 }

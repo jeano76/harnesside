@@ -49,6 +49,11 @@ export interface ReleaseManifest {
   files: ManifestFile[];
   /** 파일 목록에서 만든 트리 해시 — **진입 파일 하나로는 만들 수 없다.** */
   treeSha256: string;
+  /** 포터블 배포물의 대상 플랫폼(`process.platform`/`process.arch`). 없으면 선언하지 않은 것. */
+  platform?: string;
+  arch?: string;
+  /** `"portable"` — 배포물 종류. */
+  kind?: string;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -142,6 +147,9 @@ export function parseManifest(text: string): ParseResult {
     },
     files,
     treeSha256: typeof o.treeSha256 === "string" ? o.treeSha256 : "",
+    ...(typeof o.platform === "string" ? { platform: o.platform } : {}),
+    ...(typeof o.arch === "string" ? { arch: o.arch } : {}),
+    ...(typeof o.kind === "string" ? { kind: o.kind } : {}),
   };
 
   // ── 자기 검증 ────────────────────────────────────────────────────────────
@@ -224,12 +232,15 @@ export function fsVerifyIo(root: string): VerifyIo {
  * 해시를 자기 안에 쓸 수는 없다(닭이 먼저냐 달걀이 먼저냐). 그래서 트리 해시에서
  * 제외하고, 여기서도 목록의 "남는 파일" 에서 제외한다 — 그렇지 않으면 **정상 배포물이
  * 항상 실패**하고, 그 실패를 고치려면 검증을 느슨하게 만들어야 한다.
+ *
+ * `scope` 는 "남는 파일" 을 셀 범위다. 설치 루트(패키지 루트)에는 사용자 상태가
+ * 함께 있을 수 있으므로 설치본 검증은 소유 디렉터리 안만 센다. 없으면 전부 센다.
  */
 export function verifyTree(
   manifest: ReleaseManifest,
   io: VerifyIo,
   rootForList = "",
-  opts: { ignore?: string[] } = {}
+  opts: { ignore?: string[]; scope?: (rel: string) => boolean } = {}
 ): VerifyResult {
   const ignore = new Set((opts.ignore ?? []).map(normRel));
   const missing: string[] = [];
@@ -252,7 +263,8 @@ export function verifyTree(
 
   const declared = new Set(manifest.files.map((f) => f.path));
   const present = io.list(rootForList);
-  const extra = present.filter((p) => !ignore.has(normRel(p)) && !declared.has(normRel(p)));
+  const inScope = opts.scope ?? (() => true);
+  const extra = present.filter((p) => inScope(normRel(p)) && !ignore.has(normRel(p)) && !declared.has(normRel(p)));
 
   const ok = missing.length === 0 && mismatched.length === 0 && extra.length === 0;
   const parts: string[] = [`${checked}/${manifest.files.length}개 확인`];

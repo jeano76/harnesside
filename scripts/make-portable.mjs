@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 /**
- * 포터블 압축 만들기 — npm이 안 되는 머신용 설치물.
+ * 포터블 압축 만들기 — **유일한 배포물**. 설치도 셀프업데이트도 이 zip 을 쓴다.
  *
  *   node scripts/make-portable.mjs                 # release/harnesside-portable-<plat>-<arch>.zip
  *   node scripts/make-portable.mjs --check         # 만들지 않고 포함 목록만
  *   node scripts/make-portable.mjs --require-clean # 더티면 실패
+ *   node scripts/make-portable.mjs --verify-repro  # 두 번 만들어 바이트가 같은지 (재현성)
+ *
+ * 산출물 세 개:
+ *   <zip>                 배포물. 안에 `harnesside/portable-manifest.json`(파일 목록·해시)
+ *   <zip>.manifest.json   위 매니페스트 + **zip 자신의 해시**(`asset`). 셀프업데이트가
+ *                         이것으로 zip 을 대조한다 — zip 안의 매니페스트는 자기 zip 의
+ *                         해시를 담을 수 없다(닭과 달걀).
+ *   <zip>.SHA256SUMS      `sha256sum -c` 용 (zip + 외부 매니페스트)
  *
  * ── 왜 zip에 node_modules가 통째로 들어가나 ──────────────────────────────
  * 받는 쪽에는 npm이 없을 수 있다. `npm install`을 다시 돌릴 수 없으므로,
@@ -28,7 +36,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
 const TOP = "harnesside";
-const zipName = `harnesside-portable-${process.platform}-${process.arch}.zip`;
+/** `process.platform`-`process.arch` 그대로 — `updateService.portableAssetName` 과 같은 규칙. */
+export function portableZipName(platform = process.platform, arch = process.arch) {
+  return `harnesside-portable-${platform}-${arch}.zip`;
+}
+const zipName = portableZipName();
 
 /** zip에 넣지 않는 것. */
 const EXCLUDE = [
@@ -117,6 +129,7 @@ function collectFiles() {
     ["scripts/Install-Portable.ps1", "Install-Portable.ps1", 0o644],
     ["scripts/harnesside.cmd", "harnesside.cmd", 0o644],
     ["scripts/harnesside.sh", "harnesside.sh", 0o755],
+    ["scripts/install.sh", "install.sh", 0o755],
   ];
   for (const [src, dest, mode] of launchers) {
     const abs = join(root, src);
@@ -158,7 +171,7 @@ function crc32(buf) {
 const DOS_TIME = ((0 << 11) | (0 << 5) | 0) | ((1 << 21) | (1 << 16));
 const DOS_DATE = ((2020 - 1980) << 9) | (1 << 5) | 1;
 
-function packZip(entries) {
+export function packZip(entries) {
   const chunks = [];
   const central = [];
   let offset = 0;
@@ -256,36 +269,71 @@ export function sha256(buf) {
   return createHash("sha256").update(buf).digest("hex");
 }
 
-export function build() {
-  const files = collectFiles();
+/** 경로순 `path sha` 줄로 만든 트리 해시 — `src/server/update/manifest.ts` 의 `computeTreeSha` 와 같은 규칙. */
+export function treeSha(files) {
+  return sha256(files.map((f) => `${f.path} ${f.sha256}`).sort().join("\n") + "\n");
+}
+
+/** 빌드 신원 — `gen-build-info.mjs` 가 구운 값. 없으면 null 로 둔다(지어내지 않는다). */
+function readBuild() {
+  try {
+    const bi = JSON.parse(readFileSync(join(root, "dist", "server", "buildInfo.json"), "utf8"));
+    return { version: pkg.version, date: bi.date ?? null, sha: bi.sha ?? null, dirty: typeof bi.dirty === "boolean" ? bi.dirty : null, builtAt: bi.builtAt ?? null };
+  } catch {
+    return { version: pkg.version, date: null, sha: null, dirty: null, builtAt: null };
+  }
+}
+
+/**
+ * 파일 목록 → 배포물 세 개. `verify-selfupdate.mjs` 도 이 함수로 zip 을 만든다 —
+ * 패킹 규칙이 두 벌이면 한쪽이 조용히 달라진다.
+ *
+ * @param files  [{ rel, data: Buffer, mode }]  — `rel` 은 설치 루트 기준 `/` 경로
+ * @param meta   { name, version, platform, arch, node, build }
+ */
+export function packPortable(files, meta) {
   const entries = [];
   const manifestFiles = [];
   for (const f of files) {
-    const data = readFileSync(f.abs);
-    entries.push({ name: `${TOP}/${f.rel}`, data, mode: f.mode || 0o644, crc: crc32(data) });
-    manifestFiles.push({ path: f.rel, sha256: sha256(data), bytes: data.length, mode: f.mode || 0o644 });
+    entries.push({ name: `${TOP}/${f.rel}`, data: f.data, mode: f.mode || 0o644, crc: crc32(f.data) });
+    manifestFiles.push({ path: f.rel, sha256: sha256(f.data), bytes: f.data.length, mode: f.mode || 0o644 });
   }
   manifestFiles.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const manifest = {
     manifestVersion: 1,
     kind: "portable",
-    version: pkg.version,
-    platform: process.platform,
-    arch: process.arch,
-    node: pkg.engines?.node ?? ">=22",
+    version: meta.version,
+    platform: meta.platform,
+    arch: meta.arch,
+    node: meta.node,
+    build: meta.build,
     files: manifestFiles,
-    treeSha256: sha256(manifestFiles.map((f) => `${f.path} ${f.sha256}`).sort().join("\n") + "\n"),
+    treeSha256: treeSha(manifestFiles),
   };
   const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2) + "\n", "utf8");
   entries.push({ name: `${TOP}/portable-manifest.json`, data: manifestBytes, mode: 0o644, crc: crc32(manifestBytes) });
   entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const asset = packZip(entries);
-  const sums = [`${sha256(asset)}  ${zipName}`, `${sha256(manifestBytes)}  portable-manifest.json`].join("\n") + "\n";
   const problems = verifyZip(asset, entries);
   if (problems.length) {
     throw new Error(`만든 zip이 자기 목록과 맞지 않습니다:\n  · ${problems.join("\n  · ")}`);
   }
-  return { asset, manifest: manifestBytes, sums: Buffer.from(sums, "utf8"), stats: { files: entries.length, bytes: asset.length } };
+  const external = { ...manifest, asset: { name: meta.name, sha256: sha256(asset), bytes: asset.length } };
+  const externalBytes = Buffer.from(JSON.stringify(external, null, 2) + "\n", "utf8");
+  const sums = [`${sha256(asset)}  ${meta.name}`, `${sha256(externalBytes)}  ${meta.name}.manifest.json`].join("\n") + "\n";
+  return { asset, manifest: manifestBytes, externalManifest: externalBytes, sums: Buffer.from(sums, "utf8"), stats: { files: entries.length, bytes: asset.length } };
+}
+
+export function build() {
+  const files = collectFiles().map((f) => ({ rel: f.rel, data: readFileSync(f.abs), mode: f.mode || 0o644 }));
+  return packPortable(files, {
+    name: zipName,
+    version: pkg.version,
+    platform: process.platform,
+    arch: process.arch,
+    node: pkg.engines?.node ?? ">=22",
+    build: readBuild(),
+  });
 }
 
 function gitDirty() {
@@ -314,6 +362,15 @@ async function cli(argv) {
       process.exit(1);
     }
   }
+  if (has("--verify-repro")) {
+    // 재현성: 같은 트리에서 두 번 만들어 **바이트가 같아야** 한다. 다르면 "이 해시가
+    // 이 커밋에 대응한다" 는 말이 거짓이 된다.
+    const a = build();
+    const b = build();
+    const same = sha256(a.asset) === sha256(b.asset) && sha256(a.externalManifest) === sha256(b.externalManifest);
+    console.log(`${same ? "재현 가능" : "재현 불가"} — ${zipName} ${sha256(a.asset).slice(0, 12)}… / ${sha256(b.asset).slice(0, 12)}…`);
+    process.exit(same ? 0 : 1);
+  }
   if (has("--check")) {
     const files = collectFiles();
     const bytes = files.reduce((a, f) => a + statSync(f.abs).size, 0);
@@ -324,7 +381,7 @@ async function cli(argv) {
   const outDir = join(root, "release");
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, zipName), out.asset);
-  writeFileSync(join(outDir, `${zipName}.manifest.json`), out.manifest);
+  writeFileSync(join(outDir, `${zipName}.manifest.json`), out.externalManifest);
   writeFileSync(join(outDir, `${zipName}.SHA256SUMS`), out.sums);
   console.log(`포터블 생성 — ${out.stats.files}개 파일 · ${(out.stats.bytes / 1024 / 1024).toFixed(1)} MiB · ${zipName}`);
   console.log(`  확인: certutil -hashfile ${zipName} SHA256  (Windows) / sha256sum -c ${zipName}.SHA256SUMS`);

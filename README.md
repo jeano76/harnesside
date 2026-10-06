@@ -687,193 +687,121 @@ the Hermes loop: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Getting started
 
-> **npm 에는 아직 게시되지 않았습니다** (2026-10-05 실측: `npm view harnesside` → `404`).
-> `npm install -g harnesside` 는 **오늘 실패합니다.** 오늘 실제로 되는 경로는
-> **체크아웃에서 빌드해서 전역 설치**하는 것입니다. 릴리스 자산(GitHub Releases)은
-> 아래 [Release](#release) 에 있고, npm 게시는 그 뒤의 일입니다.
+**The only install path is the portable zip for your platform.** There is no npm
+package and no build-from-checkout install: one artifact per `<platform>-<arch>`,
+used both for installing and for self-update.
 
-```bash
-git clone https://github.com/jeano76/harnesside && cd harnesside
-npm ci
-npm run install:g        # 빌드 → 전역 설치 → **설치본 검사**
-harnesside
-```
+1. Download `harnesside-portable-<platform>-<arch>.zip` from
+   [Releases](https://github.com/jeano76/harnesside/releases) — the name is
+   Node's `process.platform`-`process.arch` (e.g. `linux-x64`, `win32-x64`,
+   `darwin-arm64`). Another platform's zip will not run: it carries native
+   modules (`node-pty`) built for that platform.
+2. Unzip it anywhere. You need **Node 22+** only — npm is not used.
+3. Run the installer from the unzipped folder:
+   - Windows: right-click `Install-Portable.ps1` → "Run with PowerShell"
+   - Linux · macOS: `sh install.sh` (works from bash, zsh, dash and fish)
+4. Start it: `./harnesside.sh` (or `harnesside.cmd`, or the desktop shortcut).
 
-`npm run install:g` 는 설치 후 아래를 확인하고 **하나라도 어긋나면 실패**합니다
-(`scripts/install-global.mjs`).
+What the installer does, in order — every step is run, not assumed:
 
-- `bin` 이 심볼릭 링크로 만들어졌고 **패키지 안**을 가리키는가
-- 셀프업데이트의 대상 디렉터리(`installRoot`)가 npm 전역 prefix 전체가 **아닌가**
-- 설치된 `dist` 가 **방금 만든 것**과 같은가 · 빌드 신원이 실렸는가 · `--version` 이 도는가
+| Step | What happens |
+|---|---|
+| check | Node ≥ 22 · the zip is for **this** platform · every file against `portable-manifest.json` |
+| `setup` | detect hardware → fetch a llama-server build that **starts** on this machine (CUDA → ROCm → Vulkan → CPU, or Metal) → pick and download the model → predicted tuning |
+| `measure` | **measure on this machine**: start the engine, run a fixed prompt, read prefill/generation tok/s and free memory for a few settings, keep the fastest |
+| shortcut | desktop shortcut |
 
-`npm install -g .` 를 **직접 쓰면 최신 코드가 아닙니다.** 이 패키지의
-`prepublishOnly` 는 `npm publish` 전용이라 로컬 폴더 전역 설치 경로에서는 돌지 않고,
-**옛 `dist/` 가 그대로 전역에 남습니다** — 그 옛 코드가 `--version` 으로 정상 동작합니다.
-(계측: 세 훅을 심은 실험 패키지에서 `npm install -g .` 는 **`prepare` 만** 실행 —
-`npm pack` 는 `prepack`+`prepare`. `prepare` 를 붙이면 저장소 안의 `npm ci` 에서
-타입 오류가 **설치 실패**로 보이므로 붙이지 않았습니다.)
+`measure` writes what it measured to `.harnesside/state/measurements.json` and
+`~/.harnesside/machine-profile.json`, and later launches reuse the measured value
+when the engine, model, context and offload are the same. Options:
+`--measure=full` (longer, more candidates), `--no-measure`, `--models-dir=DIR`,
+`--no-shortcut`. Re-measure any time with `harnesside measure`.
 
-On first launch `harnesside` provisions whatever is missing — llama.cpp, a model,
-the ports — and says which step it is on. When it cannot do something it says
-**which step, what failed, why, and what to do next** rather than opening a blank
-window. `harnesside doctor` runs the same checks read-only, before anything is
-changed, and reports what it could not measure as **unmeasured** rather than as
-zero or false.
+`harnesside doctor` runs the same checks read-only. Anything it could not
+measure is reported as **unmeasured**, not as zero or false.
 
 Per-project state follows your working directory: each project gets its own
-`.harnesside/config.yaml`, `rules/` and `skills/`. The global command is only the
-entry point — per-project state stays in that project.
+`.harnesside/config.yaml`, `rules/` and `skills/`.
 
-To uninstall: `npm rm -g harnesside` (from anywhere).
+To uninstall: delete the folder (and `~/.harnesside` for models, engines and the
+machine profile).
 
 ### Requirements
 
-| | 요구 | 확인 방법 |
+| | Required | Check |
 |---|---|---|
-| Node | **22 이상** (`engines`) | `node -v` |
-| 브라우저 | Chrome 또는 Chromium | `google-chrome --version` |
-| 터미널 | tmux | `tmux -V` |
-| OS | Linux·macOS·**Windows 10/11 (배포 경로)** | `harnesside doctor` |
-| GPU | 선택 — 없으면 CPU 로 돈다. NVIDIA면 **CUDA 사전 빌드 자동** | `harnesside doctor` 의 VRAM 여유 |
-| llama.cpp · 모델 | **자동 준비** (첫 실행: 사전 빌드 → Vulkan → CPU → 소스 빌드) | `harnesside doctor` |
+| Node | **22+** | `node -v` |
+| Browser | Chrome or Chromium | `harnesside doctor` |
+| GPU | optional — CPU works | `harnesside doctor` |
+| llama.cpp · model | **installed by the installer** | `harnesside doctor` |
 
-- **Windows 배포**: `npm run install:g` → `harnesside doctor` → `harnesside` 실행이면
-  모델·서버·CUDA가 자동 준비됩니다. CUDA는 드라이버 버전에 맞는
-  `win-cuda-X.Y` 사전 빌드 + `cudart` 번들을 받고, 실행 검증(`--version` +
-  `--list-devices` + 모델 호환성) 후 사용합니다. 빌드는 최후 수단이며
-  VS Build Tools + CMake가 필요합니다 (`winget` 안내).
-  VRAM 예산은 Windows 예약분(1280 MiB)을 빼고 `-ngl 999` + `--n-cpu-moe` +
-  KV `q8_0/q4_0` + `-c` 자동 계산으로 최적화됩니다.
-  제한: `tmux` 기반 AI CLI 탭·일부 PTY 기능은 Windows에서 미지원이며,
-  모델·서버·튜닝 경로는 지원됩니다.
-
-- **Node 20 은 측정했고 동작하지 않습니다** — `node-pty` 가 종료 시 SIGSEGV 로 죽고,
-  Node 22 전에는 전역 `WebSocket` 가 없습니다. 그래서 `engines` 를 `>=18` → `>=22` 로
-  좁혔습니다.
-- Chrome·Chromium 은 CDP(`9222`)로 붙습니다. 대체 렌더러는 없습니다 — 창이 뜨지 않으면
-  IDE 도 뜨지 않습니다.
-- **자동 준비되는 것**: llama.cpp 빌드, 모델 다운로드, 포트 계획.
-  **자동 준비 안 되는 것**: Node, 브라우저, tmux.
+Platforms and engines are tracked in
+[`docs/PLATFORM_MATRIX.md`](docs/PLATFORM_MATRIX.md) — which zip exists, which
+engine each GPU gets, and what has actually been measured.
 
 <details>
-<summary>구동환경에서 확인하지 못한 것 (측정 안 함)</summary>
-
-- **macOS 실기·Windows 실기 전체 부팅은 미측정**입니다. CI 러너는 Linux 이고,
-  로컬에서도 Linux 만 돌렸습니다. Windows 대응은 코드 경로(사전 빌드·CUDA 선택·
-  실행 검증·튜닝·셀프업데이트 권한 처리)를 합성·유닛 수준에서만 검증했습니다.
-  실기에서 `harnesside doctor` 결과를 붙여 주시면 반영합니다.
-- GPU 실부하, 여러 동시 모델, 디스크 용량 경계, Wayland/X11 분기 같은 것은
-  여기서 검증하지 않았습니다. 전체 목록은
-  [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
-
-</details>
-
-<details>
-<summary>개발용 — 체크아웃에서 직접 실행</summary>
+<summary>Development — running from a checkout (not an install path)</summary>
 
 ```bash
-git clone https://github.com/jeano76/harnesside && cd harnesside
 npm ci
-npm run dev          # 서버 :7317 + Vite :5317, 둘 다 watch
-npm test             # 유닛테스트 (node:test, tsx로 구동)
+npm run dev          # server :7317 + Vite :5317, both watching
+npm test
 npm run typecheck
-npm run build        # dist/ 를 실행하려면 빌드가 먼저다
-node dist/server/index.js     # 전역 설치가 실행하는 것과 같은 바이너리
+npm run portable     # build + release/harnesside-portable-<platform>-<arch>.zip
 ```
-
-`npm link` 도 동작하지만 문서화된 설치 경로가 아닙니다 — 체크아웃을 가리키는
-심볼릭 링크로 남으므로 나중에 `git checkout` 을 하면 전역 `harnesside` 가 조용히
-다른 코드를 실행하게 됩니다.
 
 </details>
 
 > ## 시작하기
 >
-> > **npm 에는 아직 게시되지 않았습니다** (2026-10-05 실측: `npm view harnesside` → `404`).
-> > `npm install -g harnesside` 는 **오늘 실패합니다.** 오늘 실제로 되는 경로는
-> > **체크아웃에서 빌드해서 전역 설치**하는 것입니다.
+> **설치 경로는 자기 플랫폼의 포터블 zip 하나뿐입니다.** npm 패키지도, 체크아웃 빌드 설치도
+> 없습니다. `<platform>-<arch>` 마다 zip 이 하나 있고, 설치와 셀프업데이트가 같은 zip 을 씁니다.
 >
-> ```bash
-> git clone https://github.com/jeano76/harnesside && cd harnesside
-> npm ci
-> npm run install:g        # 빌드 → 전역 설치 → **설치본 검사**
-> harnesside
-> ```
+> 1. [Releases](https://github.com/jeano76/harnesside/releases) 에서
+>    `harnesside-portable-<platform>-<arch>.zip` 을 받는다 — 이름은 Node 의
+>    `process.platform`-`process.arch` 그대로다(`linux-x64`, `win32-x64`, `darwin-arm64` …).
+>    다른 플랫폼 zip 은 네이티브 모듈(`node-pty`)이 맞지 않아 돌지 않는다.
+> 2. 아무 곳에나 압축을 푼다. **Node 22 이상**만 있으면 된다 (npm 불필요).
+> 3. 푼 폴더에서 설치 스크립트를 실행한다:
+>    - Windows: `Install-Portable.ps1` 우클릭 → "PowerShell에서 실행"
+>    - Linux · macOS: `sh install.sh` (bash · zsh · dash · fish 어디서든)
+> 4. 실행: `./harnesside.sh` (또는 `harnesside.cmd`, 바탕화면 바로가기).
 >
-> `npm run install:g` 는 설치 **뒤에** 다음을 확인하고 하나라도 어긋나면 **실패**합니다
-> (`scripts/install-global.mjs`).
+> 설치 스크립트가 하는 일 — 순서대로, 가정하지 않고 **실행해서** 확인한다:
 >
-> - `bin` 이 심볼릭 링크로 만들어졌고 **패키지 안**을 가리키는가
-> - 셀프업데이트의 대상 디렉터리(`installRoot`)가 npm 전역 prefix 전체가 **아닌가**
-> - 설치된 `dist` 가 **방금 만든 것**과 같은가 · 빌드 신원이 실렸는가 · `--version` 이 도는가
+> | 단계 | 내용 |
+> |---|---|
+> | 점검 | Node ≥ 22 · zip 이 **이 머신** 플랫폼용인가 · `portable-manifest.json` 으로 전 파일 대조 |
+> | `setup` | 하드웨어 감지 → 이 머신에서 **실제로 뜨는** llama-server 확보 (CUDA → ROCm → Vulkan → CPU, 또는 Metal) → 모델 선택·다운로드 → 예측 튜닝 |
+> | `measure` | **이 머신에서 실측**: 엔진을 띄워 고정 프롬프트로 프리필·생성 tok/s 와 남은 메모리를 몇 가지 설정에서 재고, 가장 빠른 설정을 채택 |
+> | 바로가기 | 바탕화면 바로가기 |
 >
-> `npm install -g .` 를 **직접 쓰면 최신 코드가 아닙니다.** 이 패키지의
-> `prepublishOnly` 는 `npm publish` 전용이라 로컬 폴더 전역 설치 경로에서는 돌지 않고,
-> **옛 `dist/` 가 그대로 전역에 남습니다** — 그 옛 코드가 `--version` 으로 정상 동작합니다.
-> (계측: 세 훅을 심은 실험 패키지에서 `npm install -g .` 는 **`prepare` 만** 실행 —
-> `npm pack` 는 `prepack`+`prepare`. `prepare` 를 붙이면 저장소 안의 `npm ci` 에서
-> 타입 오류가 **설치 실패**로 보이므로 붙이지 않았습니다.)
+> `measure` 는 잰 값을 `.harnesside/state/measurements.json` 과
+> `~/.harnesside/machine-profile.json` 에 남기고, 이후 기동은 엔진·모델·컨텍스트·오프로드가
+> 같을 때 그 실측값을 쓴다. 옵션: `--measure=full`(후보 더 많이, 더 오래) · `--no-measure` ·
+> `--models-dir=DIR` · `--no-shortcut`. 언제든 `harnesside measure` 로 다시 잴 수 있다.
 >
-> 첫 실행에 없는 것(llama.cpp · 모델 · 포트)을 자동으로 준비하고 **어느 단계인지**를
-> 말합니다. 준비할 수 없는 것은 빈 창으로 두지 않고
-> **어느 단계에서 · 무엇이 · 왜 · 다음 무엇을** 말합니다.
-> `harnesside doctor` 는 같은 판정을 **아무것도 바꾸지 않고** 먼저 돌려본다.
+> `harnesside doctor` 는 같은 판정을 **아무것도 바꾸지 않고** 보여준다. 못 잰 것은
+> 0 이나 false 가 아니라 **미확인**으로 적는다.
 >
-> 프로젝트별 상태는 **작업 디렉토리**를 따라갑니다 — 각 프로젝트가 각자의
-> `.harnesside/config.yaml` · `rules/` · `skills/` 를 갖습니다. 전역 명령은 진입점일
-> 뿐이고 상태는 해당 프로젝트에 남습니다.
+> 프로젝트별 상태는 **작업 디렉토리**를 따라간다 — 프로젝트마다 `.harnesside/config.yaml` ·
+> `rules/` · `skills/` 를 갖는다.
 >
-> 제거: 아무 위치에서나 `npm rm -g harnesside`.
+> 제거: 폴더를 지운다 (모델·엔진·머신 프로필까지 지우려면 `~/.harnesside` 도).
 >
 > ### 요구 환경
 >
 > | | 요구 | 확인 |
 > |---|---|---|
-> | Node | **22 이상** (`engines`) | `node -v` |
-> | 브라우저 | Chrome 또는 Chromium | `google-chrome --version` |
-> | 터미널 | tmux | `tmux -V` |
-> | OS | **POSIX** (Linux·macOS) | 아래 "미측정" 참조 |
-> | GPU | 선택 — 없으면 CPU 로 돈다 | `harnesside doctor` 의 VRAM 여유 |
-> | llama.cpp · 모델 | **자동 준비** (첫 실행) | `harnesside doctor` |
+> | Node | **22 이상** | `node -v` |
+> | 브라우저 | Chrome 또는 Chromium | `harnesside doctor` |
+> | GPU | 선택 — 없으면 CPU 로 돈다 | `harnesside doctor` |
+> | llama.cpp · 모델 | **설치 스크립트가 준비** | `harnesside doctor` |
 >
 > - **Node 20 은 측정했고 동작하지 않습니다** — `node-pty` 가 종료 시 SIGSEGV 로 죽고,
->   Node 22 전에는 전역 `WebSocket` 가 없습니다. 그래서 `engines` 를 `>=18` → `>=22` 로
->   좁혔습니다.
-> - Chrome·Chromium 은 CDP(`9222`)로 붙습니다. 대체 렌더러는 없습니다 — 창이 뜨지 않으면
->   IDE 도 뜨지 않습니다.
-> - **자동 준비되는 것**: llama.cpp 빌드, 모델 다운로드, 포트 계획.
->   **자동 준비 안 되는 것**: Node, 브라우저, tmux.
->
-> <details>
-> <summary>구동환경에서 확인하지 못한 것 (측정 안 함)</summary>
->
-> - **macOS · Windows 는 미측정**입니다. CI 러너는 Linux 이고, 로컬에서도 Linux 만
->   돌렸습니다. 특히 셀프업데이트의 교체가 `chmod 0o755` 를 쓰므로 **POSIX 전용**입니다
->   — Windows 에서 이 경로는 동작하지 않습니다.
-> - GPU 실부하, 여러 동시 모델, 디스크 용량 경계, Wayland/X11 분기 같은 것은
->   여기서 검증하지 않았습니다. 전체 목록은
->   [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
->
-> </details>
->
-> <details>
-> <summary>개발용 — 체크아웃에서 직접 실행</summary>
->
-> ```bash
-> git clone https://github.com/jeano76/harnesside && cd harnesside
-> npm ci
-> npm run dev          # 서버 :7317 + Vite :5317, 둘 다 watch
-> npm test             # 유닛테스트 (node:test, tsx로 구동)
-> npm run typecheck
-> npm run build        # dist/ 를 실행하려면 빌드가 먼저다
-> node dist/server/index.js     # 전역 설치가 실행하는 것과 같은 바이너리
-> ```
->
-> `npm link` 도 동작하지만 문서화된 설치 경로가 아닙니다 — 체크아웃을 가리키는
-> 심볼릭 링크로 남으므로 나중에 `git checkout` 을 하면 전역 `harnesside` 가 조용히
-> 다른 코드를 실행하게 됩니다.
->
-> </details>
+>   Node 22 전에는 전역 `WebSocket` 가 없습니다.
+> - 플랫폼·엔진 지원 상태(어느 zip 이 있는지, GPU 별로 어떤 엔진을 받는지, 무엇을 실제로 쟀는지)는
+>   [`docs/PLATFORM_MATRIX.md`](docs/PLATFORM_MATRIX.md) 가 정본이다.
 
 ## Built-in skills
 
@@ -921,110 +849,64 @@ knew they existed, nothing did.
 빌드 신원       2026.10.05-08c4467  ← dist/server/buildInfo.json. 화면·로그·검증이 본다.
 ```
 
-의 설계 배경과 실측 근거는 **[PROMPT_RELEASE_SELFUPDATE.md](PROMPT_RELEASE_SELFUPDATE.md)**.
+설계 배경은 [PROMPT_RELEASE_SELFUPDATE.md](PROMPT_RELEASE_SELFUPDATE.md),
+플랫폼·엔진 확장 계획은 [PROMPT_PLATFORM_ENGINES.md](PROMPT_PLATFORM_ENGINES.md).
 
-### 만들기
-
-### npm 없이 설치 (포터블 압축)
-
-npm 레지스트리가 막혔거나 npm 자체가 고장난 머신용. 받는 쪽에 npm이 없어도 된다
-(**Node 22만 있으면 됨** — 네트워크는 모델·서버를 받는 데 필요).
+### 배포물 — 포터블 zip 하나
 
 ```bash
-npm run portable           # release/harnesside-portable-<플랫폼>-<아키>.zip 생성
+npm run portable                              # build + release/harnesside-portable-<platform>-<arch>.zip
+node scripts/make-portable.mjs --verify-repro # 두 번 만들어 바이트가 같은지 (재현성)
+cd release && sha256sum -c harnesside-portable-*.zip.SHA256SUMS
 ```
-
-받는 쪽 (Windows 예):
-
-```
-1. zip을 받아 압축 풀기 (탐색기 우클릭 → 모두 추출)
-2. Install-Portable.ps1 우클릭 → "PowerShell에서 실행"
-   (또는: node install-portable.mjs)
-```
-
-설치 과정이 하는 일 — 전부 npm 없이:
-
-1. Node 22 확인 + `portable-manifest.json`으로 2600여 파일 해시 대조
-2. `node dist/server/index.js setup` 실행 — **모델·llama.cpp 서버·튜닝 확보**
-   (CUDA 사전 빌드 → Vulkan → CPU → 소스 빌드 순, 실행 검증 후 사용.
-   `-ngl`·컨텍스트·스레드·KV 양자화 자동 계산, `.harnesside/config.yaml` 기록)
-3. **바탕화면 바로가기 생성** (`HarnessIDE.lnk` → 바로 더블클릭 실행)
-
-주의: 압축은 **플랫폼별**이다. Linux에서 만든 zip을 Windows에 풀면 네이티브 모듈
-(`node-pty`)이 맞지 않는다 — 파일명의 plat-arch를 확인하라. 모델 파일(수 GB)은
-압축에 들지 않고 설치 시 받는다.
-
-### 로컬에 전역 설치
-
-```bash
-npm run install:g        # 빌드 → 전역 설치 → **설치본 검사**
-```
-
-`npm install -g .` 를 **직접 쓰면 최신 코드가 아니다.** 이 패키지의 `prepublishOnly` 는
-`npm publish` 전용이라 로컬 폴더 전역 설치 경로에서는 돌지 않으므로, **옛 `dist/` 가 그대로
-전역에 남고** 그 옛 코드가 `--version` 으로 정상 동작한다. 계측: 별도 실험 패키지에 세 훅을
-심어 확인했다 — `npm install -g .` 는 **`prepare` 만** 실행한다(`npm pack` 는 `prepack`+`prepare`).
-
-`install:g` 는 전역 설치 **뒤에** 다음을 확인하고 하나라도 어긋나면 **실패**한다.
-
-- `bin` 이 심볼릭 링크로 만들어졌는가, 그리고 **패키지 안**을 가리키는가
-- `installRoot` 가 npm 전역 prefix 전체가 **아닌가**
-  (전역 prefix를 가리키면 셀프업데이트가 그 폴더를 통째로 교체하려 한다 — 실측 118,347 파일)
-- 설치된 `dist` 가 **방금 만든 것**과 같은가 · 빌드 신원이 실렸는가 · `--version` 이 도는가
-
-설치된 `dist` 에는 `manifest.json` 이 **없다** — 셀프업데이트로 온 것이 아니라 npm 이 설치했으므로.
-그래서 화면은 설치 해시를 "검증 안 됨" 으로 말한다. 0 이나 가짜 해시로 메우지 않는다.
-
----
-
-```bash
-npm run build            # tsc + vite + 웹 자산 검사 + **빌드 신원 주입**
-npm run release:repro    # 배포물을 두 번 만들어 해시가 같은지 확인 (재현성)
-npm run release          # release/ 에 배포물 생성 (더티 트리면 실패)
-cd release && sha256sum -c SHA256SUMS
-```
-
-`release/` 에 세 가지가 나옵니다.
 
 | 파일 | 내용 |
 |---|---|
-| `harnesside-dist.tar.gz` | `dist/` 트리 |
-| `manifest.json` | 파일 목록 + 각 파일 sha256 + 트리 해시 + 빌드 신원 |
-| `SHA256SUMS` | `sha256sum -c` 로 확인하는 텍스트 |
+| `harnesside-portable-<p>-<a>.zip` | 설치 폴더 전체: `dist/` · 프로덕션 `node_modules/` · 런처 · 설치 스크립트 · `portable-manifest.json` |
+| `….zip.manifest.json` | 위 매니페스트 + **zip 자신의 sha256** — zip 안의 매니페스트는 자기 zip 해시를 담을 수 없다 |
+| `….zip.SHA256SUMS` | `sha256sum -c` 용 |
 
-tar 는 **재현 가능**하게 씁니다(정렬된 순서 · mtime 0 · uid/gid 0 · gzip 타임스탬프 0).
-그래야 "이 해시가 이 커밋에 대응한다"는 말이 사실입니다. GNU tar 전용 플래그에 의존하지
-않고 헤더를 직접 쓰기 때문에 macOS·Windows 에서도 같은 값이 나옵니다.
+zip 은 **재현 가능**하게 씁니다(정렬된 순서 · 고정 시각 · 외부 zip 바이너리 없음).
+`node_modules` 에 네이티브 모듈이 있으므로 zip 은 **그 플랫폼 러너에서** 만듭니다.
 
 ### 게시
 
 `v*` 태그를 push 하면 `.github/workflows/release.yml` 이 돕니다. 선행 게이트
 (typecheck · 단위 테스트 · 정적 검사 · 커버리지 하한선 · **재현성** · **셀프업데이트
-실측**)를 통과해야 배포물이 만들어지고, GitHub Releases 에 붙습니다. **분기 푸시로는
-만들어지지 않습니다.**
+실측**)를 통과해야 플랫폼별 zip 을 만듭니다:
+
+| 플랫폼 | 러너 | 필수 |
+|---|---|---|
+| `linux-x64` | `ubuntu-latest` | 예 |
+| `win32-x64` | `windows-latest` | 예 |
+| `linux-arm64` | `ubuntu-24.04-arm` | 아니오 |
+| `win32-arm64` | `windows-11-arm` | 아니오 |
+| `darwin-arm64` | `macos-15` | 아니오 |
+| `darwin-x64` | `macos-15-intel` | 아니오 |
+
+각 러너는 zip 을 만든 뒤 **풀어서** 설치 점검 · `node-pty` 로드 · `--version` · `doctor` 를
+돌립니다. 필수 플랫폼이 실패하면 게시하지 않고, 선택 플랫폼이 실패하면 릴리스 노트에
+**실패했다고** 적고 그 zip 을 싣지 않습니다. **분기 푸시로는 만들어지지 않습니다.**
 
 ### 업데이트가 실제로 무엇을 바꾸나
 
-- **교체는 `dist/` 트리 전체**입니다. 진입 파일(`server/index.js`) 하나만 갈아끼우면
-  나머지가 옛 버전인 채로 남아 **부팅은 성공하고 옛 로직으로 돕니다.** 그래서
-  검증도 교체도 **트리 단위**로 합니다 — 해시뿐 아니라 **파일 목록**까지 대조합니다.
-- **검증 전에는 어떤 파일도 덮어쓰지 않습니다.** 매니페스트 수신 → 아카이브 수신 →
-  해시 대조 → 풀기 → 목록 대조, 를 전부 통과한 것만 슬롯으로 갑니다.
-- **되돌릴 곳(슬롯)** 은 트리 단위로 최근 3개를 보존합니다. 슬롯과 적용할 트리는
-  **경로가 다릅니다** — 같은 자리에 두면 슬롯을 만들 때 검증된 새 트리를 덮어써서
-  "성공했지만 아무것도 바뀌지 않은" 상태가 됩니다(실측).
-- **수동 실행만** 합니다. 부팅 시 자동 확인·자동 적용은 없습니다.
-- **자동 롤백은 없습니다.** 이 서버는 자기 자신을 재시작할 수 없습니다. 부팅이
-  끝나면 마커를 소비해 적용을 확인하고, 확인되지 않으면 다음 실행이
-  "업데이트 미확인" 으로 알리며 슬롯 경로를 남깁니다.
+- 자기 `<platform>-<arch>` zip 만 받습니다. 다른 플랫폼 zip 이나, 이름은 맞지만 매니페스트가
+  다른 플랫폼을 선언한 zip 은 **받기 전에** 거부합니다.
+- **교체는 설치 폴더의 `dist/` 와 `node_modules/` 전체**입니다. 의존 모듈도 새 버전과 함께
+  옵니다(예전 tar.gz 는 `dist/` 만 바꿨습니다). 새 트리에 없는 옛 파일은 이 두 폴더 안에서 정리합니다.
+- 설치 폴더 안의 **사용자 상태(`.harnesside/`)와 사용자 파일은 건드리지 않습니다.**
+  롤백 슬롯도 배포물 범위만 담습니다.
+- **검증 전에는 어떤 파일도 덮어쓰지 않습니다.** 매니페스트 수신 → zip 수신 → 해시 대조 →
+  풀기 → 목록 대조, 를 전부 통과한 것만 슬롯으로 갑니다. 바뀌지 않은 파일은 다시 쓰지 않고,
+  Windows 에서 실행 중이라 잠긴 네이티브 모듈은 비켜 두고 교체합니다.
+- 설치 폴더가 git 체크아웃이면 적용하지 않습니다.
+- **수동 실행만** 합니다. **자동 롤백은 없습니다** — 이 서버는 자기 자신을 재시작할 수
+  없으므로, 부팅이 확인되지 않으면 다음 실행이 "업데이트 미확인" 으로 알리고 슬롯 경로를 남깁니다.
+- 0.3.x 이하(tar.gz 셀프업데이트) 설치본은 새 릴리스를 자동으로 받지 못합니다 — zip 을 받아 새로 설치합니다.
 
-### 반드시 알아야 할 두 가지
+### 반드시 알아야 할 것
 
-**1. 배포물에 `node_modules` 가 없습니다.** `package.json` 의 `files` 는 `dist` 뿐이라
-코드는 갈아끼워지지만 의존성은 그대로입니다. 없는 의존이 있으면 새 버전은 부팅하지
-못합니다. 업데이트는 이 상태를 미리 확인하고 **막습니다** — 조용히 깨뜨리지 않습니다.
-
-**2. 해시는 코드 서명이 아닙니다.** 해시는 *바이트가 손상되지 않았다* 는 사실과,
+**해시는 코드 서명이 아닙니다.** 해시는 *바이트가 손상되지 않았다* 는 사실과,
 *이 바이트가 어느 커밋·어느 시각에 만들어졌다* 는 사실을 증명합니다. **그 바이트가
 신뢰할 수 있는지** 는 증명하지 못합니다. 저장소 계정이 탈취되면 공격자는 자기 코드와
 맞는 해시를 다시 계산할 수 있습니다.
@@ -1035,10 +917,10 @@ tar 는 **재현 가능**하게 씁니다(정렬된 순서 · mtime 0 · uid/gid
 npm run verify:selfupdate
 ```
 
-네트워크 0회로 전체 경로를 굴립니다: 빌드 A 설치 → B 를 받아 검증 → 적용 →
-되돌리고 **바이트 단위로** A 와 같은지, 해시를 한 글자 바꾼 자산이 **아무것도
-교체하지 않는지**, 네트워크가 죽었을 때 "최신" 으로 **말하지 않는지**를 봅니다.
-실패하면 샌드박스를 지우지 않고 남깁니다 — 원인을 봐야 고칠 수 있습니다.
+네트워크 0회로 전체 경로를 실제 포터블 zip 으로 굴립니다: 빌드 A 설치 → B 를 받아 검증 →
+적용(의존 모듈 포함) → 되돌리고 **바이트 단위로** A 와 같은지, 설치 폴더 안 사용자 상태가
+그대로인지, 해시를 한 글자 바꾼 자산과 다른 플랫폼 zip 이 **아무것도 교체하지 않는지**,
+네트워크가 죽었을 때 "최신" 으로 **말하지 않는지**를 봅니다.
 
 
 ## Validation

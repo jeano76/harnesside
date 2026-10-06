@@ -33,8 +33,9 @@ import { computeTreeSha, MANIFEST_VERSION, sha256, type ManifestFile, type Relea
 /**
  * 설치 트리 픽스처 — **진짜 모양**을 따른다.
  *
- *   install/dist/server/index.js   ← selfPath. installRoot() 는 그 두 단계 위 = install/dist
+ *   install/dist/server/index.js   ← selfPath. installRoot() 는 그 세 단계 위 = install (포터블 설치 폴더)
  *   install/dist/agent/loop.js
+ *   install/portable-manifest.json
  *   slots/
  *
  * 예전 픽스처는 `selfPath` 를 sandbox 맨 위에 두었다. 그러면 `installRoot()` 가
@@ -43,13 +44,13 @@ import { computeTreeSha, MANIFEST_VERSION, sha256, type ManifestFile, type Relea
  */
 async function sandbox() {
   const dir = await mkdtemp(join(tmpdir(), "harnesside-apply-"));
-  const root = join(dir, "install", "dist");
-  await mkdir(join(root, "server"), { recursive: true });
-  await mkdir(join(root, "agent"), { recursive: true });
+  const root = join(dir, "install");
+  await mkdir(join(root, "dist", "server"), { recursive: true });
+  await mkdir(join(root, "dist", "agent"), { recursive: true });
   return {
     dir,
     root,
-    selfPath: join(root, "server", "index.js"),
+    selfPath: join(root, "dist", "server", "index.js"),
     cleanup: async () => rm(dir, { recursive: true, force: true }),
   };
 }
@@ -90,20 +91,20 @@ async function manifestOf(root: string, build = { version: "0.1.0", date: "20261
   return {
     manifestVersion: MANIFEST_VERSION,
     build: { ...build, dirty: false, builtAt: 1 },
-    asset: { name: "harnesside-dist.tar.gz", sha256: sha256("archive"), bytes: 10 },
+    asset: { name: "harnesside-portable-linux-x64.zip", sha256: sha256("archive"), bytes: 10 },
     files,
     treeSha256: computeTreeSha(files),
   };
 }
 
 async function writeManifest(root: string, m: ReleaseManifest): Promise<void> {
-  await writeFile(join(root, "manifest.json"), JSON.stringify(m, null, 2) + "\n", "utf8");
+  await writeFile(join(root, "portable-manifest.json"), JSON.stringify(m, null, 2) + "\n", "utf8");
 }
 
 /** 빌드 A 트리. */
 async function buildA(root: string): Promise<ReleaseManifest> {
-  await put(root, "server/index.js", "#!/bin/sh\necho '버전 0.1.0'\n");
-  await put(root, "agent/loop.js", "export const LOOP = 'A';\n", 0o644);
+  await put(root, "dist/server/index.js", "#!/bin/sh\necho '버전 0.1.0'\n");
+  await put(root, "dist/agent/loop.js", "export const LOOP = 'A';\n", 0o644);
   const m = await manifestOf(root);
   await writeManifest(root, m);
   return m;
@@ -113,8 +114,8 @@ async function buildA(root: string): Promise<ReleaseManifest> {
 async function buildB(dir: string): Promise<{ tree: string; manifest: ReleaseManifest }> {
   const tree = join(dir, "staged-b");
   await mkdir(tree, { recursive: true });
-  await put(tree, "server/index.js", "#!/bin/sh\necho '버전 0.2.0'\n");
-  await put(tree, "agent/loop.js", "export const LOOP = 'B';\n", 0o644);
+  await put(tree, "dist/server/index.js", "#!/bin/sh\necho '버전 0.2.0'\n");
+  await put(tree, "dist/agent/loop.js", "export const LOOP = 'B';\n", 0o644);
   const manifest = await manifestOf(tree, { version: "0.2.0", date: "20261006", sha: "abc1234" });
   await writeManifest(tree, manifest);
   return { tree, manifest };
@@ -158,9 +159,9 @@ test("새 버전이 **기동하면 성공** — 그리고 그 트리가 실제�
     // 옛 프로세스가 계속 돈다(실측으로 확인된 순서 버그).
     assert.equal(restarts.length, 1, "교체 후 재기동을 안 했다 — 새 버전이 실행된 적 없다");
     const snap = await snapshot(s.root);
-    assert.equal(snap["server/index.js"], "#!/bin/sh\necho '버전 0.2.0'\n", "진입 파일이 교체되지 않았다");
+    assert.equal(snap["dist/server/index.js"], "#!/bin/sh\necho '버전 0.2.0'\n", "진입 파일이 교체되지 않았다");
     // **이게 핵심**이다 — 나머지 파일도 새 버전이어야 한다.
-    assert.equal(snap["agent/loop.js"], "export const LOOP = 'B';\n", "옛 버전의 파일이 남아 있다 — 조용히 틀어진다");
+    assert.equal(snap["dist/agent/loop.js"], "export const LOOP = 'B';\n", "옛 버전의 파일이 남아 있다 — 조용히 틀어진다");
     // 실행 가능해야 한다 — mode 가 없으면 되돌린 트리가 바로 실패한다.
     assert.equal((await stat(s.selfPath)).mode & 0o111, 0o111, "실행 권한이 없다");
     // 기동한 트리가 **자기 매니페스트로** 검증된다 — "교체한 것"과 "실행된 것"의 일치.
@@ -256,14 +257,14 @@ test("**새 트리에 없는 옛 파일은 정리된다** — 남으면 옛 코�
   try {
     await buildA(s.root);
     // A 에만 있던 파일 — B 에는 없다.
-    await put(s.root, "agent/removed.js", "export const OLD = 1;\n", 0o644);
+    await put(s.root, "dist/agent/removed.js", "export const OLD = 1;\n", 0o644);
     const mA = await manifestOf(s.root);
     await writeManifest(s.root, mA);
     const b = await buildB(s.dir);
     const up = svc(s);
     await up.apply({ stagedTree: b.tree, probeHello: async () => true, restart: async () => {} });
     const snap = await snapshot(s.root);
-    assert.equal("agent/removed.js" in snap, false, "새 트리에 없는 옛 파일이 남아 있다 — import 하면 옛 코드로 돌아간다");
+    assert.equal("dist/agent/removed.js" in snap, false, "새 트리에 없는 옛 파일이 남아 있다 — import 하면 옛 코드로 돌아간다");
     // 남지 않았으므로 **검증도 통과**한다. 목록 대조가 이것을 잡는다.
     const v = await up.verifyInstalled();
     assert.equal(v.ok, true, v.detail);
@@ -284,14 +285,14 @@ test("**절반만 갱신된 트리**(진입 파일만 새 버전)를 검증이 �
   try {
     const b = await buildB(s.dir);
     // B 의 진입 파일과 매니페스트만 가져온다. 나머지(loop.js)는 A 로 남긴다.
-    await put(s.root, "server/index.js", "#!/bin/sh\necho '버전 0.2.0'\n");
-    await writeFile(join(s.root, "manifest.json"), JSON.stringify(b.manifest, null, 2) + "\n", "utf8");
+    await put(s.root, "dist/server/index.js", "#!/bin/sh\necho '버전 0.2.0'\n");
+    await writeFile(join(s.root, "portable-manifest.json"), JSON.stringify(b.manifest, null, 2) + "\n", "utf8");
     // loop.js 는 아직 없다 → 없는 파일로 잡힌다. **내용이 옛 버전인 경우**도 따로 본다.
-    await put(s.root, "agent/loop.js", "export const LOOP = 'A';\n", 0o644);
+    await put(s.root, "dist/agent/loop.js", "export const LOOP = 'A';\n", 0o644);
 
     const v = await svc(s).verifyInstalled();
     assert.equal(v.ok, false, "절반만 갱신된 트리를 통과시켰다 — 부팅은 성공하고 옛 로직으로 도는 상태가 된다");
-    assert.equal(v.mismatched[0]?.path, "agent/loop.js", `어느 파일이 틀렸는지 특정하지 못했다: ${JSON.stringify(v.mismatched)}`);
+    assert.equal(v.mismatched[0]?.path, "dist/agent/loop.js", `어느 파일이 틀렸는지 특정하지 못했다: ${JSON.stringify(v.mismatched)}`);
     // 그리고 **설치 해시는 null 이어야 한다** — 파일 하나의 해시를 대신 보고하지 않는다.
     const local = await svc(s).local();
     assert.equal(local.sha, null, "검증에 실패했는데 설치 해시를 보고했다 — 그것은 아orea 상태라고 부르는 조용한 실패다");
@@ -315,7 +316,7 @@ test("**롤백 슬롯은 트리 단위로** 만들어지고 상한 3개를 지�
     assert.equal(st.slots.length, 3, `슬롯이 ${st.slots.length}개 — 상한을 넘었다`);
     // 슬롯은 **트리**다 — 파일 하나가 아니다.
     const snap = await snapshot(st.slots[st.slots.length - 1]);
-    assert.ok("server/index.js" in snap, `슬롯에 트리가 없다: ${Object.keys(snap).join(", ")}`);
+    assert.ok("dist/server/index.js" in snap, `슬롯에 트리가 없다: ${Object.keys(snap).join(", ")}`);
   } finally {
     await s.cleanup();
   }
@@ -331,8 +332,8 @@ test("rollback() 은 가장 최근 슬롯으로 되돌린다 — **트리 전체
     const r = await up.rollback();
     assert.equal(r.ok, true, r.detail);
     const snap = await snapshot(s.root);
-    assert.equal(snap["server/index.js"], "#!/bin/sh\necho '버전 0.1.0'\n", "슬롯 내용이 돌아오지 않았다");
-    assert.equal(snap["agent/loop.js"], "export const LOOP = 'A';\n", "나머지 파일이 돌아오지 않았다");
+    assert.equal(snap["dist/server/index.js"], "#!/bin/sh\necho '버전 0.1.0'\n", "슬롯 내용이 돌아오지 않았다");
+    assert.equal(snap["dist/agent/loop.js"], "export const LOOP = 'A';\n", "나머지 파일이 돌아오지 않았다");
     assert.equal((await stat(s.selfPath)).mode & 0o111, 0o111, "실행 권한이 없다");
   } finally {
     await s.cleanup();
@@ -376,7 +377,7 @@ test("stageSwap() 은 슬롯을 **먼저** 만들고 교체한다 (순서 고정
     assert.equal(r.ok, true, r.detail);
     assert.ok(r.slot, "슬롯 경로가 없다 — 교체 전에 되돌릴 곳을 만들어야 한다");
     const snap = await snapshot(s.root);
-    assert.equal(snap["server/index.js"], "#!/bin/sh\necho '버전 0.2.0'\n", "교체되지 않았다");
+    assert.equal(snap["dist/server/index.js"], "#!/bin/sh\necho '버전 0.2.0'\n", "교체되지 않았다");
     // 슬롯에는 **교체 전 트리**가 있다.
     assert.deepEqual(await snapshot(r.slot!), before, "슬롯에 교체 전 트리가 없다");
   } finally {

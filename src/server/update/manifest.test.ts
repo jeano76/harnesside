@@ -26,7 +26,7 @@ function manifestText(files: ManifestFile[], over: Record<string, unknown> = {})
   return JSON.stringify({
     manifestVersion: MANIFEST_VERSION,
     build: { version: "0.1.0", date: "20261005", sha: "08c4467", dirty: false, builtAt: 1 },
-    asset: { name: "harnesside-dist.tar.gz", sha256: sha256("archive"), bytes: 10 },
+    asset: { name: "harnesside-portable-linux-x64.zip", sha256: sha256("archive"), bytes: 10 },
     files,
     treeSha256: computeTreeSha(files),
     ...over,

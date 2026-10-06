@@ -36,6 +36,24 @@ unit suite now, and each was verified by **reverting the fix and requiring the
 new tests to fail** — a regression test that passes with its own fix reverted is
 asserting nothing, and one of these did exactly that before it was caught.
 
+### Portable-only distribution + install-time measurement (2026-10-07)
+
+배포가 **포터블 zip 하나**로 단일화됐다 (tar.gz 릴리스 · `npm run install:g` 삭제). 아래 절
+"Packaged install (2026-10-04)" 은 그 이전의 기록이고, 날짜와 함께 그대로 둔다.
+
+| 확인 | 결과 |
+|---|---|
+| `node scripts/make-portable.mjs --verify-repro` | 두 번 만든 zip 바이트 동일 |
+| `sha256sum -c harnesside-portable-linux-x64.zip.SHA256SUMS` | zip · 외부 매니페스트 OK |
+| zip 풀기 → `sh install.sh --check-only` | 플랫폼 일치 · 2622개 파일 대조 · node_modules 37개 |
+| 풀린 자리에서 `require('node-pty')` | 로드됨 |
+| `npm run verify:selfupdate` (포터블 zip 으로 재작성) | **45/45** — 의존 모듈 교체 · 사용자 상태 보존 · 슬롯 범위 · 다른 플랫폼 zip 거부 포함 |
+| `npm test` | 2323/2323 |
+| `harnesside measure` (이 머신, 저장소·포터블 설치 양쪽) | 측정값은 [`PLATFORM_MATRIX.md`](PLATFORM_MATRIX.md) §4 |
+
+확인하지 않은 것: Windows·macOS·arm64 zip 의 실제 빌드(첫 태그 릴리스의 CI 가 처음이다),
+NVIDIA 외 GPU 에서의 `measure`, 21 GB 모델을 처음부터 받는 설치 전체 경로.
+
 ### Packaged install (2026-10-04 · Q-11)
 
 > **이 절의 `0.1.0` 은 2026-10-04 에 잰 값이다.** 릴리스 식별자는 그 뒤

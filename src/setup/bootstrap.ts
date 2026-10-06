@@ -44,7 +44,8 @@ import { scanModels, pickReusable } from "./existingModel.js";
 import { discoverRunningServer, modelLoadBudgetMs, type Discovery } from "../backend/detect.js";
 import { rm } from "node:fs/promises";
 import { join as pathJoin } from "node:path";
-import { defaultModelsDir } from "./hostEnv.js";
+import { defaultModelsDir, homeDir } from "./hostEnv.js";
+import { machineProfilePath, measuredThreads, measurementKey, parseMachineProfile } from "./measure.js";
 import { MODEL_RUNGS, evaluateFit } from "./modelMetrics.js";
 import { baseName } from "../shared/path.js";
 
@@ -776,6 +777,22 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
         : undefined,
   });
   for (const r of tuning.rationale) log(r);
+
+  // 설치 시 실측(`harnesside measure`)이 **같은 엔진·모델·컨텍스트·오프로드**로 잰 스레드 수가
+  // 있으면 예측 대신 그 값을 쓴다. 키가 하나라도 다르면(드라이버·엔진·모델 교체) 쓰지 않는다 —
+  // 다른 조건의 측정값은 측정값이 아니다. 하드웨어를 주입받은 실행(테스트·시뮬레이션)은
+  // **이 머신**이 아니므로 이 머신의 측정값을 섞지 않는다.
+  if (llama && modelPath && !opts.hardware) {
+    const profile = parseMachineProfile(await readFile(machineProfilePath(homeDir(env)), "utf8").catch(() => null));
+    const measured = measuredThreads(
+      profile,
+      measurementKey({ binPath: llama.binPath, modelPath, contextSize: tuning.contextSize, gpuLayers: tuning.gpuLayers })
+    );
+    if (measured !== undefined && measured !== tuning.threads) {
+      log(`스레드: 예측 ${tuning.threads} → 실측 ${measured} (설치 시 측정 · machine-profile.json)`);
+      tuning.threads = measured;
+    }
+  }
 
   const config = buildConfig({ existing, llama, modelPath, plan, tuning });
   if (opts.projectRoot) {
