@@ -66,7 +66,7 @@ import { remoteBaseUrlNotice } from "./baseUrlPolicy.js";
 import { SlashService, SERVER_SLASH_KEYS, type ServerSlashKey } from "./slashService.js";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { join, isAbsolute, resolve, relative } from "node:path";
+import { basename, join, isAbsolute, resolve, relative } from "node:path";
 import { mkdir, access, readdir, stat, readFile, writeFile, rm } from "node:fs/promises";
 import { readFileSync, writeFileSync } from "node:fs";
 import stripAnsi from "strip-ansi";
@@ -632,7 +632,11 @@ const updates: UpdateService = new UpdateService({
   // 먼저 만들고 거기서 `web` 을 뺀다 — **`installRoot()` 와 같은 규칙**이라 두 경로가
   // 어긋날 수 없다.
   const installDistDir = resolve(selfPath, "..", "..");
-  const webDir = join(installDistDir, "web");
+  // **소스 실행**(`tsx src/server/index.ts` — CI 의 부팅·창 검증이 이렇게 띄운다)에서는 두 단계 위가
+  // `src/` 이고, `src/web` 은 **빌드 전 소스**(`index.html` 이 `/main.tsx` 를 부른다)다. 그걸 서빙하면
+  // 창은 뜨지만 #root 가 비어 있다 — 위 주석이 막으려던 바로 그 빈 화면이다(CI verify-window 실측,
+  // c295d5b 이후 main 에서 계속 실패). 소스 실행이면 같은 저장소의 빌드 산출물 `dist/web` 을 쓴다.
+  const webDir = basename(installDistDir) === "src" ? join(installDistDir, "..", "dist", "web") : join(installDistDir, "web");
   let tokenRec: Awaited<ReturnType<typeof issueToken>> | null = null;
 
   // Q-10: 원격 baseUrl 은 지원하지 않는다 — 설정에 있으면 조용히 무시하지 않고 말한다(src/server/baseUrlPolicy.ts).
