@@ -65,6 +65,10 @@ function walk(dir, base = dir, out = []) {
   return out;
 }
 
+/** Windows에서는 npm이 npm.cmd다. shell 없이 execFile로 "npm"을 부르면 ENOENT
+ *  (릴리스 windows job 실측) — GitHub run 단계는 셸이 찾아주지만 node 자식은 못 찾는다. */
+export const NPM_BIN = process.platform === "win32" ? "npm.cmd" : "npm";
+
 /** 프로덕션 의존 디렉터리 목록 — `npm ls --omit=dev --all`이 정본.
  *
  *  `--all`이 없으면 최상위 13개만 나온다. strip-ansi가 import하는 ansi-regex
@@ -73,7 +77,7 @@ function walk(dir, base = dir, out = []) {
 function productionRoots() {
   let out;
   try {
-    out = execFileSync("npm", ["ls", "--omit=dev", "--all", "--parseable"], {
+    out = execFileSync(NPM_BIN, ["ls", "--omit=dev", "--all", "--parseable"], {
       cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e) {
