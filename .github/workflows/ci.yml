@@ -217,8 +217,12 @@ jobs:
         # **닿을 수 없는 죽은 코드** 였다. 그래서 채택은 한 번도 실행되지 않았고,
         # 포트를 옮겨 두 번째 모델을 띄웠다(실측 OOM). 주석에 있었다는 사실만으로는
         # 없는 것보다 나쁘다 — 읽는 사람은 그 함수가 규칙 전체라고 믿는다.
+        #
+        # 가짜 서버에는 **실재하는 모델 경로**를 준다. 기본값(`/fake/model.gguf`)이면 `detect.ts` 가
+        # "API 는 답하지만 모델 파일이 없다 → 테스트 더블" 로 판정해 채택하지 않는다 — 그건 맞는
+        # 제품 규칙이고, 그 규칙이 생긴 뒤로 이 스텝은 채택 대신 포트 이동을 보며 실패해 왔다.
         run: |
-          node scripts/fake-llama-server.mjs --port 8080 > /tmp/adopt-llama.log 2>&1 &
+          node scripts/fake-llama-server.mjs --port 8080 --model-path "$PWD/.ci-fake-models/Ornith-1.5-35B-A3B-Q3_K_M.gguf" > /tmp/adopt-llama.log 2>&1 &
           echo $! > /tmp/adopt-llama.pid
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:8080/v1/models > /dev/null && break; sleep 1

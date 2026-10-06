@@ -12,7 +12,11 @@
  *
  * 이 파일을 통과했다고 "llama.cpp 가 동작한다" 고 말하면 안 된다.
  *
- * 사용법: `node scripts/fake-llama-server.mjs [--port 8080]`
+ * 사용법: `node scripts/fake-llama-server.mjs [--port 8080] [--model-path <실재하는 .gguf>]`
+ *
+ * `--model-path` — `/props` 의 `model_path`. 기본값(`/fake/model.gguf`)은 디스크에 없으므로
+ * `detect.ts` 가 이 서버를 **스텁**으로 판정하고 채택하지 않는다(의도된 제품 규칙: 테스트 더블에는
+ * 붙지 않는다). adopt 경로를 시험하려면 실재하는 파일을 주어 "모델을 가진 서버" 로 보이게 한다.
  * 실제 llama-server 가 쓰던 최소 API 만 흉내 낸다: `/v1/models`, `/health`,
  * `/v1/chat/completions`(SSE 도 포함 — 스트리밍 경로를 살리려고).
  */
@@ -22,6 +26,8 @@ import { createServer } from "node:http";
 const args = process.argv.slice(2);
 const portArg = args.indexOf("--port");
 const PORT = portArg >= 0 ? Number(args[portArg + 1]) : Number(process.env.FAKE_LLAMA_PORT ?? 8080);
+const modelPathArg = args.indexOf("--model-path");
+const MODEL_PATH = modelPathArg >= 0 ? args[modelPathArg + 1] : "/fake/model.gguf";
 
 const MODELS = { object: "list", data: [{ id: "fake-model", object: "model", owned_by: "fake" }] };
 
@@ -35,7 +41,7 @@ const server = createServer((req, res) => {
 
   if (url === "/v1/models" || url === "/models") return json(200, MODELS);
   if (url === "/health") return json(200, { status: "ok" });
-  if (url === "/props" || url === "/v1/props") return json(200, { n_ctx: 16384, model_path: "/fake/model.gguf" });
+  if (url === "/props" || url === "/v1/props") return json(200, { n_ctx: 16384, model_path: MODEL_PATH });
 
   if (url === "/v1/chat/completions" && req.method === "POST") {
     let body = "";
