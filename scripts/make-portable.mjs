@@ -65,9 +65,11 @@ function walk(dir, base = dir, out = []) {
   return out;
 }
 
-/** Windows에서는 npm이 npm.cmd다. shell 없이 execFile로 "npm"을 부르면 ENOENT
- *  (릴리스 windows job 실측) — GitHub run 단계는 셸이 찾아주지만 node 자식은 못 찾는다. */
-export const NPM_BIN = process.platform === "win32" ? "npm.cmd" : "npm";
+/** Windows에서는 npm이 npm.cmd다. shell 없이 execFile로 "npm"을 부르면 ENOENT,
+ *  "npm.cmd"로 부르면 EINVAL — .cmd는 cmd.exe 안에서만 실행된다
+ *  (릴리스 windows job 실측). 그래서 win32에서만 shell 경유. */
+export const NPM_BIN = "npm";
+export const NPM_SHELL = process.platform === "win32";
 
 /** 프로덕션 의존 디렉터리 목록 — `npm ls --omit=dev --all`이 정본.
  *
@@ -79,6 +81,7 @@ function productionRoots() {
   try {
     out = execFileSync(NPM_BIN, ["ls", "--omit=dev", "--all", "--parseable"], {
       cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      ...(NPM_SHELL ? { shell: true } : {}),
     });
   } catch (e) {
     throw new Error(`프로덕션 의존 목록을 못 구했습니다 (만드는 쪽에 npm 필요): ${e.stdout ?? e.message}`);

@@ -97,10 +97,12 @@ if (!existsSync(localDist)) {
 // (prefix/node_modules/<pkg>/dist). readlink -f는 Windows에 없다.
 const isWin = process.platform === "win32";
 let prefix = "";
-// Windows에서는 npm이 npm.cmd다 (shell 없이 execFile로 "npm"을 부르면 ENOENT).
-const NPM_BIN = process.platform === "win32" ? "npm.cmd" : "npm";
+// Windows의 npm은 .cmd라 shell 경유로만 실행된다 (ENOENT→EINVAL 실측).
+// GitHub run 단계는 셸이 찾아주지만 node 자식은 직접 못 찾는다.
+const NPM_SHELL = process.platform === "win32";
+const npmExec = (args) => execFileSync("npm", args, { encoding: "utf8", ...(NPM_SHELL ? { shell: true } : {}) }).trim();
 try {
-  prefix = execFileSync(NPM_BIN, ["prefix", "-g"], { encoding: "utf8" }).trim();
+  prefix = npmExec(["prefix", "-g"]);
 } catch {
   console.error("npm 전역 prefix 를 알 수 없습니다.");
   process.exit(1);
@@ -108,7 +110,7 @@ try {
 let npmRoot = "";
 if (isWin) {
   try {
-    npmRoot = execFileSync(NPM_BIN, ["root", "-g"], { encoding: "utf8" }).trim();
+    npmRoot = npmExec(["root", "-g"]);
   } catch {
     npmRoot = join(prefix, "node_modules");
   }
