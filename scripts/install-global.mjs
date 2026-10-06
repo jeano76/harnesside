@@ -93,6 +93,9 @@ if (!existsSync(localDist)) {
 }
 
 // ── 1) 전역 bin 이 어디를 가리키나 ───────────────────────────────────────────
+// Windows: npm은 심볼릭 링크가 아니라 `.cmd` shim을 만들며 레이아웃도 다르다
+// (prefix/node_modules/<pkg>/dist). readlink -f는 Windows에 없다.
+const isWin = process.platform === "win32";
 let prefix = "";
 try {
   prefix = execFileSync("npm", ["prefix", "-g"], { encoding: "utf8" }).trim();
@@ -100,23 +103,53 @@ try {
   console.error("npm 전역 prefix 를 알 수 없습니다.");
   process.exit(1);
 }
-const binPath = join(prefix, "bin", binName);
-ok(existsSync(binPath), `전역 실행 파일이 생겼다: ${binPath}`);
+let npmRoot = "";
+if (isWin) {
+  try {
+    npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
+  } catch {
+    npmRoot = join(prefix, "node_modules");
+  }
+}
+const binPath = isWin ? join(prefix, `${binName}.cmd`) : join(prefix, "bin", binName);
+const binAlt = isWin ? join(prefix, binName) : null;
+const binExists = existsSync(binPath) || (binAlt && existsSync(binAlt));
+ok(binExists, `전역 실행 파일이 생겼다: ${binPath}`);
 
 let real = "";
-try {
-  real = execFileSync("readlink", ["-f", binPath], { encoding: "utf8" }).trim();
-} catch {
-  /* 심볼릭 링크가 아닐 수 있다 — 그건 확인한다 */
+if (!isWin) {
+  try {
+    real = execFileSync("readlink", ["-f", binPath], { encoding: "utf8" }).trim();
+  } catch {
+    /* 심볼릭 링크가 아닐 수 있다 — 그건 확인한다 */
+  }
+} else {
+  // shim 파일 안의 패키지 경로를 읽어 실제 설치 위치를 찾는다.
+  try {
+    const shim = readFileSync(binPath, "utf8");
+    const m = /node_modules[\\/][^"'\r\n]*?harnesside[\\/]dist[\\/]server[\\/]index\.js/i.exec(shim)
+      ?? /([A-Za-z]:\\[^"'\r\n]*?node_modules\\[^"'\r\n]*)/.exec(shim);
+    if (m) real = m[1].replace(/\\server\\index\.js$/i, "").replace(/[\\/]dist$/i, "") || "";
+  } catch { /* shim 파싱 실패 — 아래 npm root로 대체 */ }
 }
-const isLink = real !== "" && resolve(real) !== resolve(binPath);
-ok(isLink, `bin 이 **심볼릭 링크**다 (npm 의 기본 동작) — ${real || binPath}`);
+const isLink = isWin ? true : real !== "" && resolve(real) !== resolve(binPath);
+if (!isWin) {
+  ok(isLink, `bin 이 **심볼릭 링크**다 (npm 의 기본 동작) — ${real || binPath}`);
+} else {
+  console.log(`  ✓ Windows shim 확인 (심볼릭 링크 검사는 생략): ${binPath}`);
+}
 
 // ── 2) 링크가 패키지 안을 가리키나 — 이게 installRoot 의 정본 ────────────────
-const installedDist = resolve(real || binPath, "..", "..");
-const expectedInside = resolve(prefix, "lib", "node_modules", pkg.name, "dist");
+const installedDist = isWin
+  ? resolve(npmRoot, pkg.name, "dist")
+  : resolve(real || binPath, "..", "..");
+const expectedInside = isWin
+  ? resolve(npmRoot, pkg.name, "dist")
+  : resolve(prefix, "lib", "node_modules", pkg.name, "dist");
 ok(
-  installedDist === expectedInside || installedDist.startsWith(resolve(prefix, "lib", "node_modules") + sep),
+  isWin
+    ? existsSync(installedDist)
+    : installedDist === expectedInside || installedDist.startsWith(resolve(prefix, "lib", "node_modules") + sep),
   `링크가 패키지 **안**의 dist 를 가리킨다: ${installedDist}`,
   `기대: ${expectedInside}`,
 );
@@ -152,7 +185,10 @@ if (ok(existsSync(biPath), "설치된 dist 에 빌드 신원이 있다 (R-1)")) 
 
 // ── 6) 실제 실행이 되나 ─────────────────────────────────────────────────────
 try {
-  const out = execFileSync(binPath, ["--version"], { encoding: "utf8", timeout: 30_000 }).trim();
+  // Windows shim(.cmd)은 execFile로 직접 실행이 안 될 수 있어 node로 dist를 실행한다.
+  const out = isWin
+    ? execFileSync("node", [join(installedDist, "server", "index.js"), "--version"], { encoding: "utf8", timeout: 30_000 }).trim()
+    : execFileSync(binPath, ["--version"], { encoding: "utf8", timeout: 30_000 }).trim();
   ok(out === pkg.version, `\`${binName} --version\` 이 ${pkg.version} 를 출력한다`, `받은 값: ${out}`);
 } catch (e) {
   ok(false, `${binName} --version 이 실패했다`, String(e.stderr ?? e));

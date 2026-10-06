@@ -858,7 +858,16 @@ export async function copyTree(
     await mkdir(join(to, ".."), { recursive: true });
     const tmp = `${to}.harnesside-tmp`;
     await writeFile(tmp, await readFile(from));
-    await chmod(tmp, await modeOf(from));
+    // Windows has no POSIX mode bits: chmod is a no-op that can throw
+    // ENOSYS/EPERM on some setups, and a deployed dist/ runs from .js
+    // without an exec bit anyway. Preserve modes where they exist.
+    if (process.platform !== "win32") {
+      try {
+        await chmod(tmp, await modeOf(from));
+      } catch {
+        /* mode preservation is best-effort */
+      }
+    }
     await rename(tmp, to);
     written++;
   }

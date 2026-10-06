@@ -73,14 +73,24 @@ export function archTag(arch: string): "x64" | "arm64" | null {
 /** The driver's reported CUDA version, or null.
  *
  *  nvidia-smi first and `nvcc` only as a fallback, as the runtime installers do: the
- *  prebuilt has to load on the DRIVER, so that is the version that decides. */
+ *  prebuilt has to load on the DRIVER, so that is the version that decides.
+ *  On Windows nvidia-smi is often not on PATH — System32 copy is tried too. */
 export async function detectCudaVersion(run: Run): Promise<string | null> {
-  try {
-    const out = await run("nvidia-smi", [], { timeout: 5000 });
-    const m = /CUDA[ A-Z]*Version:\s*(\d+\.\d+)/.exec(out);
-    if (m) return m[1];
-  } catch {
-    /* no nvidia-smi, or it failed — fall through to nvcc */
+  const trySmi = async (file: string): Promise<string | null> => {
+    try {
+      const out = await run(file, [], { timeout: 5000 });
+      const m = /CUDA[ A-Z]*Version:\s*(\d+\.\d+)/.exec(out);
+      if (m) return m[1];
+    } catch { /* next */ }
+    return null;
+  };
+  const v = await trySmi("nvidia-smi");
+  if (v) return v;
+  if (process.platform === "win32") {
+    const sysRoot = process.env.SystemRoot ?? "C:\\Windows";
+    const abs = `${sysRoot.replace(/\\+$/, "")}\\System32\\nvidia-smi.exe`;
+    const w = await trySmi(abs);
+    if (w) return w;
   }
   try {
     const out = await run("nvcc", ["--version"], { timeout: 5000 });

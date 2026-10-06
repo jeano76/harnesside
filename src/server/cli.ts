@@ -37,6 +37,7 @@ export const USAGE = `${C.bold("harnesside")} — 로컬 llama.cpp 코딩 에이
   harnesside logs [-f]       로그 보기 (데몬이어도 가능)
   harnesside down            우아한 종료 (체크포인트 기록 후)
   harnesside doctor          환경 진단 (읽기 전용 · 아래 판정을 그대로 보여준다)
+  harnesside setup           설치 마무리 — 모델·서버·튜닝 확보 + 바탕화면 바로가기
   harnesside version         버전 (= --version, package.json 의 version)
   harnesside doctor --install  없으면 설치 · 모델이 없으면 받는다 [포트]
 
@@ -48,6 +49,8 @@ doctor 는 **아무것도 고치지 않는다.** 손대려면 doctor --install �
 
 옵션:
   --install      doctor 와 함께 판정에 이어 설치·수령한다 (이것만 손댄다)
+  --no-shortcut  setup 에서 바탕화면 바로가기를 만들지 않는다
+  --models-dir=DIR setup·doctor --install 의 모델 디렉터리 (기본 ~/.harnesside/models)
   --no-browser    창을 띄우지 않고 서버만 (디버깅용)
   --daemon        = up -d
   --version       버전만 출력
@@ -74,7 +77,7 @@ export interface ParsedArgs {
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
-  const known = ["up", "open", "status", "logs", "down", "doctor", "version", "help", "--help", "-h"];
+  const known = ["up", "open", "status", "logs", "down", "doctor", "setup", "version", "help", "--help", "-h"];
   const first = argv[0];
   const command = first && known.includes(first) ? first : "up";
   const rest = command === "up" && first && !known.includes(first) ? argv : argv.slice(1);
@@ -291,7 +294,70 @@ export async function cmdDoctor(
   return 0;
 }
 
-/** `status`/`logs`/`down`/`doctor` 는 부팅 없이 동작한다(읽기 전용 경로). */
+/**
+ * 설치 마무리 — 모델·서버·튜닝 확보 + 바탕화면 바로가기.
+ *
+ * portable zip(압축 배포) 설치 과정과 `doctor --install`이 같은 코드를 쓰게
+ * 하려고 여기에 둔다: `node dist/server/index.js setup` 한 줄이면 npm 없이도
+ * 설치 마무리가 된다. 일반 기동(`up`)도 부팅 시 같은 `ensureLocalStack`을
+ * 돌리므로, setup은 그것을 "미리 당겨서" 실행하는 것이다 — 멱등이라 두 번
+ * 돌아도 두 번째는 파일 확인만 한다.
+ */
+export async function cmdSetup(paths: Paths, rest: string[] = []): Promise<number> {
+  const flags = new Set(rest.filter((a) => a.startsWith("-")));
+  const modelsDirArg = rest.find((a) => a.startsWith("--models-dir="))?.slice("--models-dir=".length);
+  const { join } = await import("node:path");
+  const { homedir } = await import("node:os");
+  const modelsDir = modelsDirArg || process.env.HARNESSIDE_MODELS_DIR || join(homedir(), ".harnesside", "models");
+
+  emit(C.bold("harnesside setup — 모델·서버·튜닝 확보"));
+  const { ensureLocalStack } = await import("../setup/bootstrap.js");
+  const report = await ensureLocalStack({
+    projectRoot: paths.projectRoot,
+    modelsDir,
+    offline: flags.has("--offline"),
+    log: (line) => emit(`  ${C.dim(line)}`),
+  });
+  for (const s of report.steps) {
+    emit(`  ${s.ok ? C.green("✓") : C.red("✗")} ${s.name} — ${s.detail}`);
+  }
+  if (report.tuning) {
+    const t = report.tuning;
+    emit(`  ${C.dim(`튜닝: -ngl ${t.gpuLayers} · -c ${t.contextSize} · -t ${t.threads}/-tb ${t.threadsBatch} · --n-cpu-moe ${t.cpuMoeLayers} · KV ${t.cacheTypeK}`)}`);
+  }
+  for (const e of report.errors) emit(`  ${C.red(e)}`);
+
+  if (!flags.has("--no-shortcut")) {
+    const { createDesktopShortcut } = await import("../setup/desktopShortcut.js");
+    const { resolve, dirname, basename } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    // 바로가기가 가리킬 설치 루트: dist를 품은 디렉터리. cwd에 dist가 있으면
+    // 그곳(포터블 압축을 푼 자리), 아니면 실행 중인 패키지 루트(npm 전역 설치).
+    const distDir = resolve(fileURLToPath(import.meta.url), "..", "..");
+    const cwdDist = resolve(paths.projectRoot, "dist", "server", "index.js");
+    const { stat } = await import("node:fs/promises");
+    const cwdHasDist = await stat(cwdDist).then((s) => s.isFile()).catch(() => false);
+    const installDir = cwdHasDist ? paths.projectRoot : basename(distDir) === "dist" ? dirname(distDir) : distDir;
+    const sc = await createDesktopShortcut(installDir).catch((err: unknown) => ({
+      ok: false as const,
+      detail: String(err instanceof Error ? err.message : err),
+    }));
+    emit(`  ${sc.ok ? C.green("✓") : C.yellow("!")} ${sc.detail}`);
+  }
+
+  if (!report.llama) {
+    emit(`  ${C.red("서버 준비 실패")} — llama-server를 확보하지 못했습니다. 위 사유를 확인하십시오.`);
+    return 1;
+  }
+  if (!report.modelPath) {
+    emit(`  ${C.yellow("모델 미확보")} — 서버는 있으나 모델 파일이 없습니다. HARNESSIDE_MODELS_DIR에 .gguf를 두거나 다시 실행하십시오.`);
+    return 1;
+  }
+  emit(`  ${C.green("준비됨")} — ${report.llama.binPath} · ${report.modelPath}`);
+  return report.ok ? 0 : 1;
+}
+
+/** `status`/`logs`/`down`/`doctor`/`setup` 은 부팅 없이 동작한다. doctor만 읽기 전용이다. */
 export async function runStandalone(argv: string[]): Promise<number | null> {
   const paths = defaultPaths();
   const { command, rest, flags, json } = parseArgs(argv);
@@ -325,6 +391,9 @@ export async function runStandalone(argv: string[]): Promise<number | null> {
     }
     emit(C.yellow("실행 중인 서버가 없습니다. 먼저 `harnesside up -d` 로 시작하세요."));
     return 3;
+  }
+  if (command === "setup") {
+    return cmdSetup(paths, rest);
   }
   return null; // up 은 index.ts 가 처리
 }

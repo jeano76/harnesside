@@ -15,12 +15,20 @@ import WebSocket from "ws";
 import { launchFlags, profileDir, windowIdentity, CDP_DEFAULT_PORT, IDE_DEFAULT_PORT, type LaunchOptions } from "./browserFlags.js";
 import type { GpuMode } from "../setup/gpuPolicy.js";
 
-/** 브라우저 바이너리 탐지 순서 (§4.1). */
+/** 브라우저 바이너리 탐지 순서 (§4.1). Windows 경로는 뒤에서 별도로 탐색한다. */
 export const CHROME_CANDIDATES = [
   "google-chrome",
   "google-chrome-stable",
   "chromium",
   "chromium-browser",
+];
+
+/** Windows 기본 Chrome/Edge 설치 경로. PATH에 없어도 여기서 찾는다. */
+export const CHROME_WINDOWS_CANDIDATES = [
+  `${process.env["ProgramFiles"] ?? "C:\\Program Files"}\\Google\\Chrome\\Application\\chrome.exe`,
+  `${process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)"}\\Google\\Chrome\\Application\\chrome.exe`,
+  `${process.env["ProgramFiles"] ?? "C:\\Program Files"}\\Microsoft\\Edge\\Application\\msedge.exe`,
+  `${process.env["LOCALAPPDATA"] ?? ""}\\Google\\Chrome\\Application\\chrome.exe`,
 ];
 
 export interface LaunchDeps {
@@ -213,6 +221,12 @@ export class BrowserLauncher {
   async resolveBinary(): Promise<string | null> {
     const envBin = process.env.CHROME_BIN;
     if (envBin && (await this.exists(envBin))) return envBin;
+    if (process.platform === "win32") {
+      for (const p of CHROME_WINDOWS_CANDIDATES) {
+        if (p && (await this.exists(p))) return p;
+      }
+      return null;
+    }
     for (const c of CHROME_CANDIDATES) {
       if (await this.exists(`/usr/bin/${c}`)) return `/usr/bin/${c}`;
       if (await this.exists(`/usr/local/bin/${c}`)) return `/usr/local/bin/${c}`;

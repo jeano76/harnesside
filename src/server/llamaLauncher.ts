@@ -167,6 +167,8 @@ export class LlamaLauncher {
     this.proc = spawn(this.opts.binPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
       detached: false, // 부모 종료 시 함께 정리된다(§2.2)
+      // Windows 배포에서 서버마다 콘솔 창이 뜨는 것을 막는다.
+      windowsHide: true,
     });
 
     const pipe = (stream: "stdout" | "stderr") => {

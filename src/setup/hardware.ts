@@ -110,6 +110,25 @@ const NVIDIA_QUERY_ARGS = [
   "--format=csv,noheader,nounits",
 ];
 
+/** `nvidia-smi` with a Windows fallback.
+ *
+ *  On Windows the driver installer does not always put nvidia-smi on PATH,
+ *  but it is reliably at `%SystemRoot%\System32\nvidia-smi.exe`. Trying PATH
+ *  first keeps injected test doubles working (they stub `nvidia-smi`), and
+ *  the absolute path is only a fallback on real Windows boxes. */
+async function runNvidiaSmi(run: Run): Promise<string> {
+  try {
+    return await run("nvidia-smi", NVIDIA_QUERY_ARGS);
+  } catch (err) {
+    if (process.platform === "win32") {
+      const sysRoot = process.env.SystemRoot ?? "C:\\Windows";
+      const abs = `${sysRoot.replace(/\\+$/, "")}\\System32\\nvidia-smi.exe`;
+      return await run(abs, NVIDIA_QUERY_ARGS);
+    }
+    throw err;
+  }
+}
+
 export function parseNvidiaSmiCsv(csv: string): Gpu[] {
   const gpus: Gpu[] = [];
   for (const line of csv.split("\n")) {
@@ -196,6 +215,9 @@ export async function findOwnLlamaServerPids(
   run: Run = defaultRun
 ): Promise<number[]> {
   if (!llamaDir) return [];
+  if (process.platform === "win32") {
+    return findOwnLlamaServerPidsWindows(llamaDir, run);
+  }
   let out: string;
   try {
     // `pgrep -f` matches the full command line, which is where the binary path
@@ -230,12 +252,46 @@ export async function findOwnLlamaServerPids(
  *  Compared on resolved, separator-normalised paths so a trailing slash or a
  *  `..` segment can't produce a match, and a sibling directory that merely
  *  shares a prefix ("/opt/harnesside-2" vs "/opt/harnesside") is correctly
- *  rejected. */
+ *  rejected. On Windows the comparison is case-insensitive (C:\ vs c:\). */
 function isInsideDir(child: string, dir: string): boolean {
   const norm = (p: string) => resolve(p).replace(/\\/g, "/").replace(/\/+$/, "");
   const c = norm(child);
   const d = norm(dir);
+  if (process.platform === "win32") {
+    const cl = c.toLowerCase();
+    const dl = d.toLowerCase();
+    return cl === dl || cl.startsWith(dl + "/");
+  }
   return c === d || c.startsWith(d + "/");
+}
+
+/** Windows variant: `pgrep`/`/proc` do not exist.
+ *
+ *  Uses `powershell Get-CimInstance Win32_Process` to list
+ *  `llama-server.exe` processes with their ExecutablePath, then keeps only
+ *  those inside this install's dir. Best-effort: any failure returns [],
+ *  and the caller then keeps the plain free-VRAM reading (safe direction). */
+async function findOwnLlamaServerPidsWindows(llamaDir: string, run: Run): Promise<number[]> {
+  try {
+    const out = await run(
+      "powershell",
+      ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'llama-server*' } | ForEach-Object { \"$($_.ProcessId)|$($_.ExecutablePath)\" }"],
+      { timeout: 10_000, windowsHide: true }
+    );
+    const own: number[] = [];
+    for (const line of out.split(/\r?\n/)) {
+      const row = line.trim();
+      if (!row || !row.includes("|")) continue;
+      const sep = row.indexOf("|");
+      const pid = Number(row.slice(0, sep).trim());
+      const exe = row.slice(sep + 1).trim();
+      if (!Number.isFinite(pid) || pid <= 0 || !exe || exe.toLowerCase() === "null") continue;
+      if (isInsideDir(exe, llamaDir)) own.push(pid);
+    }
+    return own;
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -439,7 +495,7 @@ export async function detectHardware(
 
   let gpus: Gpu[] = [];
   try {
-    gpus = parseNvidiaSmiCsv(await run("nvidia-smi", NVIDIA_QUERY_ARGS));
+    gpus = parseNvidiaSmiCsv(await runNvidiaSmi(run));
   } catch {
     gpus = []; // no NVIDIA driver, no nvidia-smi, or we're in a container without it
   }

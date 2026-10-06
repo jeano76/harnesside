@@ -551,7 +551,10 @@ export function budgetVramGiB(hw: Hardware, gpu: Gpu | null, oursBytes = 0): num
     // plus the OS out of a small box, so scale on RAM with a big reserve.
     return Math.max(0.5, (hw.ramTotalBytes / GiB) * 0.6);
   }
-  const RESERVE_MIB = 1024;
+  // Windows DWM + driver reservation is larger than gnome-shell's 150 MiB,
+  // and a CUDA prebuilt also loads cudart beside the weights. 256 MiB extra
+  // keeps a "just fits" plan from OOMing at load on win32.
+  const RESERVE_MIB = hw.platform === "win32" ? 1280 : 1024;
   const free = gpu.vramFreeBytes > 0 ? gpu.vramFreeBytes : gpu.vramTotalBytes;
   const usable = Math.min(gpu.vramTotalBytes, free + Math.max(0, oursBytes));
   return Math.max(0.5, (usable - RESERVE_MIB * UNITS.MiB) / GiB);

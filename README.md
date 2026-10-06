@@ -733,9 +733,19 @@ To uninstall: `npm rm -g harnesside` (from anywhere).
 | Node | **22 이상** (`engines`) | `node -v` |
 | 브라우저 | Chrome 또는 Chromium | `google-chrome --version` |
 | 터미널 | tmux | `tmux -V` |
-| OS | **POSIX** (Linux·macOS) | 아래 "미측정" 참조 |
-| GPU | 선택 — 없으면 CPU 로 돈다 | `harnesside doctor` 의 VRAM 여유 |
-| llama.cpp · 모델 | **자동 준비** (첫 실행) | `harnesside doctor` |
+| OS | Linux·macOS·**Windows 10/11 (배포 경로)** | `harnesside doctor` |
+| GPU | 선택 — 없으면 CPU 로 돈다. NVIDIA면 **CUDA 사전 빌드 자동** | `harnesside doctor` 의 VRAM 여유 |
+| llama.cpp · 모델 | **자동 준비** (첫 실행: 사전 빌드 → Vulkan → CPU → 소스 빌드) | `harnesside doctor` |
+
+- **Windows 배포**: `npm run install:g` → `harnesside doctor` → `harnesside` 실행이면
+  모델·서버·CUDA가 자동 준비됩니다. CUDA는 드라이버 버전에 맞는
+  `win-cuda-X.Y` 사전 빌드 + `cudart` 번들을 받고, 실행 검증(`--version` +
+  `--list-devices` + 모델 호환성) 후 사용합니다. 빌드는 최후 수단이며
+  VS Build Tools + CMake가 필요합니다 (`winget` 안내).
+  VRAM 예산은 Windows 예약분(1280 MiB)을 빼고 `-ngl 999` + `--n-cpu-moe` +
+  KV `q8_0/q4_0` + `-c` 자동 계산으로 최적화됩니다.
+  제한: `tmux` 기반 AI CLI 탭·일부 PTY 기능은 Windows에서 미지원이며,
+  모델·서버·튜닝 경로는 지원됩니다.
 
 - **Node 20 은 측정했고 동작하지 않습니다** — `node-pty` 가 종료 시 SIGSEGV 로 죽고,
   Node 22 전에는 전역 `WebSocket` 가 없습니다. 그래서 `engines` 를 `>=18` → `>=22` 로
@@ -748,9 +758,10 @@ To uninstall: `npm rm -g harnesside` (from anywhere).
 <details>
 <summary>구동환경에서 확인하지 못한 것 (측정 안 함)</summary>
 
-- **macOS · Windows 는 미측정**입니다. CI 러너는 Linux 이고, 로컬에서도 Linux 만
-  돌렸습니다. 특히 셀프업데이트의 교체가 `chmod 0o755` 를 쓰므로 **POSIX 전용**입니다
-  — Windows 에서 이 경로는 동작하지 않습니다.
+- **macOS 실기·Windows 실기 전체 부팅은 미측정**입니다. CI 러너는 Linux 이고,
+  로컬에서도 Linux 만 돌렸습니다. Windows 대응은 코드 경로(사전 빌드·CUDA 선택·
+  실행 검증·튜닝·셀프업데이트 권한 처리)를 합성·유닛 수준에서만 검증했습니다.
+  실기에서 `harnesside doctor` 결과를 붙여 주시면 반영합니다.
 - GPU 실부하, 여러 동시 모델, 디스크 용량 경계, Wayland/X11 분기 같은 것은
   여기서 검증하지 않았습니다. 전체 목록은
   [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
@@ -913,6 +924,35 @@ knew they existed, nothing did.
 의 설계 배경과 실측 근거는 **[PROMPT_RELEASE_SELFUPDATE.md](PROMPT_RELEASE_SELFUPDATE.md)**.
 
 ### 만들기
+
+### npm 없이 설치 (포터블 압축)
+
+npm 레지스트리가 막혔거나 npm 자체가 고장난 머신용. 받는 쪽에 npm이 없어도 된다
+(**Node 22만 있으면 됨** — 네트워크는 모델·서버를 받는 데 필요).
+
+```bash
+npm run portable           # release/harnesside-portable-<플랫폼>-<아키>.zip 생성
+```
+
+받는 쪽 (Windows 예):
+
+```
+1. zip을 받아 압축 풀기 (탐색기 우클릭 → 모두 추출)
+2. Install-Portable.ps1 우클릭 → "PowerShell에서 실행"
+   (또는: node install-portable.mjs)
+```
+
+설치 과정이 하는 일 — 전부 npm 없이:
+
+1. Node 22 확인 + `portable-manifest.json`으로 2600여 파일 해시 대조
+2. `node dist/server/index.js setup` 실행 — **모델·llama.cpp 서버·튜닝 확보**
+   (CUDA 사전 빌드 → Vulkan → CPU → 소스 빌드 순, 실행 검증 후 사용.
+   `-ngl`·컨텍스트·스레드·KV 양자화 자동 계산, `.harnesside/config.yaml` 기록)
+3. **바탕화면 바로가기 생성** (`HarnessIDE.lnk` → 바로 더블클릭 실행)
+
+주의: 압축은 **플랫폼별**이다. Linux에서 만든 zip을 Windows에 풀면 네이티브 모듈
+(`node-pty`)이 맞지 않는다 — 파일명의 plat-arch를 확인하라. 모델 파일(수 GB)은
+압축에 들지 않고 설치 시 받는다.
 
 ### 로컬에 전역 설치
 

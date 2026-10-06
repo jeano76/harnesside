@@ -1,6 +1,6 @@
 {
   "name": "harnesside",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Local llama.cpp coding agent: a daemon that drives a CDP-launched browser IDE (OpenAI-compatible, self-healing, memory-compaction with auto-resume)",
   "repository": "https://github.com/jeano76/harnesside",
   "license": "MIT",
@@ -19,6 +19,8 @@
     "build": "npm run build:server && npm run build:web && node scripts/pack-web-assets.mjs && npm run build:info",
     "build:info": "node scripts/gen-build-info.mjs",
     "release": "node scripts/gen-build-info.mjs && node scripts/make-release.mjs --require-clean",
+    "portable": "npm run build && node scripts/make-portable.mjs",
+    "portable:check": "node scripts/make-portable.mjs --check",
     "install:g": "npm run build && npm install -g . && node scripts/install-global.mjs",
     "release:repro": "node scripts/make-release.mjs --verify-repro",
     "verify:selfupdate": "tsx scripts/verify-selfupdate.mjs",

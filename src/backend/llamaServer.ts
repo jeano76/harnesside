@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { GPU_LOG_LINE } from "../setup/gpuReport.js";
 import { isMoeModelFile } from "../setup/ggufMeta.js";
@@ -240,6 +240,9 @@ export class LlamaServerManager {
 
     this.proc = spawn(this.config.binPath, buildServerArgs(this.config), {
       stdio: ["ignore", "pipe", "pipe"],
+      // No console window per server on Windows; without this each
+      // llama-server.exe pops a conhost window on deploy machines.
+      windowsHide: true,
     });
 
     // 'error' fires when the binary is missing or not executable. Without a
@@ -275,7 +278,22 @@ export class LlamaServerManager {
 
   stop(): void {
     if (this.proc && this.exited === null) {
-      this.proc.kill();
+      try {
+        if (process.platform === "win32" && this.proc.pid) {
+          // Node emulates SIGTERM/SIGKILL with TerminateProcess, but a
+          // console-mode llama-server.exe can survive it while holding VRAM.
+          // taskkill /T /F kills the whole tree; failure falls back to proc.kill().
+          try {
+            execFileSync("taskkill", ["/PID", String(this.proc.pid), "/T", "/F"], { windowsHide: true } as never);
+          } catch {
+            this.proc.kill();
+          }
+        } else {
+          this.proc.kill();
+        }
+      } catch {
+        try { this.proc.kill(); } catch { /* already gone */ }
+      }
     }
     this.proc = null;
   }
