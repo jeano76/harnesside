@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { runNvidiaSmi as hostRunNvidiaSmi } from "./hostEnv.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -110,24 +111,13 @@ const NVIDIA_QUERY_ARGS = [
   "--format=csv,noheader,nounits",
 ];
 
-/** `nvidia-smi` with a Windows fallback.
+/** `nvidia-smi` with the platform's own location rule.
  *
- *  On Windows the driver installer does not always put nvidia-smi on PATH,
- *  but it is reliably at `%SystemRoot%\System32\nvidia-smi.exe`. Trying PATH
- *  first keeps injected test doubles working (they stub `nvidia-smi`), and
- *  the absolute path is only a fallback on real Windows boxes. */
-async function runNvidiaSmi(run: Run): Promise<string> {
-  try {
-    return await run("nvidia-smi", NVIDIA_QUERY_ARGS);
-  } catch (err) {
-    if (process.platform === "win32") {
-      const sysRoot = process.env.SystemRoot ?? "C:\\Windows";
-      const abs = `${sysRoot.replace(/\\+$/, "")}\\System32\\nvidia-smi.exe`;
-      return await run(abs, NVIDIA_QUERY_ARGS);
-    }
-    throw err;
-  }
-}
+ *  The candidate list is `hostEnv.nvidiaSmiCandidates` — the same rule every other
+ *  probe uses. It lived here as a second copy for one commit; two copies of one
+ *  rule is how the *next* call site ends up wrong. */
+const runNvidiaSmi = (run: Run): Promise<string> =>
+  hostRunNvidiaSmi((bin) => run(bin, NVIDIA_QUERY_ARGS));
 
 export function parseNvidiaSmiCsv(csv: string): Gpu[] {
   const gpus: Gpu[] = [];

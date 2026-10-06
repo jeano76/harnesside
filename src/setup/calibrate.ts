@@ -26,6 +26,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import type { LlamaServerConfig } from "../backend/llamaServer.js";
 import { isMoeModel, readGgufKvShape } from "./ggufMeta.js";
+import { runNvidiaSmi } from "./hostEnv.js";
 
 const MiB = 1024 ** 2;
 const execFileP = promisify(execFile);
@@ -71,22 +72,22 @@ export function calibrationKey(cfg: Pick<LlamaServerConfig, "modelPath" | "conte
 }
 
 export async function defaultReadGpuName(): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFileP("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader", "-i", "0"], { timeout: 8000 });
+  return runNvidiaSmi(async (bin) => {
+    const { stdout } = await execFileP(bin, ["--query-gpu=name", "--format=csv,noheader", "-i", "0"], { timeout: 8000 });
     return stdout.trim().split("\n")[0]?.trim().replace(/\s+/g, "-") || undefined;
-  } catch {
-    return undefined;
-  }
+  }).catch(() => undefined);
 }
 
 export async function defaultReadVramFreeMiB(): Promise<number | undefined> {
-  try {
-    const { stdout } = await execFileP("nvidia-smi", ["--query-gpu=memory.free", "--format=csv,noheader,nounits", "-i", "0"], { timeout: 8000 });
+  // The System32 fallback is not cosmetic here: with only a bare "nvidia-smi"
+  // this returns `undefined` on a stock Windows box, and `undefined` is what
+  // makes `planCalibration` bail out with "unmeasured" and leave a wrong plan
+  // in place — silently, with nothing on screen saying the card was never read.
+  return runNvidiaSmi(async (bin) => {
+    const { stdout } = await execFileP(bin, ["--query-gpu=memory.free", "--format=csv,noheader,nounits", "-i", "0"], { timeout: 8000 });
     const n = Number(stdout.trim().split("\n")[0]);
     return Number.isFinite(n) ? n : undefined;
-  } catch {
-    return undefined;
-  }
+  }).catch(() => undefined);
 }
 
 /** Waits until the card's free memory stops changing (a killed server's memory is returned lazily). */
