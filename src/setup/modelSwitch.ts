@@ -36,7 +36,13 @@
 import { LlamaServerManager, type LlamaServerConfig } from "../backend/llamaServer.js";
 import { summarizeGpuOffload, waitForGpuRelease } from "./gpuReport.js";
 import { startCalibrated, type CalibrationResult, type StartCalibratedOptions } from "./calibrate.js";
-import { hasSystemd, listeningPortsCommand, PORT_FIELD_SEPARATOR, type HostPlatform } from "./hostEnv.js";
+import {
+  hasSystemd,
+  listeningPortsCommand,
+  PORT_FIELD_SEPARATOR,
+  windowsCmdlineCommand,
+  type HostPlatform,
+} from "./hostEnv.js";
 
 export type PortOwner =
   | { kind: "none" }
@@ -402,13 +408,17 @@ async function systemdUnitForPort(
  *  where its absence is the normal case and must stay `null`, not "foreign"). */
 export async function readCmdline(pid: number, platform: HostPlatform = process.platform): Promise<string | null> {
   if (platform === "win32") {
+    // `wmic` is gone from current Windows (11 24H2+). It failed, was caught, and
+    // became `null` → `detectPortOwner` reported `unknown` → a model switch
+    // REFUSED with "port owner could not be determined", which is the safe answer
+    // but means a real llama-server could never be recognised as ours on a modern
+    // box. PowerShell's CIM query is the reader that still exists.
+    const { file, args } = windowsCmdlineCommand(pid);
     try {
       const { execFile } = await import("node:child_process");
       const { promisify } = await import("node:util");
-      const out = await promisify(execFile)("wmic",
-        ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
-        { timeout: 5000, windowsHide: true } as never);
-      return (String(out.stdout) || "").split("=").slice(1).join("=").trim() || null;
+      const out = await promisify(execFile)(file, args, { timeout: 8000, windowsHide: true } as never);
+      return String(out.stdout).trim() || null;
     } catch {
       return null;
     }

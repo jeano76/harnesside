@@ -7,6 +7,7 @@
 
 import type { Hardware } from "./hardware.js";
 import { pickPrimaryGpu } from "./hardware.js";
+import { runNvidiaSmi } from "./hostEnv.js";
 import type { LlamaTuning } from "./tuning.js";
 
 const GiB = 1024 ** 3;
@@ -95,8 +96,11 @@ export async function waitForGpuRelease(
   let waited = 0;
   for (;;) {
     let out: string;
+    // Bare "nvidia-smi" only: on Windows it is usually NOT on PATH, and a
+    // caught ENOENT here reads as "released" — a model switch would then size the
+    // new context while the old server is still holding VRAM.
     try {
-      out = await run("nvidia-smi", ["--query-compute-apps=pid", "--format=csv,noheader"], 5000);
+      out = await runNvidiaSmi((bin) => run(bin, ["--query-compute-apps=pid", "--format=csv,noheader"], 5000));
     } catch {
       return { released: true, waitedMs: waited }; // no NVIDIA tooling: nothing to wait on
     }

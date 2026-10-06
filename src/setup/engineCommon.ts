@@ -5,6 +5,7 @@
  */
 
 import type { Run } from "./llamaCpp.js";
+import { runNvidiaSmi } from "./hostEnv.js";
 
 /** The CUDA build tag matching a reported driver CUDA version.
  *
@@ -76,22 +77,17 @@ export function archTag(arch: string): "x64" | "arm64" | null {
  *  prebuilt has to load on the DRIVER, so that is the version that decides.
  *  On Windows nvidia-smi is often not on PATH — System32 copy is tried too. */
 export async function detectCudaVersion(run: Run): Promise<string | null> {
-  const trySmi = async (file: string): Promise<string | null> => {
-    try {
-      const out = await run(file, [], { timeout: 5000 });
-      const m = /CUDA[ A-Z]*Version:\s*(\d+\.\d+)/.exec(out);
-      if (m) return m[1];
-    } catch { /* next */ }
+  // One rule for where nvidia-smi lives (`hostEnv`), because a missing reading here
+  // is not inert: `cudaVersion: null` makes `pickPublishedCudaTag` return null, the
+  // CUDA prebuilt rung is skipped entirely, and a Windows box silently falls back
+  // to Vulkan or CPU while the log says "CUDA 없음".
+  const v = await runNvidiaSmi(async (bin) => {
+    const out = await run(bin, [], { timeout: 5000 });
+    const m = /CUDA[ A-Z]*Version:\s*(\d+\.\d+)/.exec(out);
+    if (m) return m[1];
     return null;
-  };
-  const v = await trySmi("nvidia-smi");
+  }).catch(() => null);
   if (v) return v;
-  if (process.platform === "win32") {
-    const sysRoot = process.env.SystemRoot ?? "C:\\Windows";
-    const abs = `${sysRoot.replace(/\\+$/, "")}\\System32\\nvidia-smi.exe`;
-    const w = await trySmi(abs);
-    if (w) return w;
-  }
   try {
     const out = await run("nvcc", ["--version"], { timeout: 5000 });
     const m = /release (\d+\.\d+)/.exec(out);

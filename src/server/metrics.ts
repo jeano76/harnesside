@@ -12,6 +12,7 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { cpus, freemem, totalmem, loadavg } from "node:os";
+import { runNvidiaSmi } from "../setup/hostEnv.js";
 // **정본은 shared** 다. 웹 UI 도 이 타입/순수 함수를 쓰는데, 서버 모듈에서 가져가면
 // 번들에 node:child_process 가 딸려 들어간다(실제로 웹 빌드가 실패했다).
 import {
@@ -107,14 +108,22 @@ async function readDisk(path: string): Promise<Metrics["disk"]> {
  * nvidia-smi 한 번 실행. 실패/없음 → null(0 이 아니다).
  * `--query-gpu` 를 사용해 드라이버 초기화를 유발하는 전체 출력 파싱을 피한다.
  */
-export async function readGpu(bin = "nvidia-smi"): Promise<Metrics["gpu"]> {
+export async function readGpu(bin?: string): Promise<Metrics["gpu"]> {
   const args = [
     "--query-gpu=name,utilization.gpu,temperature.gpu,power.draw,memory.used,memory.total",
     "--format=csv,noheader,nounits",
   ];
-  const out = await new Promise<string | null>((resolve) => {
-    execFile(bin, args, { timeout: 1500, maxBuffer: 4096 }, (err, stdout) => resolve(err ? null : stdout)).unref?.();
-  });
+  // `bin` is the injected-test override and wins; otherwise the hostEnv rule
+  // decides. On Windows a bare "nvidia-smi" is usually not on PATH, and the bare
+  // name made every gauge read `null` — which the panel shows as "미확인", so the
+  // dashboard silently reported an NVIDIA card it was never able to measure.
+  const exec = (b: string) =>
+    new Promise<string | null>((resolve) => {
+      execFile(b, args, { timeout: 1500, maxBuffer: 4096 }, (err, stdout) => resolve(err ? null : stdout)).unref?.();
+    });
+  const out = bin
+    ? await exec(bin)
+    : await runNvidiaSmi(exec).catch(() => null);
   if (!out) return null;
   const line = out.split("\n")[0]?.trim();
   if (!line) return null;

@@ -8,6 +8,7 @@
  */
 
 import type { Hardware, Run } from "./hardware.js";
+import { runNvidiaSmi } from "./hostEnv.js";
 
 export type BuildBackend = "cuda" | "rocm" | "vulkan" | "metal" | "cpu";
 
@@ -92,13 +93,15 @@ export function chooseBuildTarget(
 
 /** `nvidia-smi` reports compute capability as "7.5"; cmake wants "75". */
 export async function detectCudaArch(run: Run): Promise<string | null> {
-  try {
-    const out = await run("nvidia-smi", ["--query-gpu=compute_cap", "--format=csv,noheader"], { timeout: 5000 });
+  // Routed through hostEnv so the System32 location is tried on Windows: a bare
+  // "nvidia-smi" ENOENT here returns `null`, and `null` means the flag is OMITTED —
+  // so a Windows CUDA source build silently compiled for every architecture
+  // (slow) or, worse, reported the build target as chosen without a real arch.
+  return runNvidiaSmi(async (bin) => {
+    const out = await run(bin, ["--query-gpu=compute_cap", "--format=csv,noheader"], { timeout: 5000 });
     const caps = [...new Set(out.split("\n").map((l) => l.trim()).filter((l) => /^\d+\.\d+$/.test(l)))];
     return caps.length > 0 ? caps.map((c) => c.replace(".", "")).join(";") : null;
-  } catch {
-    return null;
-  }
+  }).catch(() => null);
 }
 
 /**
