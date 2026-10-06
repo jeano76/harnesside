@@ -1,7 +1,7 @@
 /**
  * 인덴트 가이드 렌더 (2026-10-05 · ③).
  *
- * 규칙(위치 계산)은 `indentGuides.ts` 의 순수 함수에 있고, 여기는 **그림만** 한다.
+ * 규칙(위치 계산)은 `indentRules.ts` 의 순수 함수에 있고, 여기는 **그림만** 한다.
  * 이 저장소 관례(`.ts` 에 규칙 · `.tsx` 에 렌더)를 그대로 지킨 이유가 여기에 있다:
  * 가이드 위치는 **브라우저 없이** 검사할 수 있어야 한다. 이 컴포넌트는 "선이
  * 어디쯤 놓이는가" 를 아무것도 모른다 — `guides` 를 그대로 그릴 뿐이다.
@@ -12,7 +12,7 @@
  */
 
 import React from "react";
-import { GUIDE_VISUAL, guideLeftCss, type IndentInfo } from "./indentGuides.js";
+import { GUIDE_VISUAL, guideLeftCss, type IndentInfo } from "./indentRules.js";
 
 export interface IndentGuidesProps {
   /** `indentInfoFor` 가 준 결과. */

@@ -34,9 +34,9 @@ import {
   tokenizeLine,
 } from "../editor/highlight.js";
 import { extractSymbols } from "../../shared/symbols.js";
-// 인덴트 가이드 — 규칙은 `editor/indentGuides.ts`, 렌더는 `editor/IndentGuides.tsx`.
+// 인덴트 가이드 — 규칙은 `editor/indentRules.ts`, 렌더는 `editor/IndentGuides.tsx`.
 import { IndentGuides } from "../editor/IndentGuides.js";
-import { indentInfoFor } from "../editor/indentGuides.js";
+import { indentInfoFor } from "../editor/indentRules.js";
 import { COLOR, FONT, RADIUS } from "../theme/tokens.js";
 
 const DIM = COLOR.DIM_SUBTLE;

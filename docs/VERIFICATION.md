@@ -176,7 +176,7 @@ and `~/.harnesside` — stated in the test rather than left as a mystery.
 |---|---|---|
 | Overlay preserves the source line-by-line | `colorOverlay.test.ts` — CRLF normalization, trailing blank lines, tokens rejoined | identical, incl. empty/whitespace lines |
 | **Highlighted code loses no characters** | `highlight.test.ts` + the case that broke it (a 14,290-char minified CSS line lost 12,800) | fixed and pinned; reverting the fix fails 2 tests |
-| Guides land on the right columns | `indentGuides.test.ts` — 17 checks incl. tab stops, closing lines, `ch` strings | pass |
+| Guides land on the right columns | `indentRules.test.ts` — 17 checks incl. tab stops, closing lines, `ch` strings | pass |
 | **The editor is reachable** | `editorReachability.test.ts` — import must reach a render; a guard and a state write must exist | pass; mutation-proven (4 ways) |
 | Colors are **transparent + a color layer exists** | one test binds both — either alone means an empty editor | pass |
 | Two layers share one metrics object | the test counts the layers that use `EDITOR_TEXT_METRICS` (3) | pass |

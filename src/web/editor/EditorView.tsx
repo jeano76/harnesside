@@ -23,7 +23,7 @@ import {
   colorFor,
   editorOverlayPlan,
 } from "./colorOverlay.js";
-// 인덴트 가이드: 규칙(`indentGuides.ts`) · 렌더(`IndentGuides.tsx`) — 같은 일을 두 곳에 두지 않는다.
+// 인덴트 가이드: 규칙(`indentRules.ts`) · 렌더(`IndentGuides.tsx`) — 같은 일을 두 곳에 두지 않는다.
 import { IndentGuides } from "./IndentGuides.js";
 // 가이드 선 색은 **토큰 정본**에서 온다 — 여기서 회색 리터럴을 새로 만들지 않는다.
 import { COLOR } from "../theme/tokens.js";

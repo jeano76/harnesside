@@ -37,7 +37,7 @@
 
 import { tokenizeLine, colorFor, LANGUAGE_LABEL, type Language, type Token } from "./highlight.js";
 import { COLOR, FONT } from "../theme/tokens.js";
-import { indentInfoFor, type IndentInfo } from "./indentGuides.js";
+import { indentInfoFor, type IndentInfo } from "./indentRules.js";
 
 /**
  * 두 층이 **공유해야 하는** 글자 모양·여백.
@@ -88,7 +88,7 @@ export interface OverlayLine {
   /** 화면에 그릴 1-based 줄 번호. */
   n: number;
   tokens: Token[];
-  /** 인덴트 가이드 — **규칙은 `indentGuides.ts`** (2026-10-05). 계산은 거기서 한다. */
+  /** 인덴트 가이드 — **규칙은 `indentRules.ts`** (2026-10-05). 계산은 거기서 한다. */
   indent: IndentInfo;
 }
 

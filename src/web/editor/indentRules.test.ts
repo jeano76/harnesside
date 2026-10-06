@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { GUIDE_TAB_SIZE, GUIDE_VISUAL, guideLeftCss, indentColumnsFor, indentInfoFor } from "./indentGuides.js";
+import { GUIDE_TAB_SIZE, GUIDE_VISUAL, guideLeftCss, indentColumnsFor, indentInfoFor } from "./indentRules.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (rel: string) => readFileSync(join(here, rel), "utf8");
