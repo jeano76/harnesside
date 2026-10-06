@@ -245,7 +245,9 @@ jobs:
             echo "이미 떠 있는 서버를 채택하지 않았다 — 포트를 옮겨 두 번째 서버를 띄운다(실측 OOM 경로)";
             tail -20 /tmp/adopt.log; exit 1; }
           # 포트를 **옮기지 않았는지** 도 본다. 옮긴 흔적이 있으면 그것부터 고쳐야 한다.
-          grep -q '포트 계획 — llama 8080 — 기존 서버를 채택' /tmp/adopt.log || {
+          # 로그 형식: "포트 계획 — llama 8080 · IDE 7317 — 기존 서버를 채택(…)". IDE 포트가 붙은 뒤로
+          # 고정 문자열 검사가 채택 성공을 실패로 셌다 — 8080 유지와 채택 두 사실만 본다.
+          grep -qE '포트 계획 — llama 8080( · IDE [0-9]+)? — 기존 서버를 채택' /tmp/adopt.log || {
             echo "단계 6 이 8080 을 유지하지 않았다"; tail -20 /tmp/adopt.log; exit 1; }
           if grep -q 'llama-server 스폰' /tmp/adopt.log; then
             echo "채택했는데 스폰했다 — 8GiB 카드에서 두 번째 서버는 즉시 OOM 한다"; exit 1
