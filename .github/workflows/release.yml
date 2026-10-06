@@ -71,94 +71,38 @@ jobs:
       - name: 셀프업데이트 경로 실측 (검증 실패 → 교체 없음까지)
         run: npm run verify:selfupdate
 
-  # ───────────────────────────────────────────────────────── 배포물 생성
-  build-release:
-    name: 배포물 생성 (manifest + tar.gz + SHA256SUMS)
-    needs: gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # **태그가 가리키는 커밋**을 그대로 쓴다. 여기서 실수했다가 고친다:
-          # 처음엔 `default_branch` 를 적었다. 그 결과 **태그와 릴리스 내용이 어긋난다** —
-          # v0.1.0 을 만들었는데 main HEAD 의 코드가 배포된다. 태그를 **나중에** 만든
-          # 사람이면 반드시 벌어지는 사고이고, 아무도 눈치채지 못한다(릴리스는 정상 배포된다).
-          #
-          # `fetch-depth: 0` 이 있어야 Annotated 태그의 **진짜 커밋**을 물고 온다.
-          # 얕게 가져오면 태그가 가리키는 커밋이 **없어서** 체크아웃이 다른 걸로 대체한다.
-          ref: refs/tags/${{ github.ref_name }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm ci || npm install
-
-      # `gen-build-info.mjs` 가 여기서 **처음** 실행되고 `dist/server/buildInfo.json` 을
-      # 굽는다. 이 값이 배포물의 신원이다 — `make-release` 은 새로 만들지 않고 읽는다.
-      - run: npm run build
-
-      # 다시 한 번 막는다. 게이트 잡과 빌드가 **다른 잡**이라 그 사이에 상태가
-      # 바뀔 수 있다(그리고 실제로 바뀐다 — 사람이 그사이 push 한다).
-      - name: 트리 상태 재확인
-        run: node scripts/gen-build-info.mjs --check --require-clean
-
-      - name: 배포물 생성
-        run: node scripts/make-release.mjs
-
-      # ── R-3 인수 조건 2: 사람이 확인할 수 있어야 한다 ──────────────────────
-      # `sha256sum -c` 가 로컬에서 통과해야 한다. 스크립트가 스스로 만든 해시를
-      # 스스로 검증하는 것보다 **별도 도구**로 확인하는 편이 낫다 — 같은 코드를
-      # 두 번 실행하면 같은 버그를 두 번 믿게 된다.
-      - name: SHA256SUMS 확인 (sha256sum -c)
-        working-directory: release
-        run: sha256sum -c SHA256SUMS
-
-      # 인수 조건 3: tar 목록과 manifest 목록이 **정확히 일치**해야 한다.
-      # 빠진 파일은 **부팅 실패로만** 나타난다(조용히 빠진다).
-      - name: tar 목록 == manifest 목록
-        run: |
-          set -euo pipefail
-          tar -tzf release/harnesside-dist.tar.gz | sed 's|^dist/||' | grep -v '/$' | sort > /tmp/tar-list.txt
-          node -e '
-            const m = require("./release/manifest.json");
-            console.log(m.files.map(f => f.path).sort().join("\n"));
-          ' | sort > /tmp/manifest-list.txt
-          if ! diff -u /tmp/manifest-list.txt /tmp/tar-list.txt; then
-            echo "tar 목록과 manifest 목록이 다릅니다 — 배포하지 않습니다."; exit 1
-          fi
-          echo "목록 일치: $(wc -l < /tmp/tar-list.txt)개 파일"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-assets
-          path: release/
-          if-no-files-found: error
-
-  # ───────────────────────────────────────────────────────── 포터블 압축 생성
-  # npm이 안 되는 머신용. node_modules를 통째로 넣으므로 플랫폼별로 만든다.
-  # Linux 빌드를 Windows에 풀면 네이티브 모듈(node-pty)이 맞지 않는다 — 그래서
-  # 러너도 플랫폼별로 둔다. 받는 쪽 검증은 zip 안의 portable-manifest.json이다.
+  # ───────────────────────────────────────────────────────── 포터블 배포물 (유일한 배포물)
+  # 배포는 **포터블 zip 하나**로 단일화됐다. 설치도 셀프업데이트도 이 zip 을 쓴다.
+  # node_modules(네이티브 모듈 node-pty 포함)를 통째로 넣으므로 `<platform>-<arch>` 마다
+  # 그 플랫폼 러너에서 만든다 — Linux 빌드를 Windows 에 풀면 node-pty 가 맞지 않는다.
+  #
+  # `required: true` 는 실측된 플랫폼이다. 이것이 실패하면 릴리스하지 않는다.
+  # 나머지는 빌드되면 싣고, 실패하면 릴리스 노트에 **실패했다고** 적는다(지원한다고 말하지 않는다).
+  # 러너 레이블은 2026-10-07 GitHub 문서로 확인했다(docs/PLATFORM_MATRIX.md).
   build-portable:
-    name: 포터블 압축 (${{ matrix.os }})
+    name: 포터블 (${{ matrix.target }})
     needs: gate
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            shell: bash
-          - os: windows-latest
-            shell: pwsh
+          - { target: linux-x64,    os: ubuntu-latest,    shell: bash, required: true }
+          - { target: win32-x64,    os: windows-latest,   shell: pwsh, required: true }
+          - { target: linux-arm64,  os: ubuntu-24.04-arm, shell: bash, required: false }
+          - { target: win32-arm64,  os: windows-11-arm,   shell: pwsh, required: false }
+          - { target: darwin-arm64, os: macos-15,         shell: bash, required: false }
+          - { target: darwin-x64,   os: macos-15-intel,   shell: bash, required: false }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    continue-on-error: ${{ !matrix.required }}
+    timeout-minutes: 30
     defaults:
       run:
         shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
         with:
+          # **태그가 가리키는 커밋**을 그대로 쓴다. `fetch-depth: 0` 이어야 Annotated
+          # 태그의 진짜 커밋을 물고 온다(얕게 가져오면 다른 커밋으로 대체된다).
           ref: refs/tags/${{ github.ref_name }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
@@ -166,12 +110,20 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci || npm install
+      # `gen-build-info.mjs` 가 빌드 신원을 굽는다 — zip 매니페스트의 `build` 가 이 값이다.
       - run: npm run build
-      - name: 트리 상태 재확인
+      - name: 트리 상태 재확인 (더티면 배포 금지)
         run: node scripts/gen-build-info.mjs --check --require-clean
+
+      - name: 러너가 목표 플랫폼인가 (이름과 내용이 어긋나면 업데이트가 거부한다)
+        run: node -e "const t=process.platform+'-'+process.arch; if(t!=='${{ matrix.target }}'){console.error('러너 '+t+' != 목표 ${{ matrix.target }}');process.exit(1)} console.log('플랫폼 '+t)"
+
       - name: 포터블 압축 생성
         run: node scripts/make-portable.mjs
-      - name: 해시 확인 (node로 — 러너에 sha256sum이 없어도 됨)
+      - name: 재현성 (두 번 만들어 바이트가 같은가)
+        run: node scripts/make-portable.mjs --verify-repro
+
+      - name: 해시 확인 (node 로 — 러너에 sha256sum 이 없어도 됨)
         run: |
           node -e '
             const fs = require("fs");
@@ -180,130 +132,127 @@ jobs:
             const sums = fs.readFileSync(`release/${zip}.SHA256SUMS`, "utf8").split("\n").filter(Boolean);
             for (const line of sums) {
               const [hex, name] = line.split(/\s+/);
-              const file = name === "portable-manifest.json" ? `release/${zip}.manifest.json` : `release/${name}`;
-              const actual = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+              const actual = crypto.createHash("sha256").update(fs.readFileSync(`release/${name}`)).digest("hex");
               if (actual !== hex) { console.error(`불일치: ${name}`); process.exit(1); }
               console.log(`확인됨: ${name}`);
             }
+            const m = JSON.parse(fs.readFileSync(`release/${zip}.manifest.json`, "utf8"));
+            if (m.asset.sha256 !== crypto.createHash("sha256").update(fs.readFileSync(`release/${zip}`)).digest("hex")) {
+              console.error("외부 매니페스트의 zip 해시가 실제와 다릅니다"); process.exit(1);
+            }
           '
+
+      # ── 받는 쪽처럼 풀어서 실행해 본다 ─────────────────────────────────────
+      # zip 이 만들어졌다는 것과 **그 zip 이 이 OS 에서 뜬다**는 것은 다른 사실이다.
+      # 저장소 체크아웃이 아니라 **푼 자리**에서 돌린다 — node_modules 가 zip 에 없으면 여기서 죽는다.
+      - name: 풀어서 실행 (설치 점검 · 네이티브 모듈 · doctor)
+        run: |
+          node --input-type=module -e '
+            import { extractZip } from "./dist/setup/zip.js";
+            import { readdirSync, mkdirSync } from "node:fs";
+            const [zip] = readdirSync("release").filter((f) => f.endsWith(".zip"));
+            mkdirSync("unpacked", { recursive: true });
+            extractZip(`release/${zip}`, "unpacked", { strip: 1 });
+          '
+          cd unpacked
+          node install-portable.mjs --check-only
+          node -e "require('./node_modules/node-pty'); console.log('node-pty 로드됨')"
+          node dist/server/index.js --version
+          node dist/server/index.js doctor
+
       - uses: actions/upload-artifact@v4
         with:
-          name: portable-${{ matrix.os }}
+          name: portable-${{ matrix.target }}
           path: release/
           if-no-files-found: error
 
   # ───────────────────────────────────────────────────────── 릴리스 게시
   publish:
     name: GitHub 릴리스 게시
-    needs: [build-release, build-portable]
+    needs: [gate, build-portable]
+    # 선택 플랫폼이 실패해도 게시는 한다 — 필수 플랫폼 확인은 아래 단계가 한다.
+    if: ${{ always() && needs.gate.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: release-assets
+          pattern: portable-*
           path: release
-      - uses: actions/download-artifact@v4
-        with:
-          name: portable-ubuntu-latest
-          path: portable-linux
-      - uses: actions/download-artifact@v4
-        with:
-          name: portable-windows-latest
-          path: portable-win
+          merge-multiple: true
 
-      # R-4.4: 릴리스 본문에 **SemVer, 빌드 날짜, 커밋 해시**를 적는다.
-      # 사용자가 태그만 보고는 무엇이 들어 있는지 알 수 없다.
-      #
-      # 그리고 **아키텍처를 밝힌다**(R-4.5): 배포물은 실행 파일만 담고 `node_modules` 를
-      # 담지 않는다. 안 쓰면 사용자는 설치 직후 ENOENT 를 만나 "설치가 잘못됐다" 고
-      # 생각하고 이슈를 올린다.
+      # R-4.4: 릴리스 본문에 **SemVer, 빌드 날짜, 커밋 해시**와 **플랫폼별 결과**를 적는다.
+      - name: 필수 플랫폼 확인 + 릴리스 노트
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const ALL = ["linux-x64", "win32-x64", "linux-arm64", "win32-arm64", "darwin-arm64", "darwin-x64"];
+            const REQUIRED = ["linux-x64", "win32-x64"];
+            const zipOf = (t) => `harnesside-portable-${t}.zip`;
+            const have = ALL.filter((t) => fs.existsSync(`release/${zipOf(t)}`) && fs.existsSync(`release/${zipOf(t)}.manifest.json`));
+            const missingRequired = REQUIRED.filter((t) => !have.includes(t));
+            if (missingRequired.length) { console.error(`필수 플랫폼 배포물이 없습니다: ${missingRequired.join(", ")} — 게시하지 않습니다`); process.exit(1); }
+            const m = JSON.parse(fs.readFileSync(`release/${zipOf("linux-x64")}.manifest.json`, "utf8"));
+            const b = m.build ?? {};
+            const mib = (n) => (n / 1024 / 1024).toFixed(1) + " MiB";
+            const lines = [
+              "## 빌드 신원",
+              "",
+              "| 항목 | 값 |",
+              "|---|---|",
+              "| 릴리스 | `" + (b.version ?? m.version) + "` |",
+              "| 빌드일 (UTC) | `" + (b.date ?? "미상") + "` |",
+              "| 커밋 | `" + (b.sha ?? "미상") + "` |",
+              "| 더티 트리 | " + (b.dirty === true ? "**예**" : b.dirty === false ? "아니오" : "미상") + " |",
+              "",
+              "## 배포물 — 플랫폼별 포터블 zip (이것이 유일한 설치·업데이트 경로)",
+              "",
+              "| 플랫폼 | 파일 | 크기 | 트리 해시 |",
+              "|---|---|---|---|",
+              ...ALL.map((t) => {
+                if (!have.includes(t)) return "| `" + t + "` | **이번 릴리스에서 빌드 실패 — 제공하지 않음** | | |";
+                const x = JSON.parse(fs.readFileSync(`release/${zipOf(t)}.manifest.json`, "utf8"));
+                return "| `" + t + "` | `" + zipOf(t) + "` | " + mib(x.asset.bytes) + " | `" + x.treeSha256.slice(0, 12) + "…` |";
+              }),
+              "",
+              "## 설치",
+              "",
+              "1. **자기 플랫폼의 zip** 을 받는다 (`process.platform`-`process.arch`). 다른 플랫폼 zip 은 네이티브 모듈이 맞지 않는다.",
+              "2. 압축을 푼다. 필요한 것은 **Node 22 이상**뿐이다 (npm 불필요).",
+              "3. 설치 스크립트를 실행한다:",
+              "   - Windows: `Install-Portable.ps1` 우클릭 → \"PowerShell에서 실행\"",
+              "   - Linux · macOS: `sh install.sh`",
+              "",
+              "설치 스크립트가 하는 일: 매니페스트 대조 → 하드웨어 감지 → 엔진(llama-server) 확보 → 모델 선택·다운로드 →",
+              "**이 머신에서 실측**(기동·처리량·메모리)해 설정을 최적값으로 기록 → 바로가기 생성.",
+              "",
+              "## 무엇을 증명하는가 (§0.2)",
+              "",
+              "- **증명한다** 이 zip 이 어느 커밋·어느 시각(UTC)에 빌드되었는가, 그리고 zip 바이트와 풀린 파일이 매니페스트와 같은가.",
+              "- **증명하지 못한다** 그 바이트가 신뢰할 수 있는지. **코드 서명이 없다** — 해시는 공격자가 다시 계산할 수 있다.",
+              "- 플랫폼 표의 \"빌드 성공\" 은 CI 러너에서 **풀어서 기동했다**는 뜻이다. GPU 경로는 CI 에서 검증되지 않는다 — 실측은 설치 스크립트가 각 머신에서 한다.",
+              "",
+              "## 셀프업데이트에 대해",
+              "",
+              "- **수동 실행만** 한다. 자기 플랫폼 zip 을 받아 `dist/` 와 `node_modules/` 를 함께 교체한다.",
+              "- 설치 폴더 안의 사용자 상태(`.harnesside/`)는 건드리지 않는다. 롤백 슬롯은 최근 3개.",
+              "- **자동 롤백은 없다.** 부팅 실패 시 다음 실행이 「업데이트 미확인」 으로 알리고 슬롯 경로를 남긴다.",
+              "- 0.3.x 이하(tar.gz 셀프업데이트)에서는 이 릴리스로 자동 업데이트되지 않는다 — zip 을 받아 새로 설치한다.",
+            ];
+            fs.writeFileSync("release-notes.md", lines.join("\n") + "\n");
+            fs.writeFileSync("release-files.txt", have.flatMap((t) => [zipOf(t), zipOf(t) + ".manifest.json", zipOf(t) + ".SHA256SUMS"]).map((f) => "release/" + f).join("\n") + "\n");
+          '
+          cat release-notes.md
+
       - name: 릴리스 생성
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          node -e '
-            const fs = require("fs");
-            const m = JSON.parse(fs.readFileSync("release/manifest.json", "utf8"));
-            const b = m.build;
-            const kb = (n) => (n / 1024).toFixed(1) + " KiB";
-            const lines = [
-              "## 빌드 신원",
-              "",
-              "| 항목 | 값 |",
-              "|---|---|",
-              "| 릴리스 | `" + b.version + "` |",
-              "| 빌드일 (UTC) | `" + (b.date ?? "미상") + "` |",
-              "| 커밋 | `" + (b.sha ?? "미상") + "` |",
-              "| 더티 트리 | " + (b.dirty === true ? "**예**" : b.dirty === false ? "아니오" : "미상") + " |",
-              "| 트리 해시 | `" + m.treeSha256 + "` |",
-              "| 파일 수 | " + m.files.length + " |",
-              "| 배포물 크기 | " + kb(m.asset.bytes) + " |",
-              "",
-              "## 설치에 **반드시** 필요한 것 (Raiser R-1)",
-              "",
-              "이 배포물(`harnesside-dist.tar.gz`)은 `dist/` 트리만 담습니다. **`node_modules` 는 담지 않습니다.**",
-              "코드는 갈아끼워지지만 의존성은 그대로이므로, 없는 의존이 있으면",
-              "새 버전은 부팅하지 못합니다. 업데이트는 이 상태를 미리 확인하고",
-              "**막습니다** — 조용히 깨뜨리지 않습니다.",
-              "",
-              "```bash",
-              "npm ci",
-              "node dist/server/index.js",
-              "```",
-              "",
-              "## npm 없이 설치 (포터블 압축)",
-              "",
-              "npm 레지스트리가 막혔거나 npm 자체가 고장난 머신용. 받는 쪽에 npm이",
-              "없어도 된다 (**Node 22만 있으면 됨**). 압축에 `node_modules` 가 통째로",
-              "들어 있으므로 **플랫폼에 맞는 파일을 받으십시오** — Linux 빌드를",
-              "Windows에 풀면 네이티브 모듈(`node-pty`)이 맞지 않습니다.",
-              "",
-              "Windows: 압축 풀기 → `Install-Portable.ps1` 우클릭 → \"PowerShell에서 실행\".",
-              "설치 과정이 모델·llama.cpp 서버·튜닝 확보 + 바탕화면 바로가기까지 만든다.",
-              "(`harnesside-portable-*.zip` + 각 `.SHA256SUMS` 로 확인)",
-              "",
-              "## 무엇을 증명하는가 (§0.2)",
-              "",
-              "- **증명한다** 이 바이너리가 어느 커밋·어느 시각(UTC)에 빌드되었는가,",
-              "  그리고 배포물 바이트가 `manifest.json` 이 선언한 것과 같은가.",
-              "- **증명하지 못한다** 그 바이트가 신뢰할 수 있는지. **코드 서명이 없다** —",
-              "  해시는 공격자가 자기 코드와 함께 다시 계산할 수 있다.",
-              "- **의존한다** 빌드 머신의 시계, 그리고 `dirty=false` 라는 주장.",
-              "",
-              "## 셀프업데이트에 대해",
-              "",
-              "- **수동 실행만** 한다. 부팅 시 자동 확인·자동 적용은 없다.",
-              "- 교체는 `entry` 파일이 아니라 **`dist/` 트리 전체**다. 진입 파일만",
-              "  갈아끼우면 나머지가 옛 버전인 채로 도는 조용한 실패가 생긴다.",
-              "- **자동 롤백은 없다.** 이 서버는 자기 자신을 재시작할 수 없다.",
-              "  부팅 실패 시 다음 실행이 「업데이트 미확인」 으로 알리고, 슬롯 경로를 남긴다.",
-            ];
-            fs.writeFileSync("release-notes.md", lines.join("\n") + "\n");
-          '
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes-file release-notes.md \
-            release/harnesside-dist.tar.gz \
-            release/manifest.json \
-            release/SHA256SUMS \
-            portable-linux/harnesside-portable-*.zip \
-            portable-linux/harnesside-portable-*.zip.SHA256SUMS \
-            portable-linux/harnesside-portable-*.zip.manifest.json \
-            portable-win/harnesside-portable-*.zip \
-            portable-win/harnesside-portable-*.zip.SHA256SUMS \
-            portable-win/harnesside-portable-*.zip.manifest.json \
-            || gh release upload "$TAG" --clobber \
-                 release/harnesside-dist.tar.gz \
-                 release/manifest.json \
-                 release/SHA256SUMS \
-                 portable-linux/harnesside-portable-*.zip \
-                 portable-linux/harnesside-portable-*.zip.SHA256SUMS \
-                 portable-linux/harnesside-portable-*.zip.manifest.json \
-                 portable-win/harnesside-portable-*.zip \
-                 portable-win/harnesside-portable-*.zip.SHA256SUMS \
-                 portable-win/harnesside-portable-*.zip.manifest.json
+          mapfile -t FILES < release-files.txt
+          gh release create "$TAG" --title "$TAG" --notes-file release-notes.md "${FILES[@]}" \
+            || gh release upload "$TAG" --clobber "${FILES[@]}"
           echo "릴리스 게시 완료: $TAG"

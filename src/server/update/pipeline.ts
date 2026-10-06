@@ -323,7 +323,7 @@ export function planApply(g: ApplyGuard): ApplyDecision {
   // **조용히 깨뜨리는 경로만 금지**하므로, 없으면 미리 막는다.
   if (g.dependenciesReady === false) {
     blockers.push(
-      `설치에 필요한 의존성이 없습니다: ${g.missingDependencies.slice(0, 4).join(", ")} — 새 버전은 실행 파일만 도착하므로 구동하지 못합니다. 이 폴더에서 의존성을 설치한 뒤 다시 시도하십시오.`
+      `설치에 필요한 의존성이 없습니다: ${g.missingDependencies.slice(0, 4).join(", ")} — 지금 설치본이 온전하지 않습니다. 이 머신용 포터블 zip 을 다시 풀어 설치한 뒤 시도하십시오.`
     );
   } else if (g.dependenciesReady === null) {
     items.push("의존성 사전 설치 여부: **확인 못 했습니다** — 적용 뒤 기동이 실패할 수 있습니다.");

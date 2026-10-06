@@ -36,6 +36,8 @@ export interface UpdateState {
   current: string;
   remote: { version: string; notes: string; url: string } | null;
   assets: { name: string; size: number }[];
+  /** 이 머신(서버)이 적용할 수 있는 포터블 zip 이름 — `harnesside-portable-<platform>-<arch>.zip`. */
+  bundle?: string;
   slots: string[];
   lastError: string | null;
   /**
@@ -195,7 +197,7 @@ export function UpdateSection({
       {st?.deps && st.deps.ready !== true && (
         <div style={{ fontSize: 10, color: st.deps.ready === false ? "#f85149" : "#d29922" }} data-testid="update-deps">
           의존성: {st.deps.detail}
-          {st.deps.ready === false && " — 새 버전은 실행 파일만 도착하므로 이 상태로는 뜨지 않습니다."}
+          {st.deps.ready === false && " — 지금 설치본의 의존 모듈이 빠져 있습니다. 포터블 zip 을 다시 풀어 설치하십시오."}
         </div>
       )}
 
@@ -206,8 +208,12 @@ export function UpdateSection({
       {st?.state === "available" && (
         <div style={{ display: "grid", gap: 4 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {st.assets.length === 0 && <span style={{ color: "#d29922", fontSize: 10 }}>릴리스에 자산이 없습니다</span>}
-            {st.assets.map((a, i) => (
+            {/* 배포물은 플랫폼별 포터블 zip 이다. 이 머신이 적용할 수 있는 zip 만 버튼으로 보인다
+                (매니페스트·SHA256SUMS·다른 플랫폼 zip 은 누르면 실패할 뿐이다). */}
+            {!st.assets.some((a) => a.name === st.bundle) && (
+              <span style={{ color: "#d29922", fontSize: 10 }}>이 머신용 배포물({st.bundle ?? "확인 못 함"})이 릴리스에 없습니다</span>
+            )}
+            {st.assets.map((a, i) => a.name !== st.bundle ? null : (
               <button
                 key={a.name}
                 type="button"

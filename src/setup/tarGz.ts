@@ -18,9 +18,9 @@
  * caller cannot see. `writeFileSync` makes extraction atomic from the caller's
  * point of view.
  *
- * (그 옛 경로의 원본 `src/selfUpdate.ts` 는 Q-7 에서 삭제되었다. 배포물 생성과
- * 트리 검증의 정본은 `scripts/make-release.mjs` 와 `src/server/update/manifest.ts` 다.
- * 이 파일은 배포물 **풀기**의 정본이다 — 쓰기 정본은 저 둘이다. 규약이 하나여야 한다.)
+ * (그 옛 경로의 원본 `src/selfUpdate.ts` 는 Q-7 에서 삭제되었다. 이 프로그램의 배포물은
+ * 이제 포터블 zip 이고 그 생성·검증의 정본은 `scripts/make-portable.mjs` 와
+ * `src/server/update/manifest.ts` 다. 이 파일은 llama.cpp 사전 빌드(tar.gz) **풀기**에 쓴다.)
  *
  * Symlinks are materialised, and they are not optional. The pinned llama.cpp
  * release ships its shared libraries the way every build does —

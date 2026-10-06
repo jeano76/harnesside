@@ -279,17 +279,15 @@ async function main(): Promise<number> {
   };
   /** 이번에 받을 자산의 실제 크기. 받을 자산이 없으면 null(모름). */
   const pendingAssetBytes = (): number | null => {
-    const st = updates.get();
-    if (st.assets.length === 0) return null;
-    const tgz = st.assets.find((a) => a.name.endsWith(".tar.gz") || a.name.endsWith(".tgz"));
-    const a = tgz ?? st.assets[0];
-    return a.size > 0 ? a.size : null;
+    // 받을 것은 **이 머신의 포터블 zip** 하나다 — 다른 자산의 크기를 대신 말하지 않는다.
+    const { zip } = updates.bundleAssets();
+    return zip && zip.size > 0 ? zip.size : null;
   };
 
   // ── 자기 경로: **`process.argv[1]` 이 아니라 이 모듈의 실제 경로** ────────────
 //
-// `installRoot()` 는 `selfPath` 의 두 단계 위 = `dist/` 다. 그러므로 `selfPath` 가
-// **진짜 진입 파일** 이어야 한다.
+// `installRoot()` 는 `selfPath` 의 세 단계 위 = 패키지 루트(포터블 설치 폴더)다.
+// 그러므로 `selfPath` 가 **진짜 진입 파일** 이어야 한다.
 //
 // `process.argv[1]` 을 쓰면 **전역 설치에서 완전히 틀린다**:
 //   npm 은 `<prefix>/bin/harnesside` 를 **심볼릭 링크**로 만든다.
@@ -1403,8 +1401,8 @@ const updates: UpdateService = new UpdateService({
             return { ...swap, path };
           })
           // ── §9.1 업데이트 ─────────────────────────────────────────────────
-          .route("GET", "/api/update", async () => ({ ...updates.get(), local: await updates.local() }))
-          .route("POST", "/api/update/check", async () => updates.check())
+          .route("GET", "/api/update", async () => ({ ...updates.get(), bundle: updates.bundleAssets().expected, local: await updates.local() }))
+          .route("POST", "/api/update/check", async () => ({ ...(await updates.check()), bundle: updates.bundleAssets().expected }))
           .route("POST", "/api/update/plan", async () => updates.planApply())
           .route("POST", "/api/update/slot", async () => updates.makeSlot())
           .route("POST", "/api/update/download", async (c) => {
@@ -1423,8 +1421,12 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/update/bundle", async (c) => {
             const body = (await readBody(c.req)) as { index?: number };
             const st = updates.get();
-            const asset = st.assets[Number(body.index ?? -1)];
-            if (!asset) throw Object.assign(new Error("자산이 없습니다 — 먼저 확인하십시오"), { status: 400 });
+            // 인덱스가 없으면 **이 머신의 zip** 을 고른다. 있으면 그것을 쓰되,
+            // 다른 플랫폼 zip 이면 `downloadBundle` 이 받기 전에 거부한다.
+            const asset = body.index === undefined ? updates.bundleAssets().zip : st.assets[Number(body.index)];
+            if (!asset) {
+              throw Object.assign(new Error(`이 머신용 배포물(${updates.bundleAssets().expected})이 릴리스에 없습니다 — 먼저 확인하십시오`), { status: 400 });
+            }
             const r = await updates.downloadBundle(asset);
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: 400 });
             ring.info("update", `update-bundle-verified — ${r.detail}`);

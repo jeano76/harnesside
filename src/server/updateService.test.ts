@@ -40,7 +40,7 @@ async function manifestOf(root: string): Promise<ReleaseManifest> {
   return {
     manifestVersion: MANIFEST_VERSION,
     build: { version: "0.1.0", date: "20261005", sha: "08c4467", dirty: false, builtAt: 1 },
-    asset: { name: "harnesside-dist.tar.gz", sha256: sha256("a"), bytes: 1 },
+    asset: { name: "harnesside-portable-linux-x64.zip", sha256: sha256("a"), bytes: 1 },
     files,
     treeSha256: computeTreeSha(files),
   };
@@ -48,15 +48,15 @@ async function manifestOf(root: string): Promise<ReleaseManifest> {
 
 async function sandbox() {
   const dir = await mkdtemp(join(tmpdir(), "harnesside-upd-"));
-  // **실제 설치 모양**을 따른다: `dist/` 는 패키지 루트 아래에 있고, 그 위에
-  // `package.json` 이 있다. 의존성 검사는 `installRoot` 의 **한 단계 위**에서
+  // **실제 설치 모양**(포터블 zip 을 푼 자리)을 따른다: 설치 루트 = 패키지 루트이고,
+  // 그 아래에 `dist/` 와 `package.json` 이 있다. 의존성 검사는 설치 루트의
   // package.json 을 읽는다(Raiser R-1) — 이 배치가 아니면 그 경로를 못 시험한다.
   const pkgRoot = join(dir, "install");
-  const root = join(pkgRoot, "dist");
-  await mkdirSafe(join(root, "server"));
-  await writeFile(join(root, "server", "index.js"), "진입점", "utf8");
+  const root = pkgRoot;
+  await mkdirSafe(join(root, "dist", "server"));
+  await writeFile(join(root, "dist", "server", "index.js"), "진입점", "utf8");
   await writeFile(join(pkgRoot, "package.json"), JSON.stringify({ name: "harnesside", version: "0.1.0", dependencies: { "node-pty": "^1.1.0" } }), "utf8");
-  return { dir, root, pkgRoot, selfPath: join(root, "server", "index.js"), cleanup: async () => rm(dir, { recursive: true, force: true }) };
+  return { dir, root, pkgRoot, selfPath: join(root, "dist", "server", "index.js"), cleanup: async () => rm(dir, { recursive: true, force: true }) };
 }
 
 function release(version: string, over: Record<string, unknown> = {}) {
@@ -248,13 +248,13 @@ test("설치된 트리가 자기 매니페스트와 맞으면 **트리 해시**�
   try {
     // 실제 트리에서 매니페스트를 만든다 — 이론적 해시를 쓰지 않는다.
     const m = await manifestOf(s.root);
-    await writeFile(join(s.root, "manifest.json"), JSON.stringify(m, null, 2), "utf8");
+    await writeFile(join(s.root, "portable-manifest.json"), JSON.stringify(m, null, 2), "utf8");
     const up = svc(s.dir, (async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch);
     const v = await up.verifyInstalled();
     assert.equal(v.ok, true, v.detail);
     assert.equal(v.sha, m.treeSha256);
     assert.equal((await up.local()).sha, m.treeSha256, "로컬 사실이 검증한 트리 해시와 다르다");
-    // manifest.json 자신은 **검증에서 빠진다** — 자기 해시를 자기 안에 쓸 수는 없다.
+    // portable-manifest.json 자신은 **검증에서 빠진다** — 자기 해시를 자기 안에 쓸 수는 없다.
     assert.deepEqual(v.extra, [], "매니페스트 자신을 '목록에 없는 파일' 로 잡았다");
   } finally {
     await s.cleanup();

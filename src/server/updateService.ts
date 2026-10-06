@@ -17,7 +17,7 @@
 import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { readBuildInfo } from "./buildInfo.js";
-import { extractTarGz } from "../setup/tarGz.js";
+import { extractZip } from "../setup/zip.js";
 import { checkDependencies, makeResolver, type DepsResult } from "./update/deps.js";
 import { computeTreeSha, fsVerifyIo, parseManifest, sha256, verifyDetail, verifyTree, type ReleaseManifest } from "./update/manifest.js";
 import {
@@ -45,8 +45,47 @@ export interface ReleaseAsset {
   size: number;
 }
 
-/** 배포물 안에서 매니페스트가 사는 경로. 트리 해시 계산에서는 **제외**한다. */
-export const MANIFEST_RELPATH = "manifest.json";
+/** 배포물(포터블 zip) 안에서 매니페스트가 사는 경로. 트리 해시 계산에서는 **제외**한다. */
+export const MANIFEST_RELPATH = "portable-manifest.json";
+
+/**
+ * 배포는 **포터블 zip 하나**로 단일화됐다 — 설치도 업데이트도 같은 자산을 쓴다.
+ *
+ * 예전 셀프업데이트는 플랫폼 공통 `harnesside-dist.tar.gz`(=`dist/` 만)를 받았다.
+ * 그래서 `node_modules` 는 옛 것 그대로였고(`update/deps.ts` 가 막던 문제), 설치물과
+ * 업데이트물이 **서로 다른 두 배포물**이었다. 지금은 자기 `<platform>-<arch>` zip 을
+ * 받아 `dist/` 와 `node_modules/` 를 **함께** 교체한다.
+ *
+ * 이름은 `process.platform`-`process.arch` 그대로다(`make-portable.mjs` 와 같은 규칙).
+ */
+export function portableAssetName(platform: string = process.platform, arch: string = process.arch): string {
+  return `harnesside-portable-${platform}-${arch}.zip`;
+}
+
+/** zip 옆에 별도 자산으로 오는 매니페스트 — zip 해시(`asset.sha256`)를 담는다. */
+export function portableManifestAssetName(zipName: string): string {
+  return `${zipName}.manifest.json`;
+}
+
+/**
+ * 설치 루트 안에서 **이 프로그램이 소유한** 범위.
+ *
+ * 설치 루트는 이제 패키지 루트(`dist/` 의 부모)다. 그 자리에는 사용자가 만든 것이
+ * 있을 수 있다 — 설치 폴더에서 실행하면 `.harnesside/`(프로젝트 상태 · 업데이트 슬롯)가
+ * 바로 거기에 생긴다. "새 트리에 없는 파일은 지운다" 를 루트 전체에 적용하면
+ * **사용자 상태와 롤백 슬롯까지 지운다.** 그래서 정리·검증의 "남는 파일" 판정은
+ * 아래 디렉터리 안에서만 한다. 최상위 파일(런처·package.json)은 덮어쓰기만 한다.
+ */
+export const MANAGED_DIRS = ["dist", "node_modules"] as const;
+
+/** `rel`(설치 루트 기준, `/` 구분)이 소유 범위 안의 파일인가. */
+export function isManagedPath(rel: string): boolean {
+  return MANAGED_DIRS.some((d) => rel === d || rel.startsWith(`${d}/`));
+}
+
+/** Windows 에서 잠긴 파일을 비켜 둔 흔적과 쓰다 만 임시 파일 — 목록 대조에서 제외한다. */
+const STALE_SUFFIXES = [".harnesside-old", ".harnesside-tmp"];
+const isStale = (rel: string): boolean => STALE_SUFFIXES.some((s) => rel.endsWith(s));
 
 export interface UpdateServiceOptions {
   /** 현재 버전(패키지 json). */
@@ -111,17 +150,35 @@ export class UpdateService {
   }
 
   /**
-   * 설치 트리 루트 — `selfPath` 에서 **두 단계 위**.
+   * 설치 트리 루트 — `selfPath`(`<루트>/dist/server/index.js`)에서 **세 단계 위** = 패키지 루트.
    *
-   * 왜 이것이 필요한가(R-5): 배포물은 `dist/` **전체**다. `dist/server/index.js` 만
-   * 갈아끼우면 `dist/agent/loop.js` 는 옛 버전이다. 그래서 교체와 검증의 단위를
-   * `selfPath` 가 아니라 **이 루트**로 올린다.
+   * 왜 이것이 필요한가(R-5): 배포물은 포터블 zip **전체**(`dist/` + `node_modules/` +
+   * 런처)다. 파일 하나만 갈아끼우면 나머지는 옛 버전이다. 그래서 교체와 검증의 단위를
+   * `selfPath` 가 아니라 **이 루트**로 올린다. 정리 범위는 `MANAGED_DIRS` 로 제한한다.
    *
    * 규약: `src/server/` 와 `dist/server/` 는 둘 다 패키지 루트에서 두 단계 아래라
    * 같은 계산이 맞는다.
    */
   installRoot(): string {
-    return resolve(this.opts.selfPath, "..", "..");
+    return resolve(this.opts.selfPath, "..", "..", "..");
+  }
+
+  /** 이 머신이 받아야 할 zip 과 그 매니페스트 — 확인한 릴리스의 자산 목록에서 찾는다. */
+  bundleAssets(): { zip: ReleaseAsset | null; manifest: ReleaseAsset | null; expected: string } {
+    const expected = portableAssetName();
+    const zip = this.status.assets.find((a) => a.name === expected) ?? null;
+    const mName = portableManifestAssetName(expected).toLowerCase();
+    const manifest = this.status.assets.find((a) => a.name.toLowerCase() === mName) ?? null;
+    return { zip, manifest, expected };
+  }
+
+  /**
+   * 개발 체크아웃에는 적용하지 않는다. 설치 루트가 저장소면 `dist/`·`node_modules/` 를
+   * 배포물로 갈아끼우게 되고, 그건 업데이트가 아니라 작업 트리 파괴다.
+   */
+  private async refuseCheckout(root: string): Promise<string | null> {
+    const git = await stat(join(root, ".git")).catch(() => null);
+    return git ? `설치 루트가 git 체크아웃입니다(${root}) — 개발 트리에는 업데이트를 적용하지 않습니다` : null;
   }
 
   /**
@@ -278,10 +335,9 @@ export class UpdateService {
    */
   async dependencies(): Promise<DepsResult> {
     const root = this.installRoot();
-    const pkgParent = resolve(root, "..");
     let pkg: Parameters<typeof checkDependencies>[1] = null;
     try {
-      pkg = JSON.parse(await readFile(join(pkgParent, "package.json"), "utf8")) as { dependencies?: unknown };
+      pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { dependencies?: unknown };
     } catch {
       pkg = null;
     }
@@ -334,7 +390,7 @@ export class UpdateService {
         ok: false,
         sha: null,
         manifest: null,
-        detail: "설치된 트리에 manifest.json 이 없습니다 — 개발 실행이거나 구버전 배포물입니다",
+        detail: `설치된 트리에 ${MANIFEST_RELPATH} 이 없습니다 — 개발 실행이거나 포터블이 아닌 옛 설치입니다`,
         entryOnly: null,
         missing: [],
         mismatched: [],
@@ -342,7 +398,7 @@ export class UpdateService {
       };
     }
 
-    const v = verifyTree(manifest, fsVerifyIo(root), root, { ignore: [MANIFEST_RELPATH] });
+    const v = verifyTree(manifest, fsVerifyIo(root), root, { ignore: [MANIFEST_RELPATH], scope: (rel) => isManagedPath(rel) && !isStale(rel) });
     if (!v.ok) {
       return { ok: false, sha: null, manifest, detail: verifyDetail(v), entryOnly: null, missing: v.missing, mismatched: v.mismatched, extra: v.extra };
     }
@@ -411,10 +467,20 @@ export class UpdateService {
   }> {
     const f = this.opts.fetchImpl ?? fetch;
 
+    // 0) **이 머신의 zip 만** 받는다. 다른 플랫폼 zip 은 node_modules 의 네이티브 모듈
+    //    (node-pty)이 맞지 않아 교체하는 순간 부팅이 깨진다 — 받기 전에 거른다.
+    const expected = portableAssetName();
+    if (asset.name !== expected) {
+      const detail = `이 머신(${process.platform}-${process.arch})의 배포물은 ${expected} 입니다 — ${asset.name} 은 적용할 수 없습니다.`;
+      this.set({ lastError: detail });
+      this.phase("failed", detail, 0, detail);
+      return { ok: false, detail };
+    }
     // 1) 매니페스트 — 릴리스 자산 목록에서 찾는다. 없으면 **진행하지 않는다.**
-    const mAsset = this.status.assets.find((a) => a.name.toLowerCase() === MANIFEST_RELPATH);
+    const mName = portableManifestAssetName(asset.name).toLowerCase();
+    const mAsset = this.status.assets.find((a) => a.name.toLowerCase() === mName);
     if (!mAsset) {
-      const detail = `릴리스에 ${MANIFEST_RELPATH} 이 없습니다 — 이 릴리스는 이 프로그램이 배포한 것이 아닙니다. 적용하지 않습니다.`;
+      const detail = `릴리스에 ${portableManifestAssetName(asset.name)} 이 없습니다 — 검증할 수 없는 배포물은 적용하지 않습니다.`;
       this.set({ lastError: detail });
       this.phase("failed", detail, 0, detail);
       return { ok: false, detail };
@@ -427,6 +493,10 @@ export class UpdateService {
       const p = parseManifest(await res.text());
       if (!p.ok) throw new Error(p.error);
       manifest = p.manifest;
+      // 매니페스트가 **다른 플랫폼**을 선언하면 이름이 맞아도 쓰지 않는다(이름은 바꿀 수 있다).
+      if ((manifest.platform && manifest.platform !== process.platform) || (manifest.arch && manifest.arch !== process.arch)) {
+        throw new Error(`매니페스트가 ${manifest.platform}-${manifest.arch} 용입니다 (이 머신 ${process.platform}-${process.arch})`);
+      }
     } catch (e) {
       const detail = `매니페스트를 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
       this.set({ lastError: detail });
@@ -466,8 +536,8 @@ export class UpdateService {
     try {
       await rm(staged, { recursive: true, force: true });
       await mkdir(staged, { recursive: true });
-      // `strip: 1` — 아카이브는 배포물 루트(`dist/`) 하나를 감싼다(R-3.1 계약).
-      extractTarGz(archivePath, staged, { strip: 1 });
+      // `strip: 1` — zip 은 최상위 `harnesside/` 하나를 감싼다(`make-portable.mjs` 계약).
+      extractZip(archivePath, staged, { strip: 1 });
     } catch (e) {
       const detail = `배포물을 풀지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
       this.set({ lastError: detail });
@@ -476,6 +546,7 @@ export class UpdateService {
     }
 
     // 4) **목록 대조** — 해시뿐 아니라 **무엇이 들어 있는지** 본다.
+    // 여기는 **방금 푼 zip** 이라 범위 제한 없이 전부 본다 — 목록에 없는 파일이 끼어 있으면 그 자체가 실패다.
     const v = verifyTree(manifest, fsVerifyIo(staged), staged, { ignore: [MANIFEST_RELPATH] });
     if (!v.ok) {
       await rm(staged, { recursive: true, force: true });
@@ -513,7 +584,9 @@ export class UpdateService {
       const dest = this.slotTree(version);
       await rm(dest, { recursive: true, force: true });
       await mkdir(dest, { recursive: true });
-      const copied = await copyTree(root, dest);
+      // 슬롯에는 **소유 범위만** 담는다. 루트 전체를 복사하면 설치 폴더 안의
+      // `.harnesside/state/update-slots`(=슬롯 자신)와 사용자 파일까지 슬롯마다 복제된다.
+      const copied = await copyTree(root, dest, { filter: isOwnedRel });
       // **트리 단위로 센다**(R-5.4). 파일 수로 세면 아무도 읽을 수 없다.
       while (this.slots.length >= VERSION_SLOTS) {
         const oldest = this.slots.shift();
@@ -557,15 +630,18 @@ export class UpdateService {
 
     // 되돌릴 곳(교체 **전**) — 교체 후에 만들면 옛 것이 이미 없다.
     // 그리고 이 슬롯은 **적용할 트리와 다른 경로**다(위 주석의 실측 사고).
+    const root = this.installRoot();
+    const checkout = await this.refuseCheckout(root);
+    if (checkout) return { ok: false, detail: checkout };
+
     const slot = await this.makeSlot();
     if (!slot.ok) return { ok: false, detail: `롤백 슬롯을 만들지 못해 적용하지 않았습니다: ${slot.detail}` };
 
-    const root = this.installRoot();
     try {
       const r = await installTree(stagedTree, root, this.opts.selfPath);
       // ── 매니페스트를 **따로** 쓴다 ─────────────────────────────────────────
-      // 배포물은 `manifest.json` 을 담지 않는다(닭과 달걀 — `make-release.mjs` 참조).
-      // 대신 **별도 자산**으로 받고, 교체와 **같은 순간** 설치 루트에 굽는다.
+      // zip 안의 매니페스트는 자기 zip 의 해시를 담을 수 없다(닭과 달걀 — `make-portable.mjs`).
+      // 그래서 zip 해시까지 담은 **별도 자산**의 매니페스트를, 교체와 **같은 순간** 설치 루트에 굽는다.
       // 그때부터 이 프로그램은 **자기 매니페스트로 자기 트리를 증명**한다(§0.1).
       //
       // **왜 반드시 이 순간인가**: 매니페스트를 안 쓰면 다음 기동이 옛 매니페스트로
@@ -604,6 +680,8 @@ export class UpdateService {
     }
     try {
       const root = this.installRoot();
+      const checkout = await this.refuseCheckout(root);
+      if (checkout) return { ok: false, detail: checkout };
       const r = await installTree(src, root, this.opts.selfPath);
       this.set({ lastError: null });
       this.phase("idle", `이전 버전으로 되돌렸습니다: ${src} (${r.written}개 파일 복원, ${r.removed}개 정리)`);
@@ -833,34 +911,75 @@ async function walk(dir: string, prefix = ""): Promise<string[]> {
   return out;
 }
 
+/** 설치 루트에서 이 프로그램이 소유한 파일인가 — 소유 디렉터리 안이거나 최상위 파일. */
+export function isOwnedRel(rel: string): boolean {
+  if (isStale(rel)) return false;
+  return isManagedPath(rel) || !rel.includes("/");
+}
+
+async function sameBytes(a: string, b: string): Promise<boolean> {
+  try {
+    const [sa, sb] = await Promise.all([stat(a), stat(b)]);
+    if (sa.size !== sb.size) return false;
+    const [ba, bb] = await Promise.all([readFile(a), readFile(b)]);
+    return ba.equals(bb);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `tmp` 를 `to` 자리에 놓는다. Windows 에서 **실행 중인 프로세스가 로드한** 네이티브
+ * 모듈(`node-pty` 의 `.node`·`.dll`)은 덮어쓸 수 없지만 **이름은 바꿀 수 있다.**
+ * 그래서 막히면 옛 파일을 `.harnesside-old` 로 비켜 두고 새 파일을 놓는다 — 비켜 둔
+ * 파일은 다음 교체(`installTree`)가 지운다. 다른 OS 의 실패는 그대로 던진다.
+ */
+async function placeFile(tmp: string, to: string): Promise<void> {
+  try {
+    await rename(tmp, to);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (process.platform !== "win32" || !(code === "EPERM" || code === "EBUSY" || code === "EACCES")) throw e;
+    const aside = `${to}.harnesside-old`;
+    await rm(aside, { force: true }).catch(() => undefined);
+    await rename(to, aside);
+    await rename(tmp, to);
+  }
+}
+
 /**
  * 트리 복사 — **파일마다 tmp → rename**. 전원 차단으로 반만 남으면 다음 실행이
  * 깨진 파일을 실행한다.
  *
  * 심볼릭 링크는 **따라가지 않고 건너뛴다.** 링크를 따라 복사하면 슬롯이 루트 밖을
- * 삼키고, 링크를 만들면 롤백이 원본을 건드릴 위험이 있다. 배포물(`dist/`)에는
- * 링크가 없다 — 건너뛰어도 빠지는 것은 없다.
+ * 삼키고, 링크를 만들면 롤백이 원본을 건드릴 위험이 있다. 포터블 zip 에는 링크가
+ * 없다(`make-portable.mjs` 가 담지 않는다) — 건너뛰어도 빠지는 것은 없다.
  *
- * `keep` 의 파일은 **건드리지 않는다**(지금 쓰는 곳은 없다. 슬롯은 전부 복사한다).
+ * `skipIdentical`: 이미 같은 바이트면 쓰지 않는다. 교체에서 쓴다 — 바뀌지 않은 네이티브
+ * 모듈을 건드리지 않으면 Windows 의 잠긴 파일 문제 자체가 생기지 않는다.
  */
 export async function copyTree(
   src: string,
   dest: string,
-  opts: { keep?: Set<string> } = {}
-): Promise<{ written: number }> {
-  const files = await walk(src);
+  opts: { keep?: Set<string>; filter?: (rel: string) => boolean; skipIdentical?: boolean } = {}
+): Promise<{ written: number; unchanged: number }> {
+  const files = (await walk(src)).filter((rel) => (opts.filter ? opts.filter(rel) : true));
   const keep = opts.keep ?? new Set<string>();
   let written = 0;
+  let unchanged = 0;
   for (const rel of files) {
     if (keep.has(rel)) continue;
     const from = join(src, ...rel.split("/"));
     const to = join(dest, ...rel.split("/"));
+    if (opts.skipIdentical && (await sameBytes(from, to))) {
+      unchanged++;
+      continue;
+    }
     await mkdir(join(to, ".."), { recursive: true });
     const tmp = `${to}.harnesside-tmp`;
     await writeFile(tmp, await readFile(from));
     // Windows has no POSIX mode bits: chmod is a no-op that can throw
-    // ENOSYS/EPERM on some setups, and a deployed dist/ runs from .js
-    // without an exec bit anyway. Preserve modes where they exist.
+    // ENOSYS/EPERM on some setups. Preserve modes where they exist.
     if (process.platform !== "win32") {
       try {
         await chmod(tmp, await modeOf(from));
@@ -868,10 +987,10 @@ export async function copyTree(
         /* mode preservation is best-effort */
       }
     }
-    await rename(tmp, to);
+    await placeFile(tmp, to);
     written++;
   }
-  return { written };
+  return { written, unchanged };
 }
 
 async function modeOf(p: string): Promise<number> {
@@ -884,39 +1003,42 @@ async function modeOf(p: string): Promise<number> {
 }
 
 /**
- * 설치 트리 교체 — 복사 + **새 트리에 없는 파일 삭제**.
+ * 설치 트리 교체 — 복사 + **새 트리에 없는 파일 삭제**(소유 범위 안에서만).
  *
  * 삭제가 핵심이다. 새 트리에 없는 옛 파일을 남겨두면 그 파일을 import 하는 경로가
  * **옛 코드로 돌아간다.** 해시는 통과하고 부팅은 성공한다. 조용히 틀어진다(R-5).
- * 이 한 줄이 `entry` 하나만 교체하던 때와 지금을 가른다.
  *
- * 안전장치 두 개:
- *  1. `manifest.json` 은 **항상 남긴다.** 그것이 "나는 무엇인가" 의 증거이므로,
- *     교체 뒤에도 자기 매니페스트로 자기 트리를 증명할 수 있어야 한다.
- *  2. `keepSelf`(진입 파일) 는 **절대 지우지 않는다.** 잘못된 경로로 불러
- *     프로그램이 자기 자신을 지우고 부팅하지 못하는 사고를 막는다.
+ * 안전장치:
+ *  1. 삭제는 `MANAGED_DIRS`(`dist/`·`node_modules/`) 안에서만 한다. 설치 루트에는
+ *     사용자 상태(`.harnesside/`)와 롤백 슬롯이 있을 수 있다.
+ *  2. 매니페스트(`portable-manifest.json`)는 **항상 남긴다** — "나는 무엇인가" 의 증거.
+ *  3. `keepSelf`(진입 파일)는 **절대 지우지 않는다.**
+ *  4. Windows 에서 비켜 둔 `.harnesside-old` 는 여기서 정리한다(아직 잠겨 있으면 다음 번에).
  */
 export async function installTree(src: string, dest: string, keepSelf?: string): Promise<{ written: number; removed: number }> {
   // **삭제 전에 "새 트리" 가 실제로 뭔지 확인한다.** 아래 루프는 dest 에 없는 파일을
   // 지우는 것이고, 그 목록은 전적으로 `src` 에서 나온다. `src` 가 비면 목록이 비고
-  // **dest 전체가 삭제 대상이 된다.** 그래서 여기서 한 번 더 막는다 —
-  // `stageSwap` 의 게이트와 같은 조건이고, 두 정본이 되면 안 되므로 같은 조건을 쓴다.
+  // **소유 범위 전체가 삭제 대상이 된다.** `stageSwap` 의 게이트와 같은 조건이다.
   const incoming = await walk(src);
   if (incoming.length === 0) {
     throw new Error(`교체할 트리(${src})에 파일이 하나도 없습니다 — 삭제하지 않았습니다. 빈 입력을 교체로 받으면 설치 트리 전체가 지워집니다.`);
   }
-  const copied = await copyTree(src, dest);
+  const copied = await copyTree(src, dest, { skipIdentical: true });
   const keep = new Set([...incoming, MANIFEST_RELPATH]);
   const after = await walk(dest);
   let removed = 0;
   for (const rel of after) {
-    if (keep.has(rel)) continue;
+    if (isStale(rel)) {
+      await rm(join(dest, ...rel.split("/")), { force: true }).catch(() => undefined);
+      continue;
+    }
+    if (!isManagedPath(rel) || keep.has(rel)) continue;
     if (keepSelf && resolve(dest, ...rel.split("/")) === resolve(keepSelf)) continue;
     await rm(join(dest, ...rel.split("/")), { force: true });
     removed++;
   }
-  // 빈 디렉터리 정리 — 새 트리에 없는 옛 패키지 폴더가 남으면 위에서 걸러지지 않는다.
-  await pruneEmptyDirs(dest);
+  // 빈 디렉터리 정리 — 소유 디렉터리 안에서만. 사용자의 빈 폴더는 건드리지 않는다.
+  for (const d of MANAGED_DIRS) await pruneEmptyDirs(join(dest, d));
   return { written: copied.written, removed };
 }
 
@@ -926,7 +1048,7 @@ async function pruneEmptyDirs(dir: string): Promise<void> {
     try {
       entries = await readdir(d);
     } catch {
-      return true;
+      return false;
     }
     let empty = true;
     for (const name of entries) {
@@ -946,5 +1068,3 @@ async function pruneEmptyDirs(dir: string): Promise<void> {
   };
   await walkUp(dir);
 }
-
-export { parseVersion, isNewer };
