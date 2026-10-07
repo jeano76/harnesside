@@ -14,7 +14,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build:server": "tsc -p tsconfig.server.json",
+    "build:server": "tsc -p tsconfig.server.json && node scripts/chmod-bin.mjs",
     "build:web": "vite build",
     "build": "npm run build:server && npm run build:web && node scripts/pack-web-assets.mjs && npm run build:info",
     "build:info": "node scripts/gen-build-info.mjs",
