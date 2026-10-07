@@ -126,3 +126,14 @@ test("플래그 값에 NaN/undefined 가 섞이지 않는다", () => {
     assert.ok(!/NaN|undefined|null/.test(args[i]), `args[${i}]=${args[i]}`);
   }
 });
+
+test("spec 미설정시 --spec-type 없음, 설정시 그대로 전달", () => {
+  const off = build(hw());
+  assert.equal(off.args.includes("--spec-type"), false);
+  const tuning = tuneForHardware(hw(), { modelBytes: 21_864_081_056 });
+  tuning.speculativeTypes = "ngram-mod";
+  tuning.speculativeDraftNMax = 3;
+  const on = buildLlamaArgs({ binPath: "/b", modelPath: "/m", host: "127.0.0.1", port: 8080, tuning });
+  assert.equal(on.args[on.args.indexOf("--spec-type") + 1], "ngram-mod");
+  assert.equal(on.args[on.args.indexOf("--spec-draft-n-max") + 1], "3");
+});

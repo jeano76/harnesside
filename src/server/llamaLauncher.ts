@@ -104,6 +104,15 @@ export function buildLlamaArgs(o: LlamaLaunchOptions): BuiltArgs {
     rationale.push(`CPU MoE 오프로드 ${t.cpuMoeLayers}층 — VRAM 이 모자라 expert 를 내려보냅니다.`);
   }
 
+  // P0-3: --spec-type ngram 계열만. draft 체크포인트 불필요, 실측에서 이득 확인 시만.
+  if (t.speculativeTypes) {
+    args.push("--spec-type", t.speculativeTypes);
+    if (t.speculativeDraftNMax !== undefined) {
+      args.push("--spec-draft-n-max", String(t.speculativeDraftNMax));
+    }
+    rationale.push(`speculative decoding: ${t.speculativeTypes} (실측 채택 · 미달이면 off)`);
+  }
+
   if (o.browserReserveMiB && o.browserReserveMiB > 0) {
     rationale.push(
       `브라우저 VRAM 예약 ${o.browserReserveMiB}MiB(GPU 모드 ${o.gpuMode ?? "?"})를 위 계산에서 제외했습니다.`

@@ -36,7 +36,7 @@ export type MeasureMode = "quick" | "full";
 export interface MeasureCandidate {
   label: string;
   /** 기준 설정에 덮어쓸 값. 빈 객체 = 기준 그대로. */
-  patch: Partial<Pick<LlamaServerConfig, "threads" | "cpuMoeLayers">>;
+  patch: Partial<Pick<LlamaServerConfig, "threads" | "threadsBatch" | "ubatchSize" | "cpuMoeLayers" | "speculativeTypes" | "speculativeDraftNMax">>;
 }
 
 export interface BenchResult {
@@ -118,9 +118,10 @@ export function measurementKey(cfg: Pick<LlamaServerConfig, "binPath" | "modelPa
  * 스레드: 물리 코어 · P코어만(하이브리드) · 논리 코어 · 물리-1. llama.cpp 생성은 메모리 대역폭에
  * 묶여 있어 SMT·E코어를 더 쓰면 **느려지는** 머신이 흔하다 — 예측으로는 알 수 없고 재야 한다.
  * MoE 오프로드(`--n-cpu-moe`): 기준 ±2 (full 에서만, 메모리 경계라 OOM 이면 실패로 기록된다).
+ * full 에서만 추가로: `--spec-type ngram-mod` 1개, `-ub` 절반 1개, `-tb`=`-t` 1개(값이 다를 때).
  */
 export function measureCandidates(
-  base: Pick<LlamaServerConfig, "threads" | "cpuMoeLayers" | "gpuLayers">,
+  base: Pick<LlamaServerConfig, "threads" | "threadsBatch" | "ubatchSize" | "cpuMoeLayers" | "gpuLayers" | "speculativeTypes">,
   cpu: Pick<CpuProfile, "logicalCores" | "physicalCores" | "performanceCores">,
   opts: { mode: MeasureMode; moeLayers?: number }
 ): MeasureCandidate[] {
@@ -152,6 +153,24 @@ export function measureCandidates(
       const v = cur + d;
       if (v >= 0 && v <= opts.moeLayers) out.push({ label: `--n-cpu-moe ${v} (기준 ${d > 0 ? "+" : ""}${d})`, patch: { cpuMoeLayers: v } });
     }
+  }
+  // P0-3: draft 불필요 ngram-spec은 공짜에 가까운 decode 후보. full에서만 1개.
+  // acceptance가 낮으면 pickBest(MIN_GAIN 3%)에서 탈락하므로 안전하다.
+  // 이미 spec을 쓰는 기준에서는 중복 측정하지 않는다.
+  if (opts.mode === "full" && !base.speculativeTypes) {
+    out.push({ label: "--spec-type ngram-mod (decode 후보)", patch: { speculativeTypes: "ngram-mod", speculativeDraftNMax: 3 } });
+  }
+  // P1-1: 배치·PP 스레드 2후보 (full만, reload 2회로 제한).
+  // -ub 축소는 배치 버퍼 VRAM을 expert 쪽으로 돌린다 — 생성은 거의 그대로, 프리필이 대가.
+  // 교환이 이득인지는 머신마다 달라 재야 한다(BSWEN 2026-03-15).
+  if (opts.mode === "full" && base.ubatchSize !== undefined && base.ubatchSize > 128) {
+    const v = Math.floor(base.ubatchSize / 2);
+    out.push({ label: `-ub ${v} (배치 축소·VRAM 확보 후보)`, patch: { ubatchSize: v } });
+  }
+  // -tb: 프롬프트 처리 스레드. 현재값(공격적)과 생성 스레드값(보수적)을 비교해
+  // PP 스레드 스케일링 곡선을 잰다. 같으면 중복이라 건너뛴다.
+  if (opts.mode === "full" && base.threadsBatch !== undefined && base.threadsBatch !== base.threads) {
+    out.push({ label: `-tb ${base.threads} (PP 스레드 보수적 후보)`, patch: { threadsBatch: base.threads } });
   }
   return out;
 }
@@ -393,6 +412,12 @@ export interface StoredMeasurement {
   /** 채택된 값 — 기준과 같으면 기준 값 그대로. */
   threads: number;
   cpuMoeLayers: number | null;
+  /** P0-3: spec 채택값. 없으면 null(미사용). 구 파일에는 없어 undefined일 수 있다. */
+  speculativeTypes?: string | null;
+  speculativeDraftNMax?: number | null;
+  /** P1-1: 배치·PP 스레드 채택값. 없으면 null(예측값 유지). */
+  ubatchSize?: number | null;
+  threadsBatch?: number | null;
   changed: boolean;
   reason: string;
   memory: MeasureResult["memory"];
@@ -417,6 +442,10 @@ export function toStored(r: MeasureResult, at: Date): StoredMeasurement {
     mode: r.mode,
     threads: c.threads,
     cpuMoeLayers: c.cpuMoeLayers ?? null,
+    speculativeTypes: c.speculativeTypes ?? null,
+    speculativeDraftNMax: c.speculativeDraftNMax ?? null,
+    ubatchSize: c.ubatchSize ?? null,
+    threadsBatch: c.threadsBatch ?? null,
     changed: r.pick.changed,
     reason: r.pick.reason,
     memory: r.memory,
@@ -451,4 +480,32 @@ export function mergeMachineProfile(prev: MachineProfileFile | null, machine: un
 export function measuredThreads(profile: MachineProfileFile | null, key: string): number | undefined {
   const m = profile?.measurements[key];
   return m && Number.isInteger(m.threads) && m.threads > 0 ? m.threads : undefined;
+}
+
+/** 같은 키로 잰 spec 설정 — 없으면 undefined(미사용). 구 측정 파일 호환. */
+export function measuredSpec(
+  profile: MachineProfileFile | null,
+  key: string
+): { speculativeTypes: string; speculativeDraftNMax?: number } | undefined {
+  const m = profile?.measurements[key];
+  if (m?.speculativeTypes) {
+    return {
+      speculativeTypes: m.speculativeTypes,
+      ...(m.speculativeDraftNMax ? { speculativeDraftNMax: m.speculativeDraftNMax } : {}),
+    };
+  }
+  return undefined;
+}
+
+/** P1-1: 같은 키로 잰 `-ub`/`-tb` — 없거나 이상하면 undefined(예측값 유지). 구 측정 파일 호환. */
+export function measuredBatch(
+  profile: MachineProfileFile | null,
+  key: string
+): { ubatchSize?: number; threadsBatch?: number } {
+  const m = profile?.measurements[key];
+  const ok = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
+  return {
+    ...(ok(m?.ubatchSize) ? { ubatchSize: m.ubatchSize } : {}),
+    ...(ok(m?.threadsBatch) ? { threadsBatch: m.threadsBatch } : {}),
+  };
 }

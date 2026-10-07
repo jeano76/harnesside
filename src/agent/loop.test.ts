@@ -2864,3 +2864,89 @@ test("warmCompactIfNeeded is a no-op when context usage is already under the aut
 
     assert.ok(!compactionRan, "warmCompactIfNeeded must not force a compaction when nothing crossed the threshold");
   }));
+
+test("P0-2: in-batch compaction checks use fast path far from threshold (no backend HTTP)", () =>
+  withTempProject(async (dir) => {
+    const call1 = {
+      id: "c1",
+      type: "function" as const,
+      function: { name: "update_plan", arguments: JSON.stringify({ steps: [{ description: "step1", status: "in_progress" }] }) },
+    };
+    const call2 = {
+      id: "c2",
+      type: "function" as const,
+      function: { name: "update_plan", arguments: JSON.stringify({ steps: [{ description: "step2", status: "in_progress" }] }) },
+    };
+    let tokenizeCalls = 0;
+    let countPromptCalls = 0;
+    const backend: ModelBackend = {
+      async chat(req: ChatCompletionRequest, onDelta?: any): Promise<any> {
+        if (!req.tools) {
+          return { choices: [{ message: { role: "assistant", content: "summary" }, finish_reason: "stop" }] };
+        }
+        const msg = (globalThis as any).__p02_responses?.shift();
+        const res = msg ?? { choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }] };
+        if (onDelta && res.choices[0]?.message) {
+          onDelta({ choices: [{ delta: { content: res.choices[0].message.content }, finish_reason: null }] });
+        }
+        return res;
+      },
+      async listModels() {
+        return ["m"];
+      },
+      async tokenize() {
+        tokenizeCalls++;
+        return 100;
+      },
+      async countPromptTokens() {
+        countPromptCalls++;
+        return 100;
+      },
+    };
+    (globalThis as any).__p02_responses = [assistantMessage(null, [call1, call2]), assistantMessage("done")];
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      // window 16384, trigger 0.6 = 9830. fastUsed(~tool schema 2-3k + small msgs) << 9830-3276 이라 fast로 충분.
+      thresholds: { autoTriggerRatio: 0.6, contextWindowTokens: 16384 },
+      autoResume: false,
+    });
+    await loop.send("do the thing");
+    const stats = loop.getEstimateStats();
+    // 턴 경계 exact 1회 + 배치 2회 fast. exact가 3회가 되면 fast 경로가 안 탄 것이다.
+    assert.equal(stats.exact >= 1, true, `expected at least 1 exact, got ${JSON.stringify(stats)}`);
+    assert.equal(stats.fast >= 2, true, `expected in-batch fast checks, got ${JSON.stringify(stats)}`);
+    // backend HTTP는 turn-boundary exact 위주라 in-batch마다 불리지 않는다.
+    assert.ok(
+      countPromptCalls + tokenizeCalls <= stats.exact + 2,
+      `backend calls ${countPromptCalls + tokenizeCalls} should track exact only, stats=${JSON.stringify(stats)}`
+    );
+    delete (globalThis as any).__p02_responses;
+  }));
+
+test("P0-2: near threshold falls back to exact and still compacts", () =>
+  withTempProject(async (dir) => {
+    const call1 = {
+      id: "c1",
+      type: "function" as const,
+      function: { name: "update_plan", arguments: JSON.stringify({ steps: [{ description: "x".repeat(20000), status: "in_progress" }] }) },
+    };
+    const { backend } = scriptedBackend({
+      turnResponses: [assistantMessage(null, [call1])],
+      // 작은 window(100)에서는 safety(1500) 때문에 항상 exact → 기존 동작 그대로 compact.
+      tokenCounts: [1, 1, 1000],
+    });
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100 },
+      autoResume: false,
+    });
+    await loop.send("do the thing");
+    const checkpoint = await readCheckpoint(dir);
+    assert.ok(checkpoint, "near-threshold in-batch check must still compact via exact fallback");
+  }));

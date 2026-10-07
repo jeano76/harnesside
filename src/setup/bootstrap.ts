@@ -45,7 +45,7 @@ import { discoverRunningServer, modelLoadBudgetMs, type Discovery } from "../bac
 import { rm } from "node:fs/promises";
 import { join as pathJoin } from "node:path";
 import { defaultModelsDir, homeDir } from "./hostEnv.js";
-import { machineProfilePath, measuredThreads, measurementKey, parseMachineProfile } from "./measure.js";
+import { machineProfilePath, measuredBatch, measuredSpec, measuredThreads, measurementKey, parseMachineProfile } from "./measure.js";
 import { MODEL_RUNGS, evaluateFit } from "./modelMetrics.js";
 import { baseName } from "../shared/path.js";
 
@@ -784,13 +784,28 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
   // **이 머신**이 아니므로 이 머신의 측정값을 섞지 않는다.
   if (llama && modelPath && !opts.hardware) {
     const profile = parseMachineProfile(await readFile(machineProfilePath(homeDir(env)), "utf8").catch(() => null));
-    const measured = measuredThreads(
-      profile,
-      measurementKey({ binPath: llama.binPath, modelPath, contextSize: tuning.contextSize, gpuLayers: tuning.gpuLayers })
-    );
+    const key = measurementKey({ binPath: llama.binPath, modelPath, contextSize: tuning.contextSize, gpuLayers: tuning.gpuLayers });
+    const measured = measuredThreads(profile, key);
     if (measured !== undefined && measured !== tuning.threads) {
       log(`스레드: 예측 ${tuning.threads} → 실측 ${measured} (설치 시 측정 · machine-profile.json)`);
       tuning.threads = measured;
+    }
+    // P0-3: spec도 같은 키의 실측이 있으면 적용. 없으면 off(기본값 유지).
+    const spec = measuredSpec(profile, key);
+    if (spec && spec.speculativeTypes !== tuning.speculativeTypes) {
+      log(`speculative: 실측 ${spec.speculativeTypes} 적용 (설치 시 측정 · machine-profile.json)`);
+      tuning.speculativeTypes = spec.speculativeTypes;
+      tuning.speculativeDraftNMax = spec.speculativeDraftNMax;
+    }
+    // P1-1: -ub/-tb 실측값. -ub 는 -b 를 넘을 수 없다(llama.cpp 가 잘라내지만 로그가 거짓말이 된다).
+    const batch = measuredBatch(profile, key);
+    if (batch.ubatchSize !== undefined && batch.ubatchSize !== tuning.ubatchSize && batch.ubatchSize <= tuning.batchSize) {
+      log(`-ub: 예측 ${tuning.ubatchSize} → 실측 ${batch.ubatchSize} (설치 시 측정 · machine-profile.json)`);
+      tuning.ubatchSize = batch.ubatchSize;
+    }
+    if (batch.threadsBatch !== undefined && batch.threadsBatch !== tuning.threadsBatch) {
+      log(`-tb: 예측 ${tuning.threadsBatch} → 실측 ${batch.threadsBatch} (설치 시 측정 · machine-profile.json)`);
+      tuning.threadsBatch = batch.threadsBatch;
     }
   }
 

@@ -7,6 +7,7 @@ import { proposeImprovement, writeProposedRule, appendImprovementLog, Improvemen
 import {
   runCompaction,
   estimateTokens,
+  estimateTokensFast,
   buildResumePrompt,
   CompactionThresholds,
   DEFAULT_TAIL_BUDGET_FRACTION,
@@ -388,6 +389,10 @@ export class AgentLoop {
    *  guard — see its doc comment. Null until the first successful
    *  compaction this session. */
   private lastCompactionUsed: number | null = null;
+  /** estimateTokens 호출 계측 — exact(backend HTTP) vs fast(로컬 근사).
+   *  P0-2 검증용. 동작에 영향 없음. */
+  private estimateCallsExact = 0;
+  private estimateCallsFast = 0;
   /** Files touched via read_file/write_file/edit_file, most-recent status wins. */
   private filesTouched = new Map<string, Checkpoint["files"][number]["status"]>();
   /** Fallback step history when the model never calls update_plan: every
@@ -428,6 +433,11 @@ export class AgentLoop {
   constructor(private opts: AgentLoopOptions) {
     this.messages = [{ role: "system", content: opts.systemPrompt }];
     this.progress = new ProgressTracker(opts.progressGuard ?? DEFAULT_PROGRESS_GUARD, this.now());
+  }
+
+  /** P0-2 계측: exact(backend HTTP) vs fast(로컬 근사) 호출 수. */
+  getEstimateStats(): { exact: number; fast: number } {
+    return { exact: this.estimateCallsExact, fast: this.estimateCallsFast };
   }
 
   /** Reads back a checkpoint left by a compaction that abandoned work
@@ -839,8 +849,10 @@ export class AgentLoop {
             `[context overflow] request exceeded the context window — forcing compaction and retrying (${overflowRetries}/${MAX_OVERFLOW_RETRIES}).`
           );
           const before = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
+          this.estimateCallsExact++;
           await this.compact("auto-threshold", null, tailBudgetFraction);
           const after = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
+          this.estimateCallsExact++;
           // A compaction that didn't actually shrink anything at the
           // CURRENT tail budget doesn't necessarily mean the conversation
           // is truly unrecoverable — it can just mean the kept tail itself
@@ -1140,13 +1152,18 @@ export class AgentLoop {
         // favor of the checkpoint's resume prompt reissuing it next turn —
         // the assistant message that requested it gets summarized away by
         // compact(), so there's no valid tool_call_id left to answer anyway.
+        // P0-2: 배치 내에서는 fast 근사로 먼저 보고 임계 근처에서만 exact 확정.
+        // 턴 경계(runUntilIdle 상단)는 exact를 유지한다.
         if (
           (
-            await this.maybeCompact({
-              name: call.function.name,
-              argumentsJson: call.function.arguments,
-              reason: "compaction threshold hit before this call could run",
-            })
+            await this.maybeCompact(
+              {
+                name: call.function.name,
+                argumentsJson: call.function.arguments,
+                reason: "compaction threshold hit before this call could run",
+              },
+              { fast: true }
+            )
           ).compacted
         ) {
           // Without an explicit message here, the turn just stops with no
@@ -1498,11 +1515,27 @@ export class AgentLoop {
    *  it to size max_tokens dynamically without a second tokenize() call —
    *  see computeMaxTokens()'s doc comment for why that estimate matters. */
   private async maybeCompact(
-    pendingToolCall: Checkpoint["pendingToolCall"] = null
+    pendingToolCall: Checkpoint["pendingToolCall"] = null,
+    opts: { fast?: boolean } = {}
   ): Promise<{ compacted: boolean; used: number }> {
-    const used = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
-    this.opts.onContextUsage?.(used, this.opts.thresholds.contextWindowTokens);
     const window = this.opts.thresholds.contextWindowTokens;
+    const trigger = window * this.opts.thresholds.autoTriggerRatio;
+    // P0-2: 배치 내에서는 fast 근사로 먼저 보고, 임계 근처에서만 exact로 확정.
+    // 근사는 template 오버헤드를 과소평가하므로(~19% 실측), safety margin 안에서만
+    // exact를 생략한다. 턴 경계·overflow·compaction 직후 기준선은 항상 exact.
+    if (opts.fast) {
+      const fastUsed = estimateTokensFast(this.messages, toolDefsJson());
+      this.estimateCallsFast++;
+      const safety = Math.max(1500, Math.floor(window * 0.2));
+      if (fastUsed < trigger - safety) {
+        this.opts.onContextUsage?.(fastUsed, window);
+        return { compacted: false, used: fastUsed };
+      }
+      // 근처: 아래 exact 경로로 확정한다.
+    }
+    const used = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
+    this.estimateCallsExact++;
+    this.opts.onContextUsage?.(used, this.opts.thresholds.contextWindowTokens);
     if (used >= window * this.opts.thresholds.autoTriggerRatio) {
       // Skip a compaction that would fire again almost immediately after
       // the previous one: when the fixed overhead (system prompt + tool
@@ -1605,6 +1638,7 @@ export class AgentLoop {
       toolDefsJson(),
       activeToolDefs()
     );
+    this.estimateCallsExact++;
     // Land below the trigger level, so the conversation can grow for a
     // while before the next compaction. Was 0.5 (and 0.75 before that):
     // measured live on a 24,576 window, 0.75 left ~4-6K tokens of room,
@@ -1718,6 +1752,7 @@ export class AgentLoop {
         // estimate leaves the previous baseline (or null) in place.
         try {
           this.lastCompactionUsed = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
+          this.estimateCallsExact++;
         } catch {
           // keep previous baseline
         }

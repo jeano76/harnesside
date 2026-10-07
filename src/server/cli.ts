@@ -457,6 +457,12 @@ export async function cmdMeasure(paths: Paths, rest: string[] = []): Promise<num
         ...llama,
         threads: chosen.threads,
         ...(chosen.cpuMoeLayers !== undefined ? { cpuMoeLayers: chosen.cpuMoeLayers } : {}),
+        // P0-3: spec 채택값도 기록. off면(미설정) 기존 값을 건드리지 않는다.
+        ...(chosen.speculativeTypes ? { speculativeTypes: chosen.speculativeTypes } : {}),
+        ...(chosen.speculativeDraftNMax !== undefined ? { speculativeDraftNMax: chosen.speculativeDraftNMax } : {}),
+        // P1-1: 배치·PP 스레드 채택값.
+        ...(chosen.ubatchSize !== undefined ? { ubatchSize: chosen.ubatchSize } : {}),
+        ...(chosen.threadsBatch !== undefined ? { threadsBatch: chosen.threadsBatch } : {}),
         ...(result.calibration ? { calibratedFor: result.calibration.calibratedFor } : {}),
         measuredFor: result.key,
       },

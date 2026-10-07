@@ -45,6 +45,11 @@ export interface LlamaTuning {
   cacheTypeV: string;
   /** -np: concurrent slots. */
   parallel: number;
+  /** `--spec-type`: draft 불필요 ngram 계열만. undefined = off(기본값 유지).
+   *  실측(`harnesside measure --full`)에서 이득이 확인될 때만 켠다. */
+  speculativeTypes?: string;
+  /** `--spec-draft-n-max`. */
+  speculativeDraftNMax?: number;
   /** Human-readable justification for each non-obvious choice, in Korean to
    *  match the rest of the user-facing strings in this project. */
   rationale: string[];

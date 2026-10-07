@@ -124,6 +124,16 @@ function charBasedEstimate(messages: ChatMessage[], extraText: string): number {
   return Math.ceil(cjk * 1.5 + nonCjk * 0.25);
 }
 
+/** Fast path: pure local heuristic, no backend HTTP.
+ *
+ *  배치 내 도구 호출 사이에서는 exact(`/apply-template`+`/tokenize`, 2x HTTP)가
+ *  턴당 수십 회까지 반복된다(P3-2 실측 41ms/회). 임계와 멀 때는 근사로 충분하고,
+ *  임계 근처에서만 exact로 확정한다. 호출자는 반드시 safety margin으로 fallback
+ *  여부를 판단할 것 — 근사는 template 오버헤드를 과소평가한다(~19% 실측). */
+export function estimateTokensFast(messages: ChatMessage[], extraText = ""): number {
+  return charBasedEstimate(messages, extraText);
+}
+
 /** Uses the backend's real tokenizer (llama.cpp `/tokenize`) when available;
  *  falls back to a chars/4 approximation when the backend has no tokenizer
  *  or the call fails (e.g. a generic OpenAI-compatible endpoint without it).
