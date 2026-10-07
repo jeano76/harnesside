@@ -30,6 +30,12 @@ const MiB = 1024 * 1024;
 
 /** 채택 기준 — 생성 tok/s 가 이만큼(비율) 이상 빨라야 기준 설정을 바꾼다. */
 export const MIN_GAIN = 0.03;
+/** MoE 하향 스캔(P1-2): 기준에서 최대 몇 층까지 GPU 로 올려 보나. 후보당 전체 reload 라 상한을 둔다. */
+export const MOE_SCAN_MAX_STEPS = 4;
+/** 직전 단계보다 생성이 이만큼 이상 느려지면 cliff(공유메모리 스필 등)로 보고 스캔을 멈춘다. */
+export const MOE_CLIFF_DROP = 0.15;
+/** 남은 메모리가 이 아래면 다음 층을 올리지 않는다 — 실사용 컨텍스트가 자랄 여유. */
+export const MOE_MIN_FREE_MIB = 256;
 
 export type MeasureMode = "quick" | "full";
 
@@ -117,7 +123,8 @@ export function measurementKey(cfg: Pick<LlamaServerConfig, "binPath" | "modelPa
  *
  * 스레드: 물리 코어 · P코어만(하이브리드) · 논리 코어 · 물리-1. llama.cpp 생성은 메모리 대역폭에
  * 묶여 있어 SMT·E코어를 더 쓰면 **느려지는** 머신이 흔하다 — 예측으로는 알 수 없고 재야 한다.
- * MoE 오프로드(`--n-cpu-moe`): 기준 ±2 (full 에서만, 메모리 경계라 OOM 이면 실패로 기록된다).
+ * MoE 오프로드(`--n-cpu-moe`): 여기서는 기준 +2(안전 쪽) 하나만 만든다. 내리는 쪽(-1, -2, …)은
+ * 단계마다 결과를 보고 멈춰야 해서 `runMeasure` 의 하향 스캔(`moeScanNext`)이 맡는다.
  * full 에서만 추가로: `--spec-type ngram-mod` 1개, `-ub` 절반 1개, `-tb`=`-t` 1개(값이 다를 때).
  */
 export function measureCandidates(
@@ -148,11 +155,8 @@ export function measureCandidates(
     addThreads(n, why);
   }
   if (opts.mode === "full" && opts.moeLayers && base.gpuLayers > 0 && (base.cpuMoeLayers ?? 0) > 0) {
-    const cur = base.cpuMoeLayers ?? 0;
-    for (const d of [-2, 2]) {
-      const v = cur + d;
-      if (v >= 0 && v <= opts.moeLayers) out.push({ label: `--n-cpu-moe ${v} (기준 ${d > 0 ? "+" : ""}${d})`, patch: { cpuMoeLayers: v } });
-    }
+    const v = (base.cpuMoeLayers ?? 0) + 2;
+    if (v <= opts.moeLayers) out.push({ label: `--n-cpu-moe ${v} (기준 +2)`, patch: { cpuMoeLayers: v } });
   }
   // P0-3: draft 불필요 ngram-spec은 공짜에 가까운 decode 후보. full에서만 1개.
   // acceptance가 낮으면 pickBest(MIN_GAIN 3%)에서 탈락하므로 안전하다.
@@ -173,6 +177,33 @@ export function measureCandidates(
     out.push({ label: `-tb ${base.threads} (PP 스레드 보수적 후보)`, patch: { threadsBatch: base.threads } });
   }
   return out;
+}
+
+/**
+ * MoE 하향 스캔의 다음 단계 — `null` 이면 멈춘다.
+ *
+ * 왜 ±2 가 아니라 한 층씩인가: partial-offload 는 한 층 차이로 생성이 반 토막 나는 cliff 가
+ * 있다(VRAM 이 넘치면 드라이버가 공유메모리로 흘리거나 OOM). ±2 는 cliff 를 건너뛰어
+ * "느려졌다"만 보고 그 바로 앞의 최적값을 놓친다. 한 층씩 내려가며 처음 무너지는 곳에서 멈춘다.
+ *
+ * `steps` 는 기준부터 순서대로 잰 결과(기준 포함). 마지막이 실패·cliff·메모리 바닥이면 멈춘다.
+ */
+export function moeScanNext(
+  baseLayers: number,
+  steps: Array<Pick<BenchSample, "ok" | "bench" | "freeMiB">>,
+  maxSteps = MOE_SCAN_MAX_STEPS
+): number | null {
+  const done = steps.length - 1; // 기준 제외
+  const next = baseLayers - done - 1;
+  if (next < 0 || done >= maxSteps) return null;
+  const last = steps[steps.length - 1];
+  if (!last || !last.ok || !last.bench) return null;
+  if (last.freeMiB !== null && last.freeMiB < MOE_MIN_FREE_MIB) return null;
+  if (steps.length >= 2) {
+    const prev = steps[steps.length - 2];
+    if (prev.bench && last.bench.genTps < prev.bench.genTps * (1 - MOE_CLIFF_DROP)) return null;
+  }
+  return next;
 }
 
 export interface PickResult {
@@ -364,29 +395,53 @@ export async function runMeasure(o: MeasureOptions): Promise<MeasureResult> {
 
   // 2) 후보 — 기준(calibration 결과) 위에서 만든다.
   const candidates = measureCandidates(baseCfg, o.cpu, { mode: o.mode, moeLayers: o.moeLayers }).slice(1);
-  for (const c of candidates) {
+  /** 후보 하나 기동·측정·정지. 시간 상한을 넘었으면 건너뛰고 null. */
+  const runOne = async (c: MeasureCandidate): Promise<BenchSample | null> => {
     if (o.maxSeconds !== undefined && (now() - t0) / 1000 > o.maxSeconds) {
       skipped.push(`${c.label} (시간 상한 ${o.maxSeconds}s 초과)`);
-      continue;
+      return null;
     }
     await new Promise((r) => setTimeout(r, settle));
     const cfg = { ...baseCfg, ...c.patch };
     const server = o.make(cfg);
     const tl = now();
     say(`후보 ${c.label} 기동…`);
+    let sample: BenchSample;
     try {
       await server.start();
       const loadSeconds = (now() - tl) / 1000;
       const free = (await o.memory.freeMiB().catch(() => undefined)) ?? null;
       const b = await once(server, cfg);
-      samples.push({ label: c.label, patch: c.patch, ok: true, loadSeconds, bench: b, freeMiB: free });
+      sample = { label: c.label, patch: c.patch, ok: true, loadSeconds, bench: b, freeMiB: free };
       say(`  ${c.label}: 프리필 ${b.promptTps.toFixed(0)} tok/s · 생성 ${b.genTps.toFixed(1)} tok/s`);
     } catch (e) {
       const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0];
-      samples.push({ label: c.label, patch: c.patch, ok: false, loadSeconds: null, bench: null, freeMiB: null, error: msg });
+      sample = { label: c.label, patch: c.patch, ok: false, loadSeconds: null, bench: null, freeMiB: null, error: msg };
       say(`  ${c.label}: 실패 — ${msg}`);
     } finally {
       await halt(server, cfg);
+    }
+    samples.push(sample);
+    return sample;
+  };
+
+  for (const c of candidates) await runOne(c);
+
+  // 3) P1-2: MoE 하향 스캔 — 한 층씩 GPU 로 올리며 처음 무너지는 곳(실패·cliff·메모리 바닥)에서 멈춘다.
+  const baseLayers = baseCfg.cpuMoeLayers ?? 0;
+  if (o.mode === "full" && o.moeLayers && baseCfg.gpuLayers > 0 && baseLayers > 0) {
+    const steps: BenchSample[] = [samples[0]];
+    for (let v = moeScanNext(baseLayers, steps); v !== null; v = moeScanNext(baseLayers, steps)) {
+      const s = await runOne({ label: `--n-cpu-moe ${v} (기준 -${baseLayers - v})`, patch: { cpuMoeLayers: v } });
+      if (!s) break;
+      // 빨라도 메모리 바닥이면 채택하지 않는다 — 실사용에서 컨텍스트가 자라면 OOM 이다.
+      if (s.ok && s.freeMiB !== null && s.freeMiB < MOE_MIN_FREE_MIB) {
+        s.ok = false;
+        s.error = `남은 메모리 ${s.freeMiB} MiB < ${MOE_MIN_FREE_MIB} MiB — 여유 부족으로 제외`;
+        say(`  ${s.label}: ${s.error}`);
+        break;
+      }
+      steps.push(s);
     }
   }
 

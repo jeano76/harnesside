@@ -6,6 +6,7 @@ import {
   chosenConfig,
   measureCandidates,
   measuredBatch,
+  moeScanNext,
   measuredSpec,
   measuredThreads,
   measurementKey,
@@ -270,4 +271,46 @@ test("머신 프로필 — -ub/-tb 저장·조회, 구 파일·이상값은 무�
   assert.deepEqual(measuredBatch(back, "k1"), { ubatchSize: 256, threadsBatch: 11 });
   const old = parseMachineProfile(JSON.stringify({ version: 1, updatedAt: "x", machine: {}, measurements: { k1: { threads: 5, ubatchSize: 0, threadsBatch: null } } }));
   assert.deepEqual(measuredBatch(old, "k1"), {});
+});
+
+test("MoE 스캔 — 한 층씩 내려가다 실패·cliff·메모리 바닥·상한에서 멈춘다", () => {
+  const ok = (genTps: number, freeMiB: number | null = 2000) => ({ ok: true, freeMiB, bench: { promptTokens: 1, promptTps: 1, genTokens: 1, genTps } });
+  assert.equal(moeScanNext(6, [ok(20)]), 5, "기준 다음은 한 층 아래");
+  assert.equal(moeScanNext(6, [ok(20), ok(22)]), 4);
+  assert.equal(moeScanNext(6, [ok(20), { ok: false, freeMiB: null, bench: null }]), null, "OOM 이면 멈춘다");
+  assert.equal(moeScanNext(6, [ok(20), ok(22), ok(12)]), null, "직전보다 15% 넘게 느려지면 cliff");
+  assert.equal(moeScanNext(6, [ok(20), ok(22, 100)]), null, "남은 메모리 바닥");
+  assert.equal(moeScanNext(1, [ok(20), ok(22)]), null, "0 아래로는 안 간다");
+  assert.equal(moeScanNext(10, [ok(20), ok(21), ok(22), ok(23), ok(24)], 4), null, "상한 4단계");
+});
+
+test("runMeasure — MoE 하향 스캔: cliff 직전을 채택하고, 메모리 바닥 단계는 빨라도 제외", async () => {
+  // 기준 --n-cpu-moe 6. 5·4 는 빨라지고, 3 은 cliff(스필), 그 뒤는 재지 않는다.
+  const gen: Record<number, number> = { 8: 18, 6: 20, 5: 22, 4: 24, 3: 9 };
+  const tried: number[] = [];
+  const mk = (free: (moe: number) => number) => runMeasure({
+    base: cfg({ threads: 6, cpuMoeLayers: 6, speculativeTypes: "ngram-mod" }),
+    cpu: { logicalCores: 6, physicalCores: 6, performanceCores: null },
+    mode: "full",
+    moeLayers: 40,
+    make: (c) => ({ baseUrl: `http://t/${c.cpuMoeLayers}`, start: async () => void tried.push(c.cpuMoeLayers ?? -1), stop: () => {} }),
+    memory: { source: "nvidia-smi", pool: "vram", freeMiB: async () => free(tried[tried.length - 1]) },
+    startBaseline: (async (c: LlamaServerConfig, o: { make: (c: LlamaServerConfig) => { start(): Promise<void> } }) => {
+      const s = o.make(c);
+      await s.start();
+      return { server: s, cfg: c };
+    }) as never,
+    bench: async (url) => ({ promptTokens: 1500, promptTps: 600, genTokens: 128, genTps: gen[Number(url.split("/").pop())] ?? 0 }),
+    settleMs: 0,
+    waitStopped: async () => true,
+  });
+  const r = await mk(() => 2000);
+  assert.deepEqual(tried, [6, 6, 8, 5, 4, 3], "기준 → -t 5 → +2 → 5 → 4 → 3(cliff) 에서 멈춤");
+  assert.equal(chosenConfig(r).cpuMoeLayers, 4);
+
+  tried.length = 0;
+  const low = await mk((moe) => (moe <= 4 ? 100 : 2000));
+  assert.deepEqual(tried, [6, 6, 8, 5, 4], "메모리 바닥에서 멈춤");
+  assert.equal(chosenConfig(low).cpuMoeLayers, 5, "바닥 단계(4)는 빨라도 채택하지 않는다");
+  assert.match(low.samples.find((s) => s.patch.cpuMoeLayers === 4)?.error ?? "", /여유 부족/);
 });
