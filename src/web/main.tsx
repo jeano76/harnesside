@@ -53,6 +53,7 @@ import type { ApprovalRequest } from "./panels/ApprovalCard.js";
 // `t()` 는 키 문자열을 그대로 돌려준다(2026-09-30 까지 실제로 그랬다).
 import "./i18n/install.js";
 import type { LogEntry } from "../server/logRing.js";
+import { createBatcher, mergeLogs } from "./logBatch.js";
 import type { Metrics } from "../shared/metrics.js";
 
 const { token, cleanHref } = resolveToken(
@@ -839,6 +840,8 @@ export default function App() {
   // 로그 + 계측 스트리밍 (§2.3 · §5.5)
   useEffect(() => {
     const idePort = Number(new URL(location.href).port || 7317);
+    // 로그는 프레임 단위로 모아 한 번에 합친다(logBatch.ts — 줄마다 2000줄 복사·렌더 방지).
+    const logBatch = createBatcher<LogEntry>((items) => setLogs((prev) => mergeLogs(prev, items)));
     const ws = new WsClient({
       port: idePort,
       token,
@@ -850,12 +853,7 @@ export default function App() {
         if (ev.type === "log.append") {
           const e2 = ev.entry as LogEntry | undefined;
           if (!e2) return;
-          setLogs((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && e2.seq <= last.seq) return prev;
-            const next = [...prev, e2];
-            return next.length > 2000 ? next.slice(next.length - 2000) : next;
-          });
+          logBatch.push(e2);
         } else if (ev.type === "log.status") {
           setLogStatus(ev.status as typeof logStatus);
         } else if (ev.type === "sys.metrics") {
