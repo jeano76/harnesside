@@ -42,7 +42,9 @@ export type MeasureMode = "quick" | "full";
 export interface MeasureCandidate {
   label: string;
   /** 기준 설정에 덮어쓸 값. 빈 객체 = 기준 그대로. */
-  patch: Partial<Pick<LlamaServerConfig, "threads" | "threadsBatch" | "ubatchSize" | "cpuMoeLayers" | "speculativeTypes" | "speculativeDraftNMax">>;
+  patch: Partial<Pick<LlamaServerConfig, "threads" | "threadsBatch" | "ubatchSize" | "cpuMoeLayers" | "speculativeTypes" | "speculativeDraftNMax" | "cacheTypeK" | "cacheTypeV">>;
+  /** 재기만 하고 채택 후보에서 뺀다 — 속도 말고 다른 축(정확도)이 걸린 설정. */
+  reportOnly?: boolean;
 }
 
 export interface BenchResult {
@@ -55,6 +57,7 @@ export interface BenchResult {
 export interface BenchSample {
   label: string;
   patch: MeasureCandidate["patch"];
+  reportOnly?: boolean;
   ok: boolean;
   /** 기동에 걸린 초. */
   loadSeconds: number | null;
@@ -125,10 +128,11 @@ export function measurementKey(cfg: Pick<LlamaServerConfig, "binPath" | "modelPa
  * 묶여 있어 SMT·E코어를 더 쓰면 **느려지는** 머신이 흔하다 — 예측으로는 알 수 없고 재야 한다.
  * MoE 오프로드(`--n-cpu-moe`): 여기서는 기준 +2(안전 쪽) 하나만 만든다. 내리는 쪽(-1, -2, …)은
  * 단계마다 결과를 보고 멈춰야 해서 `runMeasure` 의 하향 스캔(`moeScanNext`)이 맡는다.
- * full 에서만 추가로: `--spec-type ngram-mod` 1개, `-ub` 절반 1개, `-tb`=`-t` 1개(값이 다를 때).
+ * full 에서만 추가로: `--spec-type ngram-mod` 1개, `-ub` 절반 1개, `-tb`=`-t` 1개(값이 다를 때),
+ * KV 양자화 반대쪽 1개(보고용 — 채택하지 않는다).
  */
 export function measureCandidates(
-  base: Pick<LlamaServerConfig, "threads" | "threadsBatch" | "ubatchSize" | "cpuMoeLayers" | "gpuLayers" | "speculativeTypes">,
+  base: Pick<LlamaServerConfig, "threads" | "threadsBatch" | "ubatchSize" | "cpuMoeLayers" | "gpuLayers" | "speculativeTypes" | "cacheTypeK">,
   cpu: Pick<CpuProfile, "logicalCores" | "physicalCores" | "performanceCores">,
   opts: { mode: MeasureMode; moeLayers?: number }
 ): MeasureCandidate[] {
@@ -176,6 +180,13 @@ export function measureCandidates(
   if (opts.mode === "full" && base.threadsBatch !== undefined && base.threadsBatch !== base.threads) {
     out.push({ label: `-tb ${base.threads} (PP 스레드 보수적 후보)`, patch: { threadsBatch: base.threads } });
   }
+  // P1-3: KV 양자화는 속도·메모리만이 아니라 긴 컨텍스트 정확도를 바꾼다(q4_0 은 회수 품질 저하 보고,
+  // arXiv:2603.04428). 생성 tok/s 로 고르면 정확도 손실을 못 본다 — 그래서 재기만 하고 채택은 않는다.
+  // 남은 메모리 차이가 "q4_0 으로 내리면 컨텍스트를 얼마나 늘릴 수 있나"의 근거가 된다.
+  if (opts.mode === "full" && base.cacheTypeK) {
+    const other = base.cacheTypeK === "q4_0" ? "q8_0" : "q4_0";
+    out.push({ label: `KV ${other} (보고용 · 채택 안 함)`, patch: { cacheTypeK: other, cacheTypeV: other }, reportOnly: true });
+  }
   return out;
 }
 
@@ -222,7 +233,7 @@ export function pickBest(samples: BenchSample[], minGain = MIN_GAIN): PickResult
   if (!baseline || !baseline.ok || !baseline.bench) {
     return { baseline, chosen: null, changed: false, gain: null, reason: "기준 설정을 측정하지 못했습니다 — 설정을 바꾸지 않습니다" };
   }
-  const measured = samples.filter((s) => s.ok && s.bench);
+  const measured = samples.filter((s) => s.ok && s.bench && !s.reportOnly);
   const best = measured.reduce((a, b) =>
     b.bench!.genTps > a.bench!.genTps || (b.bench!.genTps === a.bench!.genTps && b.bench!.promptTps > a.bench!.promptTps) ? b : a
   );
@@ -412,11 +423,11 @@ export async function runMeasure(o: MeasureOptions): Promise<MeasureResult> {
       const loadSeconds = (now() - tl) / 1000;
       const free = (await o.memory.freeMiB().catch(() => undefined)) ?? null;
       const b = await once(server, cfg);
-      sample = { label: c.label, patch: c.patch, ok: true, loadSeconds, bench: b, freeMiB: free };
+      sample = { label: c.label, patch: c.patch, ok: true, loadSeconds, bench: b, freeMiB: free, ...(c.reportOnly ? { reportOnly: true } : {}) };
       say(`  ${c.label}: 프리필 ${b.promptTps.toFixed(0)} tok/s · 생성 ${b.genTps.toFixed(1)} tok/s`);
     } catch (e) {
       const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0];
-      sample = { label: c.label, patch: c.patch, ok: false, loadSeconds: null, bench: null, freeMiB: null, error: msg };
+      sample = { label: c.label, patch: c.patch, ok: false, loadSeconds: null, bench: null, freeMiB: null, error: msg, ...(c.reportOnly ? { reportOnly: true } : {}) };
       say(`  ${c.label}: 실패 — ${msg}`);
     } finally {
       await halt(server, cfg);
@@ -476,7 +487,7 @@ export interface StoredMeasurement {
   changed: boolean;
   reason: string;
   memory: MeasureResult["memory"];
-  samples: Array<{ label: string; ok: boolean; promptTps: number | null; genTps: number | null; freeMiB: number | null; loadSeconds: number | null; error?: string }>;
+  samples: Array<{ label: string; ok: boolean; promptTps: number | null; genTps: number | null; freeMiB: number | null; loadSeconds: number | null; error?: string; reportOnly?: boolean }>;
 }
 
 export interface MachineProfileFile {
@@ -511,6 +522,7 @@ export function toStored(r: MeasureResult, at: Date): StoredMeasurement {
       genTps: s.bench ? Math.round(s.bench.genTps * 100) / 100 : null,
       freeMiB: s.freeMiB,
       loadSeconds: s.loadSeconds === null ? null : Math.round(s.loadSeconds * 10) / 10,
+      ...(s.reportOnly ? { reportOnly: true } : {}),
       ...(s.error ? { error: s.error } : {}),
     })),
   };

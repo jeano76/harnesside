@@ -478,8 +478,11 @@ export async function cmdMeasure(paths: Paths, rest: string[] = []): Promise<num
   }
 
   emit("");
+  const baseFree = result.samples[0]?.freeMiB ?? null;
   for (const s of result.samples) {
-    emit(`  ${s.ok ? C.green("✓") : C.red("✗")} ${s.label}${s.bench ? ` — 프리필 ${s.bench.promptTps.toFixed(0)} · 생성 ${s.bench.genTps.toFixed(1)} tok/s` : s.error ? ` — ${s.error}` : ""}`);
+    // 보고용(KV 양자화 등): 채택하지 않으니 남은 메모리 차이가 핵심 정보다.
+    const mem = s.reportOnly && s.freeMiB !== null && baseFree !== null ? ` · 남은 메모리 기준 대비 ${s.freeMiB - baseFree >= 0 ? "+" : ""}${s.freeMiB - baseFree} MiB` : "";
+    emit(`  ${s.ok ? C.green("✓") : C.red("✗")} ${s.label}${s.bench ? ` — 프리필 ${s.bench.promptTps.toFixed(0)} · 생성 ${s.bench.genTps.toFixed(1)} tok/s${mem}` : s.error ? ` — ${s.error}` : ""}`);
   }
   for (const k of result.skipped) emit(`  ${C.yellow("·")} 건너뜀: ${k}`);
   emit(`  ${result.pick.changed ? C.green("채택") : C.dim("유지")} — ${result.pick.reason}`);

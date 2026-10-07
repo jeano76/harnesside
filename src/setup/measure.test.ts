@@ -314,3 +314,15 @@ test("runMeasure — MoE 하향 스캔: cliff 직전을 채택하고, 메모리 
   assert.equal(chosenConfig(low).cpuMoeLayers, 5, "바닥 단계(4)는 빨라도 채택하지 않는다");
   assert.match(low.samples.find((s) => s.patch.cpuMoeLayers === 4)?.error ?? "", /여유 부족/);
 });
+
+test("KV 양자화 — full 에서만 반대쪽 1개를 보고용으로 재고, 아무리 빨라도 채택하지 않는다", () => {
+  const cpu = { logicalCores: 6, physicalCores: 6, performanceCores: null };
+  const kv = (k: string, mode: "quick" | "full") => measureCandidates(cfg({ cacheTypeK: k }), cpu, { mode }).filter((x) => x.patch.cacheTypeK !== undefined);
+  assert.deepEqual(kv("q8_0", "full").map((x) => [x.patch.cacheTypeK, x.patch.cacheTypeV, x.reportOnly]), [["q4_0", "q4_0", true]]);
+  assert.deepEqual(kv("q4_0", "full").map((x) => x.patch.cacheTypeK), ["q8_0"]);
+  assert.equal(kv("q8_0", "quick").length, 0);
+  const fast = { ...sample("KV q4_0", 40, 500, { cacheTypeK: "q4_0", cacheTypeV: "q4_0" }), reportOnly: true };
+  const r = pickBest([sample("기준", 20), fast]);
+  assert.equal(r.changed, false);
+  assert.equal(r.chosen?.label, "기준");
+});
