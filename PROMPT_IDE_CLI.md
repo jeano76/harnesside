@@ -578,14 +578,14 @@ CLI 의 세 번째 명령. **비어 있는 자리** — 추가한다.
 ### S-5 찾기
 - [x] 저장소 전체 검색이 한 화면에서 끝난다 — 2026-10-03, `src/fs/search.ts` 신규, **24/24 pass** · 경유·줄 번호·상한·바이너리·링크·무시폴더
 - [x] 결과에 경로와 줄 번호가 있다 — 2026-10-03, `src/fs/search.ts` 신규(위 항목과 같은 라운드)
-- [x] `Ctrl+P` / `Ctrl+Shift+F` 가 동작한다 — 2026-10-04, `verify-window.mjs` + QuickOpen/SearchBlock (Mac `Cmd` 는 코드만, 미측정)
+- [x] `Ctrl+P` / `Ctrl+Shift+F` 가 동작한다 — 2026-10-08 CDP 실측(`fe9bc71`): Ctrl+P→파일 모드→방향키·Enter로 열림(`loop.test.ts` 확인) · Ctrl+Shift+F→검색 모드→`path:line`+잘렸습니다→열림. **정정**: 2026-10-04 기록은 "동작한다"고 적혀 있었으나 실제로 `main.tsx`에 Shift+F 분기가 0건이었다(grep 실측). QuickOpen/SearchBlock 언급도 삭제됨 — 현재는 팔레트 모드다 (Mac `Cmd` 는 코드만, 미측정)
 
 ### S-6 한 손
 - [ ] 단축키 힌트가 **대화 중에도** 보인다
 - [x] 취소가 **실제로** 멈춘다 — 2026-10-03, `main.tsx` `turnRunning` 즉시 내리지 않음 (화면이 "돌 수 있음" 표시)
 - [x] 되돌릴 수 없는 조작 판정 — 2026-10-03, `src/tools/irreversible.ts` 신규 **17/17 pass**:
     safe / undoable / irreversible / unknown 4갈림길, `run_shell -rf` 등 irreversibles 를 걸러냄
-- [x] 되돌릴 수 없는 조작은 확인을 받는다 — 2026-10-04, 게이트 배선 + `approvalGate.wiring.test.ts` 4 pass(통과/거절/allow-always/세션격리) + ApprovalCard 오버레이 (60초 실대기 눈 실측은 미측정)
+- [x] 되돌릴 수 없는 조작은 확인을 받는다 — 2026-10-04, 게이트 배선 + `approvalGate.wiring.test.ts` 4 pass(통과/거절/allow-always/세션격리) + ApprovalCard 오버레이. 2026-10-08 추가: `applyApprovalEvent` 분리 + 로직 7건(`ApprovalCard.logic.test.ts` — 열기/중복무시/닫기/무시 + 카운트다운 3). 서버 60초 타임아웃은 유닛으로만(`approval.test.ts` 0.05s→timeout) — 60초 실대기 눈 실측은 미측정
 
 ### S-7 상태
 - [ ] 빈 상태에 **누를 수 있는** 예시가 있다
