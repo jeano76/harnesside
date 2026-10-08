@@ -11,15 +11,38 @@
 
 ---
 
-## ① 현재 상태 (마지막 갱신: 2026-10-04)
+## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: 가독성 축 시작   # 출력 형식 계약(프롬프트) + 측정(readability-report)
+phase: 성능 최적화 라운드 P0~P3 진행 중
 status: in_progress
-last_commit: "d021afa feat(Q-12·Q-13): README 3문서화 + doctor 확장 — 그리고 결함 2건"
-next_action: "출력 형식 규칙의 효과 A/B 측정 중(로컬 모델 · 표본 3) — 결과를 여기 적고 미달이면 규칙이 아니라 렌더 층을 고친다"
+last_commit: "4fbc379 perf(context): 실패 연속 시 조기 압축 옵션 P3"
+next_action: "미측정 3건 확정 — Ornith-35B ngram acceptance · 실서버 prompt cache hit율 · measure --full 1회"
 blocking: 없음
 ```
+
+## 2026-10-08 · 성능 최적화 라운드 (논문·OSS 참조 P0~P3)
+
+> 발단: `ses_ee93249e` "최신 논문·오픈소스 참조로 개선점 도출" 프롬프트 실행.
+> 참조: llama.cpp 최적화(BSWEN·openclaw·dzx.fr) · EAGLE-3/Medusa/LK losses ·
+> vLLM/SGLang prefix caching · opencode-cache-compact/gobstopper/agent-context/dsh-compaction ·
+> llama.cpp·opencode 이슈(#10342·#23595·#20033·#19394·#20757) · KV quant(Q4/RotateKV/TurboQuant).
+> P0-1 stable prefix + warmCompact은 기존 코드에 이미 반영돼 있었음
+> (`compactor.ts` system verbatim · `loop.ts:536` `warmCompactIfNeeded`).
+
+| 커밋 | 내용 | 검증 |
+|---|---|---|
+| `bccda5b` | P0-2 배치 내 토큰 추정 로컬화(`estimateTokensFast`) · P0-3 ngram-spec 후보 · P1-1 `-ub/-tb` 후보 | `loop.test.ts` 74/74 · 전체 2328/2328(당시) |
+| `e34922d` | P1-2 MoE cliff ±2 대신 1층씩 하향 스캔 | sweep 로그 |
+| `2eb0586` | P1-3 KV quant 반대쪽 보고용 측정(채택 안 함) | 기록만 |
+| `f9c1282` | P1-4 로그 rAF batch(`logBatch.ts`) | 유닛 28 |
+| `f94f16b` | P2-1 run_shell spawn 스트리밍 · diff Myers · CDP 세션 재사용 | 각 유닛 |
+| `66025f3` | P2-2 GPU만 3초 주기(`GPU_SAMPLE_MS`), 사이 샘플 캐시 재사용 | 신규 1 포함 전체 통과 |
+| `d2a2885` | P2-3 monaco CI 가드 — src 정적 import 0건 실측, dist/web 696K 미포함, optional 유지 | `ci-checks.mjs` PASS |
+| `4fbc379` | P3 조기 압축 opt-in(기본 off) — 실패 2연속+0.5 초과면 0.7 전에 압축, reason `early-quality` | 신규 2 포함 **2346/2346** · `typecheck` exit 0 · `ci-checks` PASS |
+
+**미측정**: Ornith-35B-A3B의 ngram acceptance · 실서버 prompt cache hit율 ·
+`measure --full` 1회 확정. A/B는 n=3이므로 일반화하지 않는다.
 
 ## 2026-10-05 · 가독성 라운드 (출력이 읽히지 않는 문제)
 
