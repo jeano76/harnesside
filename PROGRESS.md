@@ -14,12 +14,44 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: 성능 최적화 라운드 P0~P3 진행 중
+phase: 화면 축 브라우저 실측 진행 중 (S-5 팔레트 모드 구현됨)
 status: in_progress
-last_commit: "4fbc379 perf(context): 실패 연속 시 조기 압축 옵션 P3"
-next_action: "미측정 3건 확정 — Ornith-35B ngram acceptance · 실서버 prompt cache hit율 · measure --full 1회"
+last_commit: "fe9bc71 feat(web): 팔레트에 파일 빠른 이동·내용 검색 모드"
+next_action: "승인카드 60초 경과 화면 1건 남음 — 그 뒤 문서 라운드(todo 182-184)"
 blocking: 없음
 ```
+
+## 2026-10-08 · measure --full 실측 결과 (35B-A3B · 8GB 카드)
+
+`harnesside measure --full --max-seconds=1200 --no-apply` — 후보 7+1개, 설정은 안 바꿈.
+
+| 후보 | 프리필 | 생성 | 판정 |
+|---|---|---|---|
+| 기준 (-t 6 · --n-cpu-moe 32) | 248 tok/s | 39.5 tok/s | 유지 |
+| -t 12 | 243 | 37.1 | 탈락 |
+| -t 5 | 246 | 39.2 | 탈락(오차 내) |
+| --n-cpu-moe 34 | 240 | 38.5 | 탈락 |
+| **ngram-mod** | 250 | **29.1 (-26%)** | 탈락 — Ornith-35B-A3B의 ngram acceptance가 낮음. off 유지(미측정 해소) |
+| -ub 256 | **154 (-38%)** | 39.6 | 탈락 — PP가 무너져 에이전트에 불리 |
+| -tb 6 | 244 | 39.8 (+0.7%) | 3% 미만이라 잡음 — 유지 |
+| KV q4_0 (보고용) | 250 | 39.6 | **+420MiB** 여유. 채택 안 함 — context 확대가 필요해지면 NIAH 회귀와 함께 재검토 |
+| --n-cpu-moe 31 | 258 | 40.5 (최고) | **제외 — 남은 메모리 197MiB < 256MiB**. cliff 직전이라 위험. 현재 32가 안전선 |
+
+최종: **유지** — `-tb 6`이 0.7% 빨랐지만 기준(3%) 미만이라 잡음으로 봅니다.
+기록: `.harnesside/state/measurements.json`.
+
+## 2026-10-08 · 브라우저 실측 라운드 (S-5 팔레트 모드)
+
+> `todo.md` ③-1 7건 중 6건 실측. 서버+헤드리스 크롬(CDP 9222·토큰 인증)으로 확인.
+> `verify-window.mjs` **21/22** — 실패 1건은 헤드리스 한계(SwiftShader가 glRenderer를 ANGLE로 보고).
+
+**발견한 결함 1건**: `todo.md:91`은 "`Ctrl+P`·`Ctrl+Shift+F`·팔레트 항목"이 있다고 적었으나,
+실제로 `main.tsx` 키 핸들러에는 K·P·Escape·Alt+Arrow만 있고 **Shift+F 분기가 0건**이었다.
+검색 API(`/api/fs/search` truncated 포함)는 있었고 화면 진입로가 없었다.
+`fe9bc71`에서 팔레트 모드(commands/files/search) + 방향키 선택 + 잘림 표시로 수정.
+CDP 실측: Ctrl+P→`loop`→↓↓→Enter→`loop.test.ts` 열림 / Ctrl+Shift+F→`test`→잘렸습니다+`path:line`→열림.
+
+**미측정**: 승인카드 60초 경과 화면 1건(서버 타이머·카드 로직은 유닛으로만 봄).
 
 ## 2026-10-08 · 성능 최적화 라운드 (논문·OSS 참조 P0~P3)
 
