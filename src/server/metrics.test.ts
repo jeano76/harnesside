@@ -225,3 +225,20 @@ test("리렌더 버킷 — 미세 변화는 같은 버킷이다 (1Hz 리렌더�
   assert.equal(bucket(0, 1), 0);
   assert.equal(bucket(100, 1), 100);
 });
+
+test("P2-2: GPU는 3초 주기 — 사이 샘플은 캐시를 재사용한다", async () => {
+  let calls = 0;
+  const s = new MetricsSampler(new MetricsRing(), {
+    readGpu: async () => {
+      calls++;
+      return { name: "GPU", utilPct: 10 + calls, tempC: 50, powerW: 100, memUsedMiB: 100, memTotalMiB: 1000, memPct: 10 } as unknown as Metrics["gpu"];
+    },
+    readLlamaRss: async () => null,
+    diskPath: "/",
+  });
+  const first = await s.sample();
+  assert.equal(calls, 1, "첫 샘플은 반드시 실측해야 한다");
+  const second = await s.sample();
+  assert.equal(calls, 1, "3초 안에는 nvidia-smi를 다시 실행하면 안 된다 — 계측이 부하다");
+  assert.deepEqual(second.gpu, first.gpu, "캐시값을 재사용해야 한다");
+});

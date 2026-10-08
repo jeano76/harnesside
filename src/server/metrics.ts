@@ -30,6 +30,9 @@ export { severity, bucket, SEVERITY_COLOR } from "../shared/metrics.js";
 export type { CoreLoad, GpuInfo, MemInfo, DiskInfo, ContextInfo, Metrics } from "../shared/metrics.js";
 
 export const SAMPLE_MS = 1000;
+/** GPU는 1Hz로 돌릴 이유가 없다 — nvidia-smi 한 번이 100~300ms(P2-2).
+ *  CPU/RAM은 1초, GPU만 3초 주기로 분리해 계측이 부하가 되지 않게 한다. */
+export const GPU_SAMPLE_MS = 3000;
 /** 스파크라인용 링 크기 — §5.5 "최근 60초(120샘플)" 의 1Hz 기준 60 샘플 + 여유. */
 export const RING_SIZE = 120;
 
@@ -224,6 +227,8 @@ export class MetricsSampler {
   private prevCpu: CpuSnapshot | null = null;
   private inFlight = false;
   private hooks: ((m: Metrics) => void)[] = [];
+  private lastGpu: Metrics["gpu"] | undefined;
+  private lastGpuAt = 0;
 
   constructor(
     public readonly ring = new MetricsRing(),
@@ -243,6 +248,7 @@ export class MetricsSampler {
    * "무슨 일이 있어?" 을 알 수 없다. 죽은 프로브만 null 이 되고 나머지는 값이 온다.
    */
   async sample(): Promise<Metrics> {
+    const now = Date.now();
     const snap = readCpuSnapshot();
     const cpu = cpuUsageBetween(this.prevCpu, snap);
     this.prevCpu = snap;
@@ -256,12 +262,21 @@ export class MetricsSampler {
     const total = totalmem();
     const free = freemem();
     const swap = await readSwap();
-    const gpu = await safely(() => (this.deps.readGpu ?? readGpu)(), null);
+    // P2-2: GPU만 3초 주기. nvidia-smi 100~300ms를 1Hz로 돌리면 계측 자체가
+    // 부하다. 사이 샘플은 마지막 GPU값을 재사용한다. 첫 샘플은 반드시 실측.
+    let gpu: Metrics["gpu"];
+    if (this.lastGpu === undefined || now - this.lastGpuAt >= GPU_SAMPLE_MS) {
+      gpu = await safely(() => (this.deps.readGpu ?? readGpu)(), null);
+      this.lastGpu = gpu;
+      this.lastGpuAt = now;
+    } else {
+      gpu = this.lastGpu;
+    }
     const disk = await safely(() => readDisk(this.deps.diskPath ?? "/"), { totalBytes: 0, freeBytes: 0, usedPct: 0 });
     const llama = await safely(() => (this.deps.readLlamaRss ?? readLlamaRss)(), null);
     const ctx = this.deps.context?.() ?? null;
     const m: Metrics = {
-      at: Date.now(),
+      at: now,
       cpu,
       mem: {
         totalBytes: total,
