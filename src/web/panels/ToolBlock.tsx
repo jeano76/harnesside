@@ -19,6 +19,7 @@
 
 import React, { useEffect, useState } from "react";
 import type { ApiClient } from "../api.js";
+import { useI18n } from "../i18n/index.js";
 import { toolCommand, toolPath, type AgentBlock } from "../../session/blocks.js";
 import { FilePreview } from "./FilePreview.js";
 import { CodeBlock } from "./CodeBlock.js";
@@ -30,22 +31,25 @@ const DIM = COLOR.DIM_SUBTLE;
 const FG = COLOR.FG;
 const BORDER = COLOR.BORDER;
 
-/** 도구 이름 → 사람이 읽는 말. 내부 식별자를 화면에 내놓지 않는다(§5.8). */
-const TOOL_LABEL: Record<string, string> = {
-  read_file: "파일 읽기",
-  write_file: "파일 쓰기",
-  edit_file: "파일 수정",
-  create_file: "파일 만들기",
-  run_shell: "셸 실행",
-  list_files: "목록 보기",
-  search: "검색",
-  apply_patch: "패치 적용",
-  git_commit: "커밋",
-  finish: "완료",
-};
+/** 도구 이름 → 사람이 읽는 말. 내부 식별자를 화면에 내놓지 않는다(§5.8).
+ *  카탈로그에 있는 이름만 번역한다 — 모르는 이름은 t()를 부르지 않는다.
+ *  t()는 모르는 키를 누락으로 기록하므로, 식별자 폴백까지 누락에 쌓이면
+ *  진짜 빠진 키가 묻힌다. */
+const TOOL_KEYS = [
+  "read_file",
+  "write_file",
+  "edit_file",
+  "create_file",
+  "run_shell",
+  "list_files",
+  "search",
+  "apply_patch",
+  "git_commit",
+  "finish",
+] as const;
 
-function labelFor(name: string): string {
-  return TOOL_LABEL[name] ?? name;
+function labelFor(name: string, t: (key: string) => string): string {
+  return (TOOL_KEYS as readonly string[]).includes(name) ? t(`tool.${name}`) : name;
 }
 
 /** 이 도구가 **셸** 이나 — 이름만 믿지 않고 인자까지 본다. */
@@ -62,22 +66,23 @@ function isFileTool(name: string, args: Record<string, unknown> | undefined): bo
 
 /** 슬래시 명령 결과 — 대화 안의 **접고 펼 수 있는** 블록. 실행 중이면 그렇다고 말한다. */
 function SlashBlock({ block, onToggle }: { block: AgentBlock; onToggle?: () => void }) {
+  const t = useI18n();
   const open = block.view?.viewCollapsed !== true;
   const state = block.view?.slashState ?? "ok";
   const color = state === "error" ? "#f85149" : state === "running" ? "#d29922" : DIM;
-  const body = state === "running" ? "실행 중…" : block.text || "(출력 없음)";
+  const body = state === "running" ? t("block.runningEllipsis") : block.text || t("block.noOutput");
   return (
     <div style={{ margin: "2px 0" }}>
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        title={open ? "접기" : "펼치기"}
+        title={open ? t("action.collapse") : t("action.expand")}
         style={{ background: "none", border: 0, color, cursor: "pointer", font: "inherit", fontSize: 11, padding: 0 }}
       >
         <span aria-hidden="true">{open ? "▾" : "▸"}</span> /{block.view?.path}
-        {state === "running" && <span style={{ marginLeft: 6 }}>실행 중</span>}
-        {state === "error" && <span style={{ marginLeft: 6 }}>실패</span>}
+        {state === "running" && <span style={{ marginLeft: 6 }}>{t("block.running")}</span>}
+        {state === "error" && <span style={{ marginLeft: 6 }}>{t("block.failed")}</span>}
       </button>
       {open && (
         <pre style={{ margin: "2px 0 0", padding: "6px 8px", border: `1px solid ${BORDER}`, borderRadius: 6, background: "#0d1117", color: FG, fontFamily: FONT.MONO ?? "monospace", fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 360, overflow: "auto" }}>
@@ -117,6 +122,7 @@ export function ToolBlock({
    * 두 곳이 갈라진다(2026-10-01 `ModelPanel` deps 무한요청 사고가 같은 종류였다). */
   extra?: { settings?: React.ReactNode };
 }) {
+  const t = useI18n();
   // ── 사람이 연 블록 (2026-10-01) ────────────────────────────────────────────
   // 설정 · 변경 검토 · 파일 미리보기가 **대화 안에** 열린다. 별도 패널이 없어진
   // 이유가 이것이고, 되돌리려면 이 분기를 없애고 패널을 다시 만들어야 한다.
@@ -125,7 +131,7 @@ export function ToolBlock({
     if (block.view?.what === "file" && block.view.path && client) {
       return (
         <div style={{ margin: "2px 0" }}>
-          <div style={{ fontSize: 10, color: DIM, marginBottom: 2 }}>열기 · {block.view.path}</div>
+          <div style={{ fontSize: 10, color: DIM, marginBottom: 2 }}>{t("block.openPath", { path: block.view.path })}</div>
           {/* **자동 연다** — 사람이 직접 연 블록이므로 접어 두면 "뭘 열었지" 가 된다. */}
           <FilePreview client={client} path={block.view.path} autoOpen onEdit={onEditFile} />
         </div>
@@ -145,18 +151,18 @@ export function ToolBlock({
               type="button"
               onClick={onToggleView}
               aria-expanded={!collapsed}
-              title={collapsed ? "설정 펼치기" : "설정 접기"}
+              title={collapsed ? t("block.settingsExpand") : t("block.settingsCollapse")}
               style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 10, padding: 0 }}
             >
-              <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span> 설정
-              {collapsed && <span style={{ marginLeft: 6 }}>(접힘 — 다시 누르면 펼침)</span>}
+              <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span> {t("panel.settings")}
+              {collapsed && <span style={{ marginLeft: 6 }}>{t("block.settingsCollapsedHint")}</span>}
             </button>
             {!collapsed && onCloseView && (
               <button
                 type="button"
                 onClick={onCloseView}
-                aria-label="설정 접기"
-                title="설정 접기"
+                aria-label={t("block.settingsCollapse")}
+                title={t("block.settingsCollapse")}
                 style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 10, padding: "0 2px", marginLeft: "auto" }}
               >
                 ✕
@@ -177,13 +183,13 @@ export function ToolBlock({
     if (block.view?.what === "dirs" || block.view?.what === "diff") {
       return (
         <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "6px 8px", fontSize: 11, color: DIM }}>
-          {block.view.what === "diff" ? "변경 검토" : "디렉터리"} — 이 화면은 제거되었습니다.
+          {block.view.what === "diff" ? t("panel.diff") : t("panel.directory")} — {t("block.viewRemoved")}
         </div>
       );
     }
     return (
       <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "6px 8px", fontSize: 11, color: DIM }}>
-        이 화면을 열 수 없습니다 — {block.view?.what ?? "알 수 없는 보기"}.
+        {t("block.viewUnknown", { what: block.view?.what ?? t("block.unknownView") })}
       </div>
     );
   }
@@ -200,7 +206,7 @@ export function ToolBlock({
   if (isFileTool(name, args) && path && client) {
     return <FilePreview client={client} path={path} onEdit={onEditFile} />;
   }
-  if (isFileTool(name, args) && path) return <FileBlock label={labelFor(name)} path={path} done={done} client={client} />;
+  if (isFileTool(name, args) && path) return <FileBlock label={labelFor(name, t)} path={path} done={done} client={client} />;
 
   // **판별할 수 없는 도구** — 한 줄로 말하고 펼치면 호출 내용을 보여준다.
   // 예전엔 헤더 줄 + 결과 미리보기 줄의 두 줄이었고, 정작 "어떻게 호출됐는지"
@@ -221,6 +227,7 @@ export function formatToolCall(name: string, argsText?: string): string {
 
 /** 판별 불가 도구 한 줄 — 펼치면 호출(인자)과 결과를 보여준다. */
 function GenericToolBlock({ name, argsText, done, text }: { name: string; argsText?: string; done: boolean; text: string }) {
+  const t = useI18n();
   const [open, setOpen] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const callText = formatToolCall(name, argsText);
@@ -231,18 +238,18 @@ function GenericToolBlock({ name, argsText, done, text }: { name: string; argsTe
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          title={open ? "호출 내용 접기" : "호출 내용 펼치기"}
+          title={open ? t("block.collapseCall") : t("block.expandCall")}
           style={{ background: "none", border: 0, color: done ? COLOR.GOOD : COLOR.DIM, cursor: "pointer", font: "inherit", fontSize: FONT.META, padding: 0, display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: "1 1 auto" }}
         >
           <span aria-hidden="true">🔧</span>
           <span aria-hidden="true">{open ? "▾" : "▸"}</span>
-          <span style={{ color: COLOR.DIM, flexShrink: 0 }}>{labelFor(name)}</span>
-          <span style={{ flexShrink: 0 }}>{done ? "완료" : "실행 중"}</span>
+          <span style={{ color: COLOR.DIM, flexShrink: 0 }}>{labelFor(name, t)}</span>
+          <span style={{ flexShrink: 0 }}>{done ? t("block.done") : t("block.running")}</span>
         </button>
         <button
           type="button"
-          aria-label="호출 내용 복사"
-          title={copied ? "복사됨" : "복사"}
+          aria-label={t("block.copyCall")}
+          title={copied ? t("block.copied") : t("block.copy")}
           onClick={() => {
             try {
               void navigator.clipboard?.writeText(callText);
@@ -275,6 +282,7 @@ function GenericToolBlock({ name, argsText, done, text }: { name: string; argsTe
 
 /** 파일 도구 — **경로와 내용을 그 자리에서** 보여준다. */
 function FileBlock({ label, path, done, client }: { label: string; path: string; done: boolean; client?: ApiClient }) {
+  const t = useI18n();
   const [open, setOpen] = useState(false);
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -316,8 +324,8 @@ function FileBlock({ label, path, done, client }: { label: string; path: string;
       </button>
       {open && (
         <div style={{ borderTop: `1px solid ${BORDER}` }}>
-          {error && <div style={{ padding: "6px 8px", color: COLOR.ERROR, fontSize: FONT.AUX }}>읽지 못했습니다: {error}</div>}
-          {!error && content === null && <div style={{ padding: "6px 8px", color: DIM, fontSize: 11 }}>읽는 중…</div>}
+          {error && <div style={{ padding: "6px 8px", color: COLOR.ERROR, fontSize: FONT.AUX }}>{t("block.readFailed")}: {error}</div>}
+          {!error && content === null && <div style={{ padding: "6px 8px", color: DIM, fontSize: 11 }}>{t("block.loading")}</div>}
           {content !== null && (
             <pre
               style={{
@@ -342,6 +350,7 @@ function FileBlock({ label, path, done, client }: { label: string; path: string;
  * 사용자는 확인을 건너뛴다.
  */
 function ShellBlock({ command, done, text, client }: { command: string; done: boolean; text: string; client?: ApiClient }) {
+  const t = useI18n();
   const [output, setOutput] = useState<string>("");
 
   useEffect(() => {
@@ -363,8 +372,8 @@ function ShellBlock({ command, done, text, client }: { command: string; done: bo
     <div style={{ border: `1px solid ${BORDER}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1, padding: "4px 8px" }}>
       <BlockHeader
         kind="shell"
-        target={command || "(명령 없음)"}
-        status={done ? "완료" : "실행 중…"}
+        target={command || t("block.noCommand")}
+        status={done ? t("block.done") : t("block.runningEllipsis")}
         done={done}
         copyText={output || command || undefined}
       />
@@ -377,7 +386,7 @@ function ShellBlock({ command, done, text, client }: { command: string; done: bo
           lang={null}
           text={output}
           collapsible
-          summary={`셸 출력 ${output.split("\n").length}줄`}
+          summary={t("block.shellOutputLines", { count: output.split("\n").length })}
         />
       )}
     </div>

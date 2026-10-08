@@ -26,6 +26,7 @@
 
 import React, { useEffect, useState } from "react";
 import type { ApiClient } from "../api.js";
+import { useI18n } from "../i18n/index.js";
 import { judgeCommand, headline, type Verdict } from "../../tools/irreversible.js";
 
 const DIM = "#8b949e";
@@ -84,16 +85,17 @@ export function ApprovalCard({
   // 그리고 **초과하면 거절된 것으로 보여야 한다**(무응답 = 거절, `ApprovalGate` 와 같다).
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
   }, []);
+  const t = useI18n();
 
   const left = secondsLeft(request, now);
   const expired = left <= 0;
 
   /** 도구 인자에서 셸 명령을 꺼낸다 — **있어야만** 되돌림 판정을 한다. */
   const command = readCommand(request);
-  const verdict: Verdict = command ? judgeCommand(command) : { how: "unknown", because: "무엇을 실행하는지 알 수 없습니다" };
+  const verdict: Verdict = command ? judgeCommand(command) : { how: "unknown", because: t("approval.unknownCommand") };
 
   const decide = async (decision: "allow-once" | "allow-always" | "reject") => {
     setDeciding(true);
@@ -103,13 +105,13 @@ export function ApprovalCard({
       // 거짓말로 "실행됨" 을 말하면 사용자는 확인을 건너뛴다(§5.10).
       onNotice(
         decision === "reject" ? "warn" : "info",
-        decision === "reject" ? "거절했습니다" : decision === "allow-always" ? "항상 허용했습니다" : "한 번 허용했습니다",
-        decision === "reject" ? "실행되지 않습니다." : `실행 결과는 대화의 도구 블록에 나옵니다. ${verdict.how === "undoable" ? (verdict.undo ?? "") : "되돌릴 수 없는 조작이므로 결과를 꼭 확인하십시오."}`.trim(),
+        decision === "reject" ? t("approval.rejectedTitle") : decision === "allow-always" ? t("approval.allowAlwaysTitle") : t("approval.allowOnceTitle"),
+        decision === "reject" ? t("approval.rejectedBody") : `${t("approval.resultHint")} ${verdict.how === "undoable" ? (verdict.undo ?? "") : t("approval.checkIrreversible")}`.trim(),
       );
     } catch (e) {
       // **결정이 안 갔는데 "거절했습니다" 라고 말하면 안 된다.** 실패를 말하고
       // 다시 고르게 둔다 — 그게 무응답 = 거절과 같아 안전하다.
-      onNotice("error", "결정을 전달하지 못했습니다", e instanceof Error ? e.message : String(e));
+      onNotice("error", t("approval.decideFailed"), e instanceof Error ? e.message : String(e));
       setDeciding(false);
     }
   };
@@ -127,9 +129,9 @@ export function ApprovalCard({
     >
       {/* ── **첫 줄이 판정이다** (요구: "되돌릴 수 없으면 그 말부터") ──────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ color: verdict.how === "irreversible" ? ERROR : WARN, fontSize: 12 }}>{expired ? "응답 없음 — 거절됨" : "승인 필요"}</span>
+        <span style={{ color: verdict.how === "irreversible" ? ERROR : WARN, fontSize: 12 }}>{expired ? t("approval.expiredTitle") : t("approval.needApproval")}</span>
         <span style={{ flex: 1 }} />
-        <span style={{ color: DIM, fontSize: 10 }}>{expired ? "기한이 지났습니다" : `${left}초 뒤 자동 거절`}</span>
+        <span style={{ color: DIM, fontSize: 10 }}>{expired ? t("approval.expired") : t("approval.autoReject", { left })}</span>
       </div>
 
       {/* **판정 문장** — 색이 아니라 말로. 이것이 요구의 중심이다. */}
@@ -137,7 +139,7 @@ export function ApprovalCard({
 
       {/* **무엇을 실행하려는지** — 판정만으로는 부족하다. 경로와 인자가 보인다. */}
       <div style={{ color: DIM, fontSize: 10 }}>
-        도구: {request.tool}
+        {t("approval.tool")}: {request.tool}
         {command ? (
           <pre style={{ margin: "3px 0 0", whiteSpace: "pre-wrap", wordBreak: "break-all", font: "11px/1.4 ui-monospace, monospace", color: FG }}>{command}</pre>
         ) : (
@@ -150,14 +152,14 @@ export function ApprovalCard({
           누른다.** 그리고 그게 `rm -rf` 를 approve 하는 가장 흔한 경로다. */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         <button type="button" disabled={deciding || expired} onClick={() => void decide("reject")} style={btn(DIM, true)}>
-          거절
+          {t("approval.reject")}
         </button>
         <span style={{ flex: 1 }} />
         <button type="button" disabled={deciding || expired} onClick={() => void decide("allow-once")} style={btn(FG)}>
-          한 번 허용
+          {t("approval.allowOnce")}
         </button>
-        <button type="button" disabled={deciding || expired} onClick={() => void decide("allow-always")} title="이 도구를 앞으로 확인 없이 실행합니다" style={btn(FG)}>
-          항상 허용
+        <button type="button" disabled={deciding || expired} onClick={() => void decide("allow-always")} title={t("approval.allowAlwaysHint")} style={btn(FG)}>
+          {t("approval.allowAlways")}
         </button>
       </div>
     </div>

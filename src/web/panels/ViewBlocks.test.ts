@@ -48,7 +48,11 @@ describe("설정만 남긴 뷰 배선", () => {
     assert.match(tool, /!collapsed &&/, "접힌 상태에서도 설정 내용이 그려진다");
   });
   it("저장된 옛 dirs/diff 블록은 제거됐다고 말한다", () => {
-    assert.match(tool, /이 화면은 제거되었습니다/, "제거 안내가 없다 — 옛 블록이 거짓말을 한다");
+    // 2026-10-08 M9: 문구는 카탈로그(`block.viewRemoved`)로 옮겼다. 렌더 텍스트는
+    // 같아야 하므로 키 사용 + 카탈로그 값을 함께 본다 — 한쪽만 보면 빈 카드가 통과한다.
+    assert.match(tool, /block\.viewRemoved/, "제거 안내 키를 쓰지 않는다");
+    const ko = readFileSync(join(ROOT, "src/web/i18n/ko.ts"), "utf8");
+    assert.match(ko, /"block\.viewRemoved": "이 화면은 제거되었습니다\."/, "카탈로그에 제거 안내가 없다 — 옛 블록이 거짓말을 한다");
     assert.doesNotMatch(tool, /extra\.dirs/, "제거된 dirs 노드를 아직 읽는다");
     assert.doesNotMatch(tool, /extra\.review/, "제거된 review 노드를 아직 읽는다");
   });
