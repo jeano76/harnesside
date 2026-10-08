@@ -25,12 +25,12 @@ import { languageFor } from "../editor/highlight.js";
 import { useI18n } from "../i18n/index.js";
 import type { Toast } from "./notify.js";
 
-export const THINK_STYLES: { id: ThinkStyle; label: string; hint: string }[] = [
-  { id: "dots", label: "파동 점", hint: "기본. 생각 중임을 짧게 알립니다" },
-  { id: "pulse", label: "고동", hint: "한 점이 밝아졌다 어두워집니다" },
-  { id: "orbit", label: "공전", hint: "가장 눈에 띕니다" },
-  { id: "shimmer", label: "번짐", hint: "글 흐름에 은은한 빛" },
-  { id: "bar", label: "막대", hint: "움직임 없음. prefers-reduced-motion 에 적합" },
+export const THINK_STYLES: { id: ThinkStyle; labelKey: string; hintKey: string }[] = [
+  { id: "dots", labelKey: "agent.thinkStyle.dots", hintKey: "agent.thinkStyle.dotsHint" },
+  { id: "pulse", labelKey: "agent.thinkStyle.pulse", hintKey: "agent.thinkStyle.pulseHint" },
+  { id: "orbit", labelKey: "agent.thinkStyle.orbit", hintKey: "agent.thinkStyle.orbitHint" },
+  { id: "shimmer", labelKey: "agent.thinkStyle.shimmer", hintKey: "agent.thinkStyle.shimmerHint" },
+  { id: "bar", labelKey: "agent.thinkStyle.bar", hintKey: "agent.thinkStyle.barHint" },
 ];
 
 export type { AgentBlock };
@@ -65,27 +65,24 @@ export { applyEvent, appendToBlock };
  */
 const COLLAPSE_AT = 8;
 
-const EXAMPLES = [
-  "이 저장소의 구조를 한 문단으로 설명해 주세요",
-  "최근 변경 파일을 찾아 Likely 버그를 하나만 골라 주세요",
-  "테스트를 실행하고 실패한 것만 정리해 주세요",
-];
+const EXAMPLE_KEYS = ["empty.agent.example1", "empty.agent.example2", "empty.agent.example3"] as const;
 
 function FirstRun({ onPick }: { onPick: (text: string) => void }) {
+  const t = useI18n();
   return (
     <div style={{ display: "grid", gap: 10, padding: "12px 4px", maxWidth: 620 }}>
       <div style={{ fontSize: 12, color: "#c9d1d9" }}>
-        여기서 지시를 입력하면 이 저장소에서 에이전트가 직접 일합니다.
+        {t("empty.agent.guide1")}
       </div>
       <div style={{ fontSize: 11, color: "#6e7681" }}>
-        아래 예시 중 하나를 누르면 입력창에 채워집니다 — 바로 보낼 수도, 고쳐서 보낼 수도 있습니다.
+        {t("empty.agent.guide2")}
       </div>
       <div style={{ display: "grid", gap: 4 }}>
-        {EXAMPLES.map((e) => (
+        {EXAMPLE_KEYS.map((k) => (
           <button
-            key={e}
+            key={k}
             type="button"
-            onClick={() => onPick(e)}
+            onClick={() => onPick(t(k))}
             style={{
               textAlign: "left",
               background: "#161b22",
@@ -98,15 +95,15 @@ function FirstRun({ onPick }: { onPick: (text: string) => void }) {
               fontSize: 12,
             }}
           >
-            {e}
+            {t(k)}
           </button>
         ))}
       </div>
       <div style={{ fontSize: 10, color: "#6e7681", display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <span>Enter 전송</span>
-        <span>Shift+Enter 줄바꿈</span>
-        <span>Ctrl+K 명령</span>
-        <span>설정·변경검토는 위 아이콘</span>
+        <span>{t("hint.send")}</span>
+        <span>{t("hint.newline")}</span>
+        <span>{t("hint.command")}</span>
+        <span>{t("hint.settings")}</span>
       </div>
     </div>
   );
@@ -118,6 +115,7 @@ function FirstRun({ onPick }: { onPick: (text: string) => void }) {
  * 닫아도 토스트 타이머와 무관 — 이미 본 것은 다시 세지 않는다.
  */
 function NoticeBell({ notices, onDismiss }: { notices?: Toast[]; onDismiss?: (id: string) => void }) {
+  const t = useI18n();
   const [open, setOpen] = useState(false);
   const items = notices ?? [];
   if (items.length === 0) return null;
@@ -128,8 +126,8 @@ function NoticeBell({ notices, onDismiss }: { notices?: Toast[]; onDismiss?: (id
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label={`알림 ${items.length}개 보기`}
-        title="알림 센터 (우하단 알림과 같은 내용)"
+        aria-label={t("notice.view", { count: items.length })}
+        title={t("notice.center")}
         style={{ background: "none", border: 0, color: errors > 0 ? "#f85149" : "#8b949e", cursor: "pointer", font: "inherit", fontSize: 11 }}
       >
         🔔 {items.length}
@@ -141,7 +139,7 @@ function NoticeBell({ notices, onDismiss }: { notices?: Toast[]; onDismiss?: (id
               <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
                 <span style={{ fontSize: 11, color: "#c9d1d9", fontWeight: 700, flex: 1 }}>{n.title}</span>
                 {onDismiss && (
-                  <button type="button" aria-label={`${n.title} 닫기`} onClick={() => onDismiss(n.id)} style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit", fontSize: 10 }}>
+                  <button type="button" aria-label={t("notice.dismiss", { title: n.title })} onClick={() => onDismiss(n.id)} style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit", fontSize: 10 }}>
                     ✕
                   </button>
                 )}
@@ -171,12 +169,13 @@ export interface CompactionView {
 }
 
 function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: () => void }) {
+  const t = useI18n();
   const [open, setOpen] = useState(false);
   if (info.phase === "running") {
     return (
       <div role="status" style={{ display: "flex", gap: 6, alignItems: "center", padding: "3px 8px", fontSize: 11, color: "#d29922", borderBottom: "1px solid #30363d" }}>
         <span aria-hidden="true">◌</span>
-        <span>압축 중… 대화 기록을 정리합니다 (체크포인트는 저장됨)</span>
+        <span>{t("compaction.running")}</span>
       </div>
     );
   }
@@ -184,8 +183,8 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
     return (
       <div role="alert" style={{ display: "flex", gap: 6, alignItems: "center", padding: "3px 8px", fontSize: 11, color: "#f85149", borderBottom: "1px solid #30363d" }}>
         <span aria-hidden="true">✗</span>
-        <span style={{ flex: 1 }}>압축 실패 — 체크포인트는 저장됐고 현재 대화로 계속합니다</span>
-        <button type="button" onClick={onClose} aria-label="압축 알림 닫기" style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit" }}>✕</button>
+        <span style={{ flex: 1 }}>{t("compaction.failed")}</span>
+        <button type="button" onClick={onClose} aria-label={t("compaction.dismiss")} style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit" }}>✕</button>
       </div>
     );
   }
@@ -199,9 +198,13 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
           aria-expanded={open}
           style={{ background: "none", border: 0, color: "#c9d1d9", cursor: "pointer", font: "inherit", textAlign: "left", flex: 1 }}
         >
-          압축 완료 — {info.droppedCount ?? "?"}개 메시지({(info.droppedTokens ?? 0).toLocaleString("ko-KR")} 토큰)를 요약으로, {info.keptCount ?? "?"}개 유지
+          {t("compaction.done", {
+            dropped: info.droppedCount ?? "?",
+            droppedTokens: (info.droppedTokens ?? 0).toLocaleString("ko-KR"),
+            kept: info.keptCount ?? "?",
+          })}
         </button>
-        <button type="button" onClick={onClose} aria-label="압축 알림 닫기" style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit" }}>✕</button>
+        <button type="button" onClick={onClose} aria-label={t("compaction.dismiss")} style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit" }}>✕</button>
       </div>
       {open && (
         <div style={{ padding: "0 8px 6px 22px", display: "grid", gap: 4 }}>
@@ -210,7 +213,7 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
           )}
           {info.droppedPreview && info.droppedPreview.length > 0 && (
             <div style={{ color: "#6e7681", fontSize: 10 }}>
-              <div>잊혀진 내용:</div>
+              <div>{t("compaction.forgotten")}</div>
               {info.droppedPreview.map((p, i) => (
                 <div key={i}>· {p}</div>
               ))}
@@ -233,6 +236,7 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
  * 완성되면 도구 블록이 그 자리를 잇는다(main.tsx 가 호출 완료 때 비운다).
  */
 function LiveDraft({ name, args, client }: { name: string; args: string; client?: ApiClient }) {
+  const t = useI18n();
   const view = draftView(args);
   const path = view.path;
   // 디스크의 현재 내용. `undefined` = 아직 안 읽었다, `null` = 파일이 없다.
@@ -256,9 +260,9 @@ function LiveDraft({ name, args, client }: { name: string; args: string; client?
   return (
     <div style={{ borderLeft: "2px solid #3fb950", paddingLeft: 6, margin: "4px 0" }}>
       <div style={{ fontSize: 10, color: "#3fb950", display: "flex", gap: 6, alignItems: "baseline" }}>
-        <span>✎ {typeof known === "string" ? "수정 중" : "작성 중"}</span>
+        <span>✎ {typeof known === "string" ? t("draft.editing") : t("draft.writing")}</span>
         {path && <span style={{ color: "#c9d1d9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>}
-        <span style={{ color: "#6e7681" }}>{name}{view.hasBody ? ` · ${chars}자` : ""}</span>
+        <span style={{ color: "#6e7681" }}>{name}{view.hasBody ? ` · ${t("draft.chars", { chars })}` : ""}</span>
       </div>
       {canDiff ? (
         <DiffPanel
@@ -266,8 +270,8 @@ function LiveDraft({ name, args, client }: { name: string; args: string; client?
           oldText={known}
           newText={edit.predicted ?? known}
           source="tool"
-          leftLabel="기존"
-          rightLabel="작성 중"
+          leftLabel={t("draft.oldLabel")}
+          rightLabel={t("draft.newLabel")}
           layout="inline"
           width={900}
           height={220}
@@ -280,6 +284,7 @@ function LiveDraft({ name, args, client }: { name: string; args: string; client?
 }
 
 function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; style: ThinkStyle; notice?: { short: string; title: string } | null; live: boolean }) {
+  const t = useI18n();
   const anim = animationFor(style);
   // 꺼져 있으면 표시줄 자체가 없다 — 단, 예산 안내가 있으면 그 한 줄은 보인다.
   if (!state.enabled && !notice) return null;
@@ -295,7 +300,7 @@ function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; sty
   return (
     <div
       style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }}
-      {...(notice ? { title: notice.title } : { title: "토큰 수는 길이 추정치(사고+답변+도구호출 합산). 속도는 델타 사이 대기(슬롯·도구·프리필)를 뺀 순수 출력 구간 기준" })}
+      {...(notice ? { title: notice.title } : { title: t("think.estimateTitle") })}
     >
       {live && state.enabled && anim.dots > 0 && (
         <span style={{ display: "inline-flex", gap: 3 }}>
@@ -316,7 +321,11 @@ function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; sty
         </span>
       )}
       <span>
-        Thinking · {live ? `${used}/${cap}` : `${state.lastUsedTokens.toLocaleString("ko-KR")}/${cap}`} 토큰{pace}{notice ? ` — ${notice.short}` : ""}
+        {t("think.tokens", {
+          range: live ? `${used}/${cap}` : `${state.lastUsedTokens.toLocaleString("ko-KR")}/${cap}`,
+          pace,
+          suffix: notice ? ` — ${notice.short}` : "",
+        })}
       </span>
     </div>
   );
@@ -486,13 +495,13 @@ export function AgentPanel({
       overlay={overlay}
       activity={[]}
       status={[
-        { text: wsState === "open" ? "\u25CF 실시간" : wsState === "connecting" ? "\u25CB 연결 중" : "\u25B2 끊김", tone: wsState === "open" ? "good" : wsState === "connecting" ? "warn" : "error", title: "WebSocket 연결 상태" },
+        { text: wsState === "open" ? t("status.wsOpen") : wsState === "connecting" ? t("status.wsConnecting") : t("status.wsClosed"), tone: wsState === "open" ? "good" : wsState === "connecting" ? "warn" : "error", title: t("status.wsTitle") },
         // **모르면 모른다고 쓴다** — 0 으로 두지 않는다. 0 은 "안 쓴다" 로 읽힌다.
         ...(context
-          ? [{ text: `컨텍스트 ${context.usedTokens.toLocaleString("ko-KR")} / ${context.totalTokens.toLocaleString("ko-KR")}`, tone: context.usedTokens / context.totalTokens > 0.8 ? ("warn" as const) : ("normal" as const) }]
-          : [{ text: "컨텍스트 \u2014", title: "작업 중이 아니면 측정되지 않습니다" }]),
-        ...(running ? [{ text: "실행 중", tone: "warn" as const }] : []),
-        { text: `묶음 ${turns.length}` },
+          ? [{ text: t("status.context", { range: `${context.usedTokens.toLocaleString("ko-KR")} / ${context.totalTokens.toLocaleString("ko-KR")}` }), tone: context.usedTokens / context.totalTokens > 0.8 ? ("warn" as const) : ("normal" as const) }]
+          : [{ text: t("status.contextUnknown"), title: t("status.contextUnknownTitle") }]),
+        ...(running ? [{ text: t("status.running"), tone: "warn" as const }] : []),
+        { text: t("status.bundles", { count: turns.length }) },
       ]}
     >
       <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
@@ -516,7 +525,7 @@ export function AgentPanel({
         <span style={{ flex: 1 }} />
         {running && (
           <button type="button" onClick={onCancel} style={{ background: "#21262d", color: "#f85149", border: "1px solid #30363d", borderRadius: 4, font: "inherit", fontSize: 10, padding: "1px 6px", cursor: "pointer" }}>
-            취소
+            {t("action.cancel")}
           </button>
         )}
         <NoticeBell notices={notices} onDismiss={onDismissNotice} />
@@ -561,7 +570,7 @@ export function AgentPanel({
           }}
         >
           <span>
-            {turns.length}개 대화 묶음 · {blocks.length}개 항목
+            {t("status.turns", { turns: turns.length, blocks: blocks.length })}
           </span>
           <span style={{ flex: 1 }} />
           <button
@@ -578,7 +587,7 @@ export function AgentPanel({
               cursor: "pointer",
             }}
           >
-            전체 접기
+            {t("turn.collapseAll")}
           </button>
           <button
             type="button"
@@ -594,7 +603,7 @@ export function AgentPanel({
               cursor: "pointer",
             }}
           >
-            전체 펼치기
+            {t("turn.expandAll")}
           </button>
         </div>
       )}
@@ -669,12 +678,12 @@ export function AgentPanel({
                     <span style={{ color: "#6e7681" }}>{open ? "▾" : "▸"}</span> {turn.prompt}
                   </button>
                 ) : (
-                  <span style={{ flex: 1, color: "#6e7681", fontSize: 10 }}>이전 대화</span>
+                  <span style={{ flex: 1, color: "#6e7681", fontSize: 10 }}>{t("turn.previous")}</span>
                 )}
                 <span style={{ color: "#6e7681", fontSize: 10, whiteSpace: "nowrap" }}>{turn.summary}</span>
                 {last && (
-                  <span style={{ color: "#79c0ff", fontSize: 10, whiteSpace: "nowrap" }} title="가장 최근 출력">
-                    {ti === turns.length - 1 && running ? "● 최신" : "최신"}
+                  <span style={{ color: "#79c0ff", fontSize: 10, whiteSpace: "nowrap" }} title={t("turn.latestTitle")}>
+                    {ti === turns.length - 1 && running ? t("turn.latestLive") : t("turn.latestIdle")}
                   </span>
                 )}
                 <span style={{ color: "#484f58", fontSize: 10, whiteSpace: "nowrap" }}>
@@ -684,10 +693,10 @@ export function AgentPanel({
                   <button
                     type="button"
                     onClick={() => toggle(ti)}
-                    aria-label={open ? "묶음 접기" : "묶음 펼치기"}
+                    aria-label={open ? t("turn.collapseBundle") : t("turn.expandBundle")}
                     style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit", fontSize: 10 }}
                   >
-                    {open ? "접기" : "펼치기"}
+                    {open ? t("action.collapse") : t("action.expand")}
                   </button>
                 )}
               </div>
@@ -732,7 +741,7 @@ export function AgentPanel({
               borderRadius: 999, padding: "2px 10px", cursor: "pointer", font: "inherit", fontSize: 10,
             }}
           >
-            ↓ 아래에 새 내용
+            {t("turn.newContent")}
           </button>
         )}
         <div ref={bottom} />
@@ -760,10 +769,11 @@ function BlockBody({
   onToggleBlock?: () => void;
   onEditFile?: (path: string) => void;
 }) {
+  const t = useI18n();
   if (b.kind === "user") {
     return (
       <div style={{ borderLeft: "2px solid #79c0ff", paddingLeft: 6 }}>
-        <div style={{ fontSize: 10, color: "#79c0ff", marginBottom: 1 }}>나</div>
+        <div style={{ fontSize: 10, color: "#79c0ff", marginBottom: 1 }}>{t("block.userLabel")}</div>
         <div style={{ color: "#c9d1d9", fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {b.text}
         </div>
@@ -774,7 +784,7 @@ function BlockBody({
     return (
       <details open style={{ borderLeft: "2px solid #d29922", paddingLeft: 6 }}>
         <summary style={{ cursor: "pointer", fontSize: 10, color: "#d29922" }}>
-          Thinking {b.text.length.toLocaleString("ko-KR")}자
+          {t("block.thinkingChars", { count: b.text.length.toLocaleString("ko-KR") })}
         </summary>
         <pre style={{ margin: "3px 0 0", whiteSpace: "pre-wrap", font: "11px/1.5 ui-monospace, monospace", color: "#8b949e" }}>
           {b.text}
@@ -810,7 +820,7 @@ function BlockBody({
     }
     return <div style={{ color: "#6e7681", fontSize: 11 }}>· {b.text}</div>;
   }
-  if (b.kind === "error") return <div style={{ color: "#f85149", fontSize: 11 }}>오류: {b.text}</div>;
+  if (b.kind === "error") return <div style={{ color: "#f85149", fontSize: 11 }}>{t("block.errorPrefix")}: {b.text}</div>;
   return (
     <ToolBlock
       block={b}

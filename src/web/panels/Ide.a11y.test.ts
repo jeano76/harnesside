@@ -101,7 +101,10 @@ test("**조작 버튼이 하나뿐**이다 — 같은 일을 두 곳에 두면 �
 
 test("**빈 상태**는 여전히 눌 수 있다 — IDE 로 바꿨다고 시작이 사라지지 않는다", () => {
   assert.match(panel, /function FirstRun/, "빈 상태 컴포넌트가 없다");
-  assert.match(panel, /onClick=\{\(\) => onPick\(e\)\}/, "예시가 눌러지지 않는다");
+  // 2026-10-08 M9: 예시 문구는 카탈로그(empty.agent.example1~3)로 옮겼다.
+  // 클릭이 카탈로그 값을 입력창에 채우는지 본다 — 리터럴 매칭이 아니다.
+  assert.match(panel, /onClick=\{\(\) => onPick\(t\(k\)\)\}/, "예시가 눌러지지 않는다");
+  assert.match(panel, /EXAMPLE_KEYS/, "예시 키 목록이 없다");
 });
 
 // ── 4. S-2 · S-5 · S-12 — 방향키 · 찾기 · 잘림 ───────────────────────────────

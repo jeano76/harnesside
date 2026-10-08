@@ -67,6 +67,74 @@ export const ko: Catalog = {
   "agent.cancelTurn": "취소",
   "agent.resumeTitle": "이어서 할 작업이 남아 있습니다",
   "agent.noTurn": "진행 중인 턴이 없습니다",
+  "agent.thinkStyle.dots": "파동 점",
+  "agent.thinkStyle.dotsHint": "기본. 생각 중임을 짧게 알립니다",
+  "agent.thinkStyle.pulse": "고동",
+  "agent.thinkStyle.pulseHint": "한 점이 밝아졌다 어두워집니다",
+  "agent.thinkStyle.orbit": "공전",
+  "agent.thinkStyle.orbitHint": "가장 눈에 띕니다",
+  "agent.thinkStyle.shimmer": "번짐",
+  "agent.thinkStyle.shimmerHint": "글 흐름에 은은한 빛",
+  "agent.thinkStyle.bar": "막대",
+  "agent.thinkStyle.barHint": "움직임 없음. prefers-reduced-motion 에 적합",
+
+  // ── 빈 상태 예시·힌트 ─────────────────────────────────────────────────────
+  "empty.agent.example1": "이 저장소의 구조를 한 문단으로 설명해 주세요",
+  "empty.agent.example2": "최근 변경 파일을 찾아 Likely 버그를 하나만 골라 주세요",
+  "empty.agent.example3": "테스트를 실행하고 실패한 것만 정리해 주세요",
+  "empty.agent.guide1": "여기서 지시를 입력하면 이 저장소에서 에이전트가 직접 일합니다.",
+  "empty.agent.guide2": "아래 예시 중 하나를 누르면 입력창에 채워집니다 — 바로 보낼 수도, 고쳐서 보낼 수도 있습니다.",
+  "hint.send": "Enter 전송",
+  "hint.newline": "Shift+Enter 줄바꿈",
+  "hint.command": "Ctrl+K 명령",
+  "hint.settings": "설정·변경검토는 위 아이콘",
+
+  // ── 알림 센터 ─────────────────────────────────────────────────────────────
+  "notice.view": "알림 {{count}}개 보기",
+  "notice.center": "알림 센터 (우하단 알림과 같은 내용)",
+  "notice.dismiss": "{{title}} 닫기",
+
+  // ── 압축 배너 ─────────────────────────────────────────────────────────────
+  "compaction.running": "압축 중… 대화 기록을 정리합니다 (체크포인트는 저장됨)",
+  "compaction.failed": "압축 실패 — 체크포인트는 저장됐고 현재 대화로 계속합니다",
+  "compaction.dismiss": "압축 알림 닫기",
+  "compaction.done": "압축 완료 — {{dropped}}개 메시지({{droppedTokens}} 토큰)를 요약으로, {{kept}}개 유지",
+  "compaction.forgotten": "잊혀진 내용:",
+
+  // ── 실시간 초안 ───────────────────────────────────────────────────────────
+  "draft.editing": "수정 중",
+  "draft.writing": "작성 중",
+  "draft.chars": "{{chars}}자",
+  "draft.oldLabel": "기존",
+  "draft.newLabel": "작성 중",
+
+  // ── Thinking 표시줄 ───────────────────────────────────────────────────────
+  "think.estimateTitle": "토큰 수는 길이 추정치(사고+답변+도구호출 합산). 속도는 델타 사이 대기(슬롯·도구·프리필)를 뺀 순수 출력 구간 기준",
+  "think.tokens": "Thinking · {{range}} 토큰{{pace}}{{suffix}}",
+
+  // ── 상태바·묶음 ───────────────────────────────────────────────────────────
+  "status.wsOpen": "● 실시간",
+  "status.wsConnecting": "○ 연결 중",
+  "status.wsClosed": "▲ 끊김",
+  "status.wsTitle": "WebSocket 연결 상태",
+  "status.context": "컨텍스트 {{range}}",
+  "status.contextUnknown": "컨텍스트 —",
+  "status.contextUnknownTitle": "작업 중이 아니면 측정되지 않습니다",
+  "status.running": "실행 중",
+  "status.bundles": "묶음 {{count}}",
+  "status.turns": "{{turns}}개 대화 묶음 · {{blocks}}개 항목",
+  "turn.previous": "이전 대화",
+  "turn.latestTitle": "가장 최근 출력",
+  "turn.latestLive": "● 최신",
+  "turn.latestIdle": "최신",
+  "turn.collapseBundle": "묶음 접기",
+  "turn.expandBundle": "묶음 펼치기",
+  "turn.collapseAll": "전체 접기",
+  "turn.expandAll": "전체 펼치기",
+  "turn.newContent": "↓ 아래에 새 내용",
+  "block.userLabel": "나",
+  "block.thinkingChars": "Thinking {{count}}자",
+  "block.errorPrefix": "오류",
 
   // ── 파일 저장 ────────────────────────────────────────────────────────────
   "file.saved": "저장됨",
