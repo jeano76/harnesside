@@ -14,10 +14,10 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: 화면 축 브라우저 실측 진행 중 (S-5 팔레트 모드 구현됨)
+phase: M9 묶음1 완료 (ToolBlock·ApprovalCard)
 status: in_progress
-last_commit: "fe9bc71 feat(web): 팔레트에 파일 빠른 이동·내용 검색 모드"
-next_action: "승인카드 60초 경과 화면 1건 남음 — 그 뒤 문서 라운드(todo 182-184)"
+last_commit: "5d3e763 feat(i18n): M9 묶음1 — ToolBlock·ApprovalCard 카탈로그 전환"
+next_action: "M9 묶음2 (AgentPanel, 약 60줄) — think 스타일·빈 상태·알림·압축 배너"
 blocking: 없음
 ```
 
@@ -54,7 +54,20 @@ CDP 실측: Ctrl+P→`loop`→↓↓→Enter→`loop.test.ts` 열림 / Ctrl+Shif
 **미측정**: 승인카드 60초 경과 화면 1건(서버 타이머·카드 로직은 유닛으로만 봄).
 Mac Cmd 키·headed 브라우저 GPU 재확인도 남음.
 
-## 2026-10-08 · 승인 이벤트 분리 + 문서 라운드
+## 2026-10-08 · M9 묶음1 (ToolBlock·ApprovalCard 카탈로그 전환)
+
+> 범위 실측: TSX 471줄·TS 115줄. 묶음1은 `ToolBlock`·`ApprovalCard` + `ko.ts`에
+> tool.* 10·block.* 21·approval.* 16·panel.directory 1키 추가(기존 문구 그대로 복사).
+> `labelFor`는 카탈로그 있는 이름만 번역하고 모르면 식별자 — t() 누락 오염 방지.
+> 렌더 텍스트 동일이므로 화면 동작 변경 없음은 wiring 검사 + tool.* 10:10 대조로 확인.
+
+**수리한 검사 1건**: `ViewBlocks.test.ts`가 소스 리터럴 "이 화면은 제거되었습니다"를
+assert했는데, 카탈로그로 옮기면서 깨졌다. 키 사용 + 카탈로그 값 검사로 갱신 —
+한쪽만 보면 빈 카드가 통과한다.
+**수리한 결함 1건**: `ko.ts:130`에 approval 키 1개가 주석행에 묻어 키가 등록 안 됨.
+wiring 검사가 잡았다(스스로 증명하지 않는 검사가 아님). 전체 **2353/2353**.
+
+다음: M9 묶음2 (`AgentPanel`, 약 60줄).
 
 > `todo.md` ③-6 문서 3건 완료. `PROMPT_IDE_CLI.md` §16의 S-5 기록이 사실과 달라 정정했다:
 > 10-04에 "동작한다"고 체크돼 있었으나 Shift+F 분기가 코드에 없었다. 검증 없이 체크된 항목은
