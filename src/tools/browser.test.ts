@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, Server } from "node:http";
 import { WebSocketServer } from "ws";
-import { listTabs, navigate, evaluate, screenshot, setCdpTimeoutForTests } from "./browser.js";
+import { listTabs, navigate, evaluate, screenshot, setCdpTimeoutForTests, closeBrowserSessions } from "./browser.js";
 
 /** Full CDP round-trips need a real browser (verified manually against
  *  headless Chrome — see README). What's unit-testable without one is the
@@ -144,4 +144,57 @@ test("a browser tool call times out instead of hanging forever when the tab stop
     } finally {
       setCdpTimeoutForTests(15_000);
     }
+  }));
+
+/** A fake CDP server that answers Runtime.evaluate with `connections:<n>`
+ *  so a test can see how many WebSocket handshakes happened. */
+async function withEchoCdpServer(fn: (port: number, state: { connections: number; dropAll: () => void }) => Promise<void>): Promise<void> {
+  const httpServer: Server = createServer();
+  const wss = new WebSocketServer({ server: httpServer });
+  const state = {
+    connections: 0,
+    dropAll: () => wss.clients.forEach((c) => c.terminate()),
+  };
+  wss.on("connection", (ws) => {
+    state.connections++;
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(raw.toString());
+      ws.send(JSON.stringify({ id: msg.id, result: { result: { value: `connections:${state.connections}` } } }));
+    });
+  });
+  httpServer.on("request", (req, res) => {
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify([{ id: "t1", type: "page", title: "t", url: "about:blank", webSocketDebuggerUrl: `ws://127.0.0.1:${port}` }]));
+  });
+  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+  const address = httpServer.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  try {
+    await fn(port, state);
+  } finally {
+    closeBrowserSessions();
+    wss.close();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  }
+}
+
+// P2-1: every browser_* call used to open and tear down its own WebSocket.
+test("consecutive browser tool calls on the same tab reuse one CDP session", () =>
+  withEchoCdpServer(async (port, state) => {
+    const config = { debugPort: port, host: "127.0.0.1" };
+    assert.equal(await evaluate(config, "1"), "connections:1");
+    assert.equal(await evaluate(config, "2"), "connections:1");
+    await Promise.all([evaluate(config, "3"), evaluate(config, "4")]);
+    assert.equal(state.connections, 1);
+  }));
+
+test("a dropped CDP session is replaced on the next call instead of failing it", () =>
+  withEchoCdpServer(async (port, state) => {
+    const config = { debugPort: port, host: "127.0.0.1" };
+    await evaluate(config, "1");
+    state.dropAll();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(await evaluate(config, "2"), "connections:2");
   }));

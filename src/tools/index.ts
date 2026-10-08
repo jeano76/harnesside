@@ -1,7 +1,6 @@
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import { appendFile, mkdir, open, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { promisify } from "node:util";
 import type { ToolDef } from "../backend/types.js";
 import { formatDiff } from "./diff.js";
 import * as browser from "./browser.js";
@@ -9,7 +8,6 @@ import type { BrowserConfig } from "./browser.js";
 import type { SkillIndexEntry } from "../skills/loader.js";
 import { loadSkillBody } from "../skills/loader.js";
 
-const execAsync = promisify(exec);
 
 /** Set once at startup from .harnesside/config.yaml (PROMPT.md new requirement:
  *  remote-control an already-running browser over its CDP debug port). */
@@ -289,6 +287,102 @@ export function setRunShellTimeoutForTests(ms: number): void {
   RUN_SHELL_TIMEOUT_MS = ms;
 }
 
+/** run_shell keeps at most this much of each stream: the head, plus a
+ *  short tail where build/test failures usually print their summary
+ *  (P2-1). Was a 10MB maxBuffer per stream — a chatty command buffered up
+ *  to 20MB that capToolResult() (loop.ts, ≤12k chars) then threw away,
+ *  and past 10MB exec killed the command and lost the output entirely. */
+const SHELL_HEAD_BYTES = 256 * 1024;
+const SHELL_TAIL_BYTES = 32 * 1024;
+
+/** Collects one stream's output under the head/tail cap while it streams,
+ *  so memory stays bounded no matter how much the command prints. */
+class CappedOutput {
+  private head: Buffer[] = [];
+  private headLen = 0;
+  private tail: Buffer[] = [];
+  private tailLen = 0;
+  private dropped = 0;
+
+  push(chunk: Buffer): void {
+    if (this.headLen < SHELL_HEAD_BYTES) {
+      const take = Math.min(chunk.length, SHELL_HEAD_BYTES - this.headLen);
+      this.head.push(chunk.subarray(0, take));
+      this.headLen += take;
+      chunk = chunk.subarray(take);
+      if (chunk.length === 0) return;
+    }
+    this.tail.push(chunk);
+    this.tailLen += chunk.length;
+    while (this.tailLen - this.tail[0].length >= SHELL_TAIL_BYTES) {
+      this.tailLen -= this.tail[0].length;
+      this.dropped += this.tail.shift()!.length;
+    }
+  }
+
+  toString(): string {
+    const head = Buffer.concat(this.head).toString("utf8");
+    let tail = Buffer.concat(this.tail);
+    if (tail.length > SHELL_TAIL_BYTES) {
+      this.dropped += tail.length - SHELL_TAIL_BYTES;
+      tail = tail.subarray(tail.length - SHELL_TAIL_BYTES);
+    }
+    if (this.dropped === 0) return head + tail.toString("utf8");
+    return `${head}\n[...truncated: ${this.dropped} bytes of output omitted...]\n${tail.toString("utf8")}`;
+  }
+}
+
+interface ShellResult {
+  code: number | null;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+/** Runs a shell command with streamed, capped output and a hard timeout.
+ *  stdin is closed so a command waiting on input gets EOF instead of
+ *  blocking until the timeout. On POSIX the command runs in its own
+ *  process group, so a timeout also kills what it spawned (exec only
+ *  killed the /bin/sh wrapper, leaving e.g. a hung test runner behind). */
+function runShell(command: string, cwd: string, timeoutMs: number): Promise<ShellResult> {
+  return new Promise((resolve, reject) => {
+    const posix = process.platform !== "win32";
+    const child = spawn(command, { cwd, shell: true, stdio: ["ignore", "pipe", "pipe"], detached: posix });
+    const out = new CappedOutput();
+    const err = new CappedOutput();
+    child.stdout!.on("data", (c: Buffer) => out.push(c));
+    child.stderr!.on("data", (c: Buffer) => err.push(c));
+
+    let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const kill = (signal: NodeJS.Signals) => {
+      try {
+        if (posix && child.pid) process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // already gone
+      }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill("SIGTERM");
+      killTimer = setTimeout(() => kill("SIGKILL"), 2000);
+      killTimer.unref();
+    }, timeoutMs);
+
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      reject(e);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      resolve({ code, timedOut, stdout: out.toString(), stderr: err.toString() });
+    });
+  });
+}
+
 /** Above this, read_file refuses to load a whole file into memory before
  *  capToolResult() (loop.ts) gets a chance to truncate it — a large binary,
  *  log, or data file (routine to accidentally point at: a bundled asset, a
@@ -446,7 +540,8 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
       // maxBuffer previously wasn't set (Node's default is 1MB), so any
       // command with heavier output (a real build, a verbose test run) was
       // killed with ENOBUFS and its output discarded entirely — the same
-      // class of gap the timeout above was added for.
+      // class of gap the timeout above was added for. Output is now
+      // streamed under a head/tail cap instead (runShell, P2-1).
       //
       // `stdout || stderr` previously dropped stderr whenever stdout was
       // non-empty, even though plenty of real tools (tsc, pytest, cargo)
@@ -454,24 +549,20 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
       // exactly the information the model needs to judge whether a command
       // that "succeeded" (exit 0) actually did what was asked.
       //
-      // A non-zero exit makes execAsync throw and discard err.stdout/
+      // A non-zero exit made execAsync throw and discard err.stdout/
       // err.stderr entirely (only err.message survived before this) — so a
       // failing command's actual output, the one piece of information that
       // would tell the model WHY it failed, never reached it. Left to guess,
       // the model tends to retry the same failing command — exactly the
       // repetitive-call pattern the circuit breaker (selfHeal.ts) exists to
       // catch, treating a *knowable* cause as an unrecoverable loop instead.
-      try {
-        const { stdout, stderr } = await execAsync(args.command, {
-          cwd: projectRoot,
-          timeout: RUN_SHELL_TIMEOUT_MS,
-          maxBuffer: 10 * 1024 * 1024,
-        });
-        return { content: [stdout, stderr].filter(Boolean).join("\n") || "(exit 0, no output)" };
-      } catch (err: any) {
-        const body = [err.stdout, err.stderr].filter(Boolean).join("\n");
-        throw new Error(body ? `exit ${err.code ?? "?"}: ${body}` : err.message);
+      const r = await runShell(args.command, projectRoot, RUN_SHELL_TIMEOUT_MS);
+      const body = [r.stdout, r.stderr].filter(Boolean).join("\n");
+      if (r.timedOut) {
+        throw new Error(`timed out after ${RUN_SHELL_TIMEOUT_MS}ms and was killed: ${args.command}${body ? `\n${body}` : ""}`);
       }
+      if (r.code !== 0) throw new Error(`exit ${r.code ?? "?"}: ${body || "(no output)"}`);
+      return { content: body || "(exit 0, no output)" };
     }
     case "browser_list_tabs":
       // Defensive: a disabled browser tool isn't in activeToolDefs(), so

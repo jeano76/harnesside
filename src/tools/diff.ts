@@ -14,41 +14,91 @@ interface DiffOp {
   line: string;
 }
 
-/** Classic O(n*m) LCS-based line diff. Files this tool edits are source
- *  files, not huge data dumps, so this is fine — but cap it defensively. */
-function lcsDiff(oldLines: string[], newLines: string[]): DiffOp[] {
-  const n = oldLines.length;
-  const m = newLines.length;
-  if (n * m > 4_000_000) {
-    return [{ type: "ctx", line: `(diff skipped — file too large: ${n}x${m} lines)` }];
-  }
+/** Edit-distance cap for Myers. The trace it keeps for backtracking is
+ *  ~D² ints, so D=2000 is ~16MB worst case. Past it the changed middle is
+ *  shown as one replaced block — still correct, just not minimal. */
+const MAX_EDIT_DISTANCE = 2000;
 
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = oldLines[i] === newLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+/** Line diff (P2-1). Was an O(n·m) LCS table that skipped any file past
+ *  4M cells (2,000×2,000 lines) — a 20k-line file got no diff at all, and
+ *  a 1,999-line file allocated a 4M-entry table for a one-line edit.
+ *  Now: strip the common prefix/suffix (an agent edit usually touches a
+ *  few lines, so this alone usually leaves a tiny middle), then Myers
+ *  O((n+m)·D) on what's left. */
+export function lineDiff(oldLines: string[], newLines: string[]): DiffOp[] {
+  let pre = 0;
+  const maxPre = Math.min(oldLines.length, newLines.length);
+  while (pre < maxPre && oldLines[pre] === newLines[pre]) pre++;
+  let suf = 0;
+  const maxSuf = maxPre - pre;
+  while (suf < maxSuf && oldLines[oldLines.length - 1 - suf] === newLines[newLines.length - 1 - suf]) suf++;
+
+  const a = oldLines.slice(pre, oldLines.length - suf);
+  const b = newLines.slice(pre, newLines.length - suf);
+  const middle = myers(a, b, MAX_EDIT_DISTANCE) ?? [
+    ...a.map((line): DiffOp => ({ type: "del", line })),
+    ...b.map((line): DiffOp => ({ type: "add", line })),
+  ];
+  return [
+    ...oldLines.slice(0, pre).map((line): DiffOp => ({ type: "ctx", line })),
+    ...middle,
+    ...oldLines.slice(oldLines.length - suf).map((line): DiffOp => ({ type: "ctx", line })),
+  ];
+}
+
+/** Myers' greedy O((n+m)·D) shortest edit script. Returns null when the
+ *  edit distance exceeds maxD. Deletions are preferred over insertions on
+ *  ties, so a changed line reads "- old" then "+ new". */
+function myers(a: string[], b: string[], maxD: number): DiffOp[] | null {
+  const n = a.length;
+  const m = b.length;
+  if (n === 0) return b.map((line) => ({ type: "add", line }));
+  if (m === 0) return a.map((line) => ({ type: "del", line }));
+
+  const off = maxD + 1;
+  const v = new Int32Array(2 * maxD + 3);
+  // trace[d] = furthest x per diagonal k ∈ [-d, d] after round d.
+  const trace: Int32Array[] = [];
+  for (let d = 0; d <= maxD; d++) {
+    for (let k = -d; k <= d; k += 2) {
+      let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x++;
+        y++;
+      }
+      v[off + k] = x;
+      if (x >= n && y >= m) return backtrack(a, b, trace, d);
     }
+    trace.push(v.slice(off - d, off + d + 1));
   }
+  return null;
+}
 
+function backtrack(a: string[], b: string[], trace: Int32Array[], D: number): DiffOp[] {
   const ops: DiffOp[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (oldLines[i] === newLines[j]) {
-      ops.push({ type: "ctx", line: oldLines[i] });
-      i++;
-      j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      ops.push({ type: "del", line: oldLines[i] });
-      i++;
-    } else {
-      ops.push({ type: "add", line: newLines[j] });
-      j++;
+  let x = a.length;
+  let y = b.length;
+  for (let d = D; d > 0; d--) {
+    const prev = trace[d - 1];
+    const at = (k: number) => prev[k + d - 1];
+    const k = x - y;
+    const down = k === -d || (k !== d && at(k - 1) < at(k + 1));
+    const prevK = down ? k + 1 : k - 1;
+    const prevX = at(prevK);
+    const prevY = prevX - prevK;
+    while (x > prevX && y > prevY) {
+      ops.push({ type: "ctx", line: a[--x] });
+      y--;
     }
+    if (down) ops.push({ type: "add", line: b[--y] });
+    else ops.push({ type: "del", line: a[--x] });
   }
-  while (i < n) ops.push({ type: "del", line: oldLines[i++] });
-  while (j < m) ops.push({ type: "add", line: newLines[j++] });
-  return ops;
+  while (x > 0 && y > 0) {
+    ops.push({ type: "ctx", line: a[--x] });
+    y--;
+  }
+  return ops.reverse();
 }
 
 /**
@@ -57,7 +107,7 @@ function lcsDiff(oldLines: string[], newLines: string[]): DiffOp[] {
  */
 export function formatDiff(path: string, oldText: string, newText: string, contextLines = 3): string {
   if (oldText === newText) return "";
-  const ops = lcsDiff(oldText.split("\n"), newText.split("\n"));
+  const ops = lineDiff(oldText.split("\n"), newText.split("\n"));
 
   const show = new Array(ops.length).fill(false);
   ops.forEach((op, idx) => {

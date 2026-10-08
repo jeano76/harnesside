@@ -210,6 +210,46 @@ test("run_shell surfaces the failing command's actual output, not just its exit 
     );
   }));
 
+// P2-1: output used to be buffered up to 10MB per stream (and the command
+// killed past it). It now streams under a head/tail cap, so a huge output
+// keeps both its start and its final lines — where a build's error summary is.
+test("run_shell caps huge output but keeps the head and the final lines", () =>
+  withTempDir(async (dir) => {
+    const result = await executeTool(
+      "run_shell",
+      JSON.stringify({ command: "seq 1 2000000; echo FINAL-SUMMARY-LINE" }),
+      dir
+    );
+    assert.ok(result.content.length < 400 * 1024, `expected capped output, got ${result.content.length} chars`);
+    assert.match(result.content, /^1\n2\n3\n/);
+    assert.match(result.content, /\[\.\.\.truncated: \d+ bytes of output omitted\.\.\.\]/);
+    assert.match(result.content, /FINAL-SUMMARY-LINE\n?$/);
+  }));
+
+test("run_shell gives commands EOF on stdin instead of blocking until the timeout", () =>
+  withTempDir(async (dir) => {
+    const start = Date.now();
+    const result = await executeTool("run_shell", JSON.stringify({ command: "cat; echo after-stdin" }), dir);
+    assert.match(result.content, /after-stdin/);
+    assert.ok(Date.now() - start < 5000);
+  }));
+
+test("run_shell timeout also kills processes the command spawned", { skip: process.platform === "win32" }, () =>
+  withTempDir(async (dir) => {
+    setRunShellTimeoutForTests(300);
+    const marker = join(dir, "grandchild-survived");
+    try {
+      await assert.rejects(
+        () => executeTool("run_shell", JSON.stringify({ command: `(sleep 1 && touch ${marker}) & sleep 30` }), dir),
+        /timed out after 300ms/
+      );
+      await new Promise((r) => setTimeout(r, 1500));
+      await assert.rejects(() => readFile(marker), "the backgrounded child should have been killed with the group");
+    } finally {
+      setRunShellTimeoutForTests(60_000);
+    }
+  }));
+
 // read_file previously loaded the entire file into memory before
 // capToolResult() (loop.ts) got a chance to truncate it — a large file
 // (accidentally pointed at a bundled asset, a log, a data dump) could
