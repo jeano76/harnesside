@@ -14,10 +14,10 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: M9 묶음1 완료 (ToolBlock·ApprovalCard)
+phase: M9 묶음2 완료 (AgentPanel) — 묶음3 남음
 status: in_progress
-last_commit: "5d3e763 feat(i18n): M9 묶음1 — ToolBlock·ApprovalCard 카탈로그 전환"
-next_action: "M9 묶음2 (AgentPanel, 약 60줄) — think 스타일·빈 상태·알림·압축 배너"
+last_commit: "143f7a5 feat(i18n): M9 묶음2 — AgentPanel 카탈로그 전환"
+next_action: "M9 묶음3 (main.tsx 프롬프트 bar·CLI 선택·YOLO 확인, 약 100줄) — think.ts 로직 문구는 범위 밖으로 기록"
 blocking: 없음
 ```
 
@@ -68,6 +68,14 @@ assert했는데, 카탈로그로 옮기면서 깨졌다. 키 사용 + 카탈로�
 wiring 검사가 잡았다(스스로 증명하지 않는 검사가 아님). 전체 **2353/2353**.
 
 다음: M9 묶음2 (`AgentPanel`, 약 60줄).
+
+## 2026-10-08 · M9 묶음2 (AgentPanel 카탈로그 전환)
+
+> `ko.ts`에 60여 키(think 스타일·빈 상태·힌트·알림·압축배너·초안·Thinking·상태바·묶음).
+> `THINK_STYLES`는 키 참조로(사용처 없음 — 렌더 없음), `EXAMPLES`는 키 목록으로.
+> `think.ts`의 예산 안내 문구(`thinkNotice` 반환)는 로직+테스트가 묶여 있어 이번 묶음 밖 —
+> UI 전환 시 같이 옮긴다. 렌더 텍스트 동일. 전체 **2353/2353**(1회 cancelled은
+> 플레이크로 재실행 2회 연속 통과).
 
 > `todo.md` ③-6 문서 3건 완료. `PROMPT_IDE_CLI.md` §16의 S-5 기록이 사실과 달라 정정했다:
 > 10-04에 "동작한다"고 체크돼 있었으나 Shift+F 분기가 코드에 없었다. 검증 없이 체크된 항목은
