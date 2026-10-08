@@ -44,7 +44,8 @@ export interface ApprovalRequest {
 }
 
 /** 남은 시간 — **최대 몇 초**. 숫자가 없으면 사용자는 "언제까지 기다려야 하지" 를 모른다. */
-function secondsLeft(r: ApprovalRequest, now: number): number {
+/** 남은 초 — 순수 함수로 분리해 테스트한다(60초 자동 거절의 화면 근거). */
+export function secondsLeft(r: ApprovalRequest, now: number): number {
   return Math.max(0, Math.ceil((r.expiresAt - now) / 1000));
 }
 

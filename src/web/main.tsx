@@ -45,6 +45,7 @@ import "@xterm/xterm/css/xterm.css";
 import { WsClient } from "./wsClient.js";
 import { DEFAULT_LAYOUT, movePanel, keyboardMove, type PanelId, type Zone } from "./layout/engine.js";
 import { loadDraft, saveDraft, clearDraft, searchCommands, toastView, type Command, type Toast } from "./panels/notify.js";
+import { rankFiles } from "../shared/searchRank.js";
 import { filterEntries, defaultFilter, visibleTail, bufferFullLabel, filterLabel, type Filter, type LogLevel } from "./panels/logFilter.js";
 import { useI18n } from "./i18n/index.js";
 import { ApprovalCard } from "./panels/ApprovalCard.js";
@@ -186,6 +187,21 @@ export default function App() {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
+  /** 팔레트 모드 — S-5: 명령(Ctrl+K) · 파일 빠른 이동(Ctrl+P) · 내용 검색(Ctrl+Shift+F).
+   *  셋 다 같은 팔레트 껍데기를 쓰되 목록 소스만 다르다. 모드를 나누지 않으면
+   *  "P는 파일 열기" 같은 기대와 "명령 실행"이 한 목록에 섞여 엉뚱한 것이 열린다. */
+  const [paletteMode, setPaletteMode] = useState<"commands" | "files" | "search">("commands");
+  const [fileList, setFileList] = useState<string[]>([]);
+  const [fileListTruncated, setFileListTruncated] = useState(false);
+  const [searchHits, setSearchHits] = useState<{ path: string; line: number; text: string }[]>([]);
+  const [searchTruncated, setSearchTruncated] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchBusy, setSearchBusy] = useState(false);
+  /** 마지막으로 실행한 검색어 — 입력이 이것과 다르면 Enter는 재검색,
+   *  같으면 선택된 히트 열기. */
+  const [searchedQuery, setSearchedQuery] = useState<string | null>(null);
+  /** 팔레트 선택 위치 — 방향키로 이동, Enter로 실행. 쿼리·모드가 바뀌면 0으로. */
+  const [selIndex, setSelIndex] = useState(0);
   // 승인 대기 — 서버가 보낸 요청을 **대화 위에 떠 있는 카드**로 표시한다.
   // `id` 마다 하나 (`Map` 이 아니라 배열): 두 요청이 동시에 떠야 사용자도 그렇다.
   const [approvals, setApprovals] = useState<Map<string, ApprovalRequest>>(() => new Map());
@@ -753,6 +769,63 @@ export default function App() {
     [pushToast],
   );
 
+  // S-5 팔레트 모드 열기 — 파일 목록은 열 때 한 번만 가져온다(매 키 입력마다
+  // 전체 목록을 다시 요청하면 입력이 버거워진다). 내용 검색은 Enter 때 실행한다.
+  const openPalette = useCallback(async (mode: "commands" | "files" | "search") => {
+    setPaletteMode(mode);
+    setPaletteQuery("");
+    setSelIndex(0);
+    setSearchHits([]);
+    setSearchTruncated(null);
+    setSearchError(null);
+    setPaletteOpen(true);
+    if (mode === "files" && fileList.length === 0) {
+      try {
+        const r = await client.get<{ files: string[]; truncated: boolean }>("/api/fs/files");
+        setFileList(r.files);
+        setFileListTruncated(r.truncated);
+      } catch (e) {
+        setFileList([]);
+        setFileListTruncated(false);
+        pushToast({
+          id: "palette:files",
+          kind: "error",
+          title: "파일 목록을 가져오지 못했습니다",
+          body: e instanceof Error ? e.message : String(e),
+          at: Date.now(),
+          ttlMs: 10_000,
+          requiresAck: false,
+          source: "fs",
+        });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileList.length]);
+
+  const runContentSearch = useCallback(async (pattern: string) => {
+    const q = pattern.trim();
+    if (!q) return;
+    setSearchBusy(true);
+    setSearchError(null);
+    try {
+      const r = await client.get<{ hits: { path: string; line: number; text: string }[]; truncated: boolean; truncatedReason: string | null }>(
+        `/api/fs/search?q=${encodeURIComponent(q)}&max=50`
+      );
+      setSearchHits(r.hits);
+      setSearchedQuery(q);
+      setSelIndex(0);
+      // **"잘렸습니다"는 반드시 보인다** — 조용히 자르면 사용자는 "이게 전부"로 믿는다.
+      setSearchTruncated(r.truncated ? (r.truncatedReason ?? "상한 50건 — 더 좁혀서 검색하십시오") : null);
+    } catch (e) {
+      // 깨진 정규식·빈 검색어는 서버가 400으로 말한다 — 그 말을 그대로 보여준다.
+      setSearchHits([]);
+      setSearchTruncated(null);
+      setSearchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSearchBusy(false);
+    }
+  }, []);
+
   const openFileByPath = useCallback(async (path: string) => {
     try {
       const f = await client.get<{ path: string; content: string; version: number; size: number }>(
@@ -1101,19 +1174,29 @@ export default function App() {
     })();
   }, [wsState]);
 
-  // M5 팔레트
+  // M5 팔레트 + S-5 빠른 이동/내용 검색
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // **Ctrl+K / Ctrl+P 는 모두 팔레트** — 하나의 기능에 두 단축이 걸치면 사용자는
       // "어느 키가 정답일까" 하고 헤맬 필요가 없다. 둘 다 자주 누르는 라우팅 명령이라
       // 겹쳐도 괜찮고, 한쪽이 죽어도 반대쪽에서 열린다. (VS Code 는 P 를 파일 열기에
       // 쓰지만 여기선 팔레트를 여는 단축으로 재지정한다 — 겹쳐도 기능은 하나다.)
-      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.shiftKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setPaletteOpen((v) => !v);
-      } else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
+        if (paletteOpen) setPaletteOpen(false);
+        else void openPalette("commands");
+      } else if (mod && !e.shiftKey && e.key.toLowerCase() === "p") {
+        // S-5 빠른 이동 — 파일 목록 모드로 연다. 입력 필터 + Enter로 그 위치가 열린다.
         e.preventDefault();
-        setPaletteOpen((v) => !v);
+        if (paletteOpen) setPaletteOpen(false);
+        else void openPalette("files");
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === "f") {
+        // S-5 내용 검색 — 검색 모드로 연다. Enter에 /api/fs/search를 실행하고
+        // 경로·줄 번호 목록 + "잘렸습니다"를 보여준다. Mac Cmd도 된다(metaKey).
+        e.preventDefault();
+        if (paletteOpen) setPaletteOpen(false);
+        else void openPalette("search");
       } else if (e.key === "Escape") {
         setPaletteOpen(false);
       } else if (e.altKey && e.key.startsWith("Arrow")) {
@@ -1131,7 +1214,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [paletteOpen, openPalette]);
 
   /** 헤더·셸·설정이 **같은 알림 경로**를 쓴다 — 한 종류의 알림이 화면 한 곳에 모인다. */
   const notice = useCallback(
@@ -1169,7 +1252,9 @@ export default function App() {
         run: () => setBlocks((prev) => toggleView(prev, { what: "settings" }, Date.now())),
       },
 
-      { id: "palette.open", title: "명령 팔레트", category: "기타", keys: ["Ctrl+K"], run: () => setPaletteOpen((v) => !v) },
+      { id: "palette.open", title: "명령 팔레트", category: "기타", keys: ["Ctrl+K"], run: () => { void openPalette("commands"); } },
+      { id: "palette.files", title: "파일 빠른 이동", category: "기타", keys: ["Ctrl+P"], run: () => { void openPalette("files"); } },
+      { id: "palette.search", title: "저장소 내용 검색", category: "기타", keys: ["Ctrl+Shift+F"], run: () => { void openPalette("search"); } },
     ],
     [client, notice],
   );
@@ -1358,6 +1443,8 @@ export default function App() {
 
   const visible = useMemo(() => visibleTail(filterEntries(logs, filter), 2000), [logs, filter]);
   const hits = useMemo(() => searchCommands(commands, paletteQuery, 12), [commands, paletteQuery]);
+  // S-5 파일 빠른 이동 — 서버 목록을 rankFiles(공유 순수 함수)로 필터한다.
+  const fileHits = useMemo(() => rankFiles(fileList, paletteQuery).slice(0, 12), [fileList, paletteQuery]);
   const full = bufferFullLabel(logStatus);
   const bootDone = steps?.filter((s) => s.ok).length ?? 0;
 
@@ -1736,18 +1823,43 @@ export default function App() {
         )}
       </footer>
 
-      {/* 팔레트 */}
+      {/* 팔레트 — commands(명령) · files(빠른 이동) · search(내용 검색) */}
       {paletteOpen && (
         <div onClick={() => setPaletteOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(1,4,9,0.6)", display: "grid", placeItems: "start center", paddingTop: "12vh", zIndex: 50 }}>
           <div onClick={(e) => e.stopPropagation()} className="elev-3" style={{ width: 520, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, overflow: "hidden" }}>
             <input
               autoFocus
               value={paletteQuery}
-              onChange={(e) => setPaletteQuery(e.target.value)}
-              placeholder="명령 검색…"
+              onChange={(e) => { setPaletteQuery(e.target.value); setSelIndex(0); }}
+              onKeyDown={(e) => {
+                // 방향키로 목록 이동 — 목록 길이는 모드마다 다르므로 위에서 개수를 센다.
+                const count = paletteMode === "commands" ? hits.length : paletteMode === "files" ? fileHits.length : searchHits.length;
+                if (e.key === "ArrowDown") { e.preventDefault(); setSelIndex((i) => Math.min(count - 1, i + 1)); return; }
+                if (e.key === "ArrowUp") { e.preventDefault(); setSelIndex((i) => Math.max(0, i - 1)); return; }
+                if (e.key !== "Enter") return;
+                // Enter: files면 선택(또는 첫) 후보를 열고, search면 검색을 실행한다.
+                // commands는 목록 버튼으로 실행한다(Enter 오작동 방지: 기존 동작 유지).
+                if (paletteMode === "files" && fileHits.length > 0) {
+                  const top = (fileHits[selIndex] ?? fileHits[0]).path;
+                  setPaletteOpen(false);
+                  void openFileByPath(top);
+                } else if (paletteMode === "search" && !searchBusy) {
+                  // 입력이 바뀌었으면 재검색, 아니면 선택된 히트를 연다.
+                  if (searchHits.length > 0 && paletteQuery.trim() === searchedQuery) {
+                    const hit = searchHits[selIndex] ?? searchHits[0];
+                    setPaletteOpen(false);
+                    void openFileByPath(hit.path);
+                  } else {
+                    void runContentSearch(paletteQuery);
+                  }
+                }
+              }}
+              placeholder={paletteMode === "commands" ? "명령 검색…" : paletteMode === "files" ? "파일 이름으로 이동… (↑↓ 선택 · Enter 열기)" : "저장소 내용 검색… (Enter 검색 · ↑↓ 선택 · 다시 Enter 열기)"}
+              aria-label={paletteMode === "commands" ? "명령 팔레트" : paletteMode === "files" ? "파일 빠른 이동" : "내용 검색"}
               style={{ width: "100%", background: "transparent", border: 0, borderBottom: `1px solid ${BORDER}`, color: FG, padding: 10, outline: "none", font: "inherit" }}
             />
             <div style={{ maxHeight: 320, overflow: "auto" }}>
+              {paletteMode === "commands" && (<>
               {hits.length === 0 && <div style={{ padding: 12, color: DIM }}>일치하는 명령이 없습니다</div>}
               {/* **이 항목들은 선택 가능하다.** 예전에는 `div` 였고 `onClick` 도
                   `Enter` 처리도 **없었다** — 화면은 "메뉴" 처럼 보이는데 눌러도 아무
@@ -1782,6 +1894,58 @@ export default function App() {
                   {h.cmd.keys.length > 0 && <span style={{ color: DIM, fontSize: 10 }}>{h.cmd.keys.join(" ")}</span>}
                 </button>
               ))}
+              </>)}
+              {paletteMode === "files" && (<>
+                {fileListTruncated && <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>잘렸습니다 — 파일 목록 상한 초과, 더 좁혀서 입력하십시오</div>}
+                {fileHits.length === 0 && <div style={{ padding: 12, color: DIM }}>일치하는 파일이 없습니다</div>}
+                {fileHits.map((h) => (
+                  <button
+                    key={h.path}
+                    type="button"
+                    onClick={() => {
+                      setPaletteOpen(false);
+                      void openFileByPath(h.path);
+                    }}
+                    style={{
+                      display: "flex", gap: 8, width: "100%", textAlign: "left",
+                      padding: "6px 10px", background: fileHits[selIndex] === h ? "#21262d" : "none", border: 0,
+                      borderBottom: "1px solid #21262d", color: FG,
+                      cursor: "pointer", font: "inherit",
+                    }}
+                  >
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.path}</span>
+                  </button>
+                ))}
+              </>)}
+              {paletteMode === "search" && (<>
+                {searchBusy && <div style={{ padding: 12, color: DIM }}>검색 중…</div>}
+                {searchError && <div style={{ padding: 12, color: "#f85149" }}>{searchError}</div>}
+                {!searchBusy && !searchError && searchTruncated && (
+                  <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>잘렸습니다 — {searchTruncated}</div>
+                )}
+                {!searchBusy && !searchError && searchHits.length === 0 && (
+                  <div style={{ padding: 12, color: DIM }}>Enter를 눌러 검색을 실행하십시오</div>
+                )}
+                {searchHits.map((h, i) => (
+                  <button
+                    key={`${h.path}:${h.line}:${i}`}
+                    type="button"
+                    onClick={() => {
+                      setPaletteOpen(false);
+                      void openFileByPath(h.path);
+                    }}
+                    style={{
+                      display: "flex", gap: 8, width: "100%", textAlign: "left",
+                      padding: "6px 10px", background: (searchHits[selIndex] ?? searchHits[0]) === h ? "#21262d" : "none", border: 0,
+                      borderBottom: "1px solid #21262d", color: FG,
+                      cursor: "pointer", font: "inherit",
+                    }}
+                  >
+                    <span style={{ color: DIM, fontSize: 11, flexShrink: 0 }}>{h.path}:{h.line}</span>
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{h.text}</span>
+                  </button>
+                ))}
+              </>)}
             </div>
           </div>
         </div>
