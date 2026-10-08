@@ -33,7 +33,8 @@ describe("설정만 남긴 뷰 배선", () => {
     assert.doesNotMatch(main, /what: "diff"/, "diff 블록을 여는 경로가 남아 있다");
   });
   it("상단 우측 ⚙ 아이콘이 설정을 **토글**한다 — 같은 뷰를 누르면 닫힘", () => {
-    assert.match(main, /aria-label="설정 열기"/, "헤더에 설정 아이콘이 없다");
+    // 2026-10-08 M9: 라벨은 카탈로그(settings.open)로 옮겼다.
+    assert.match(main, /aria-label=\{t\("settings\.open"\)\}/, "헤더에 설정 아이콘이 없다");
     // 헤더·팔레트·블록 안 ▸ 가 **하나의 함수**(`toggleView`)를 탄다. 경로마다 따로
     // 만들면 "아이콘에서는 닫히는데 팔레트에서는 쌓인다" 가 된다.
     const toggles = (main.match(/toggleView\(prev, \{ what: "settings" \}/g) ?? []).length;

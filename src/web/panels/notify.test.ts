@@ -169,10 +169,10 @@ test("지우면 사라진다", () => {
 // ------------------------------------------------------------------ 팔레트
 
 const cmds: Command[] = [
-  { id: "file.save", title: "파일 저장", category: "파일", keys: ["Ctrl+S"], run: () => {} },
-  { id: "git.commit", title: "커밋", category: "에이전트", keys: [], run: () => {} },
-  { id: "view.toggleTerminal", title: "터미널 열기", category: "보기", keys: ["Ctrl+`"], run: () => {} },
-  { id: "settings.open", title: "설정 열기", category: "설정", keys: [], run: () => {} },
+  { id: "file.save", title: "파일 저장", category: "file", keys: ["Ctrl+S"], run: () => {} },
+  { id: "git.commit", title: "커밋", category: "agent", keys: [], run: () => {} },
+  { id: "view.toggleTerminal", title: "터미널 열기", category: "view", keys: ["Ctrl+`"], run: () => {} },
+  { id: "settings.open", title: "설정 열기", category: "settings", keys: [], run: () => {} },
 ];
 
 test("퍼지 매칭: 접두사가 가장 높은 점수", () => {
@@ -199,7 +199,7 @@ test("안 맞는 질의는 **결과가 없다** — 임의로 0점 항목이 나
 });
 
 test("검색 결과는 **상한**을 넘지 않는다", () => {
-  const many = Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, title: `명령 ${i}`, category: "기타" as const, keys: [], run: () => {}, runHint: `c${i}` }));
+  const many = Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, title: `명령 ${i}`, category: "misc" as const, keys: [], run: () => {}, runHint: `c${i}` }));
   assert.equal(searchCommands(many, "명령", 10).length, 10);
 });
 

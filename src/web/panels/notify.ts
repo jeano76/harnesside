@@ -199,7 +199,7 @@ export interface Command {
    * 목록으로 늘어난다.
    *
    * `찾기` 는 2026-10-04 에 검색·빠른 이동과 함께 제거됐다(사용자 명시). */
-  category: "파일" | "에이전트" | "보기" | "설정" | "기타";
+  category: "file" | "agent" | "view" | "settings" | "misc";
   keys: string[];
   when?: string;
   /**

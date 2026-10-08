@@ -72,12 +72,8 @@ const FG = "#c9d1d9";
 const DIM = "#6e7681";
 const BORDER = "#30363d";
 
-/** §11.3 빈 상태: "무엇을 할 수 있나" 와 예시 프롬프트. */
-const EXAMPLES = [
-  "이 저장소의 구조를 한 문단으로 설명해 주세요",
-  "최근 변경 파일을 찾아 Likely 버그를 하나만 골라 주세요",
-  "테스트를 실행하고 실패한 것만 정리해 주세요",
-];
+/** §11.3 빈 상태 예시 — AgentPanel이 카탈로그 키(empty.agent.example1~3)로 들고 있다.
+ *  여기 두 벌 두면 하나가 어긋난다(2026-10-08 M9 묶음3: 죽은 중복 제거). */
 
 /** 패널 제목. 존과 무관하게 **같은 이름** 이어야 한다 — 제목을 존에서 만들면
  *  패널이 옮겨갈 때 제목까지 바뀐다(사용자가 못 찾는다).
@@ -99,23 +95,26 @@ const TITLE_KEY: Record<string, string> = {
 /** 2026-10-04: dead panel shells removed. See layout comment below. */
 
 /**
- * 슬래시 버튼 툴팁 — 마우스를 올리면 **무엇을 하고, 무엇을 바꾸고, 어떻게 쓰는지** 를 말한다.
+ * 슬래시 버튼 툴팁 키 — 마우스를 올리면 **무엇을 하고, 무엇을 바꾸고, 어떻게 쓰는지** 를 말한다.
  * 서버나 설정을 바꾸는 명령은 그 사실과 확인 절차를 반드시 적는다(모르고 누르지 않게).
+ *
+ * 모듈 밖에 둘 수 없어서가 아니라 **값이 아니라 키** 다(M9): 문장은 카탈로그가
+ * 정본이다(`slash.tip.<명령>`). 렌더 자리에서 `t()` 로 푼다.
  */
-const SLASH_TIPS: Record<string, string> = {
-  quit: "/quit — 정상 종료\n체크포인트와 세션을 저장한 뒤 서버를 끕니다. 채택한 외부 llama-server는 그대로 둡니다.\n실수 방지: 15초 안에 한 번 더 눌러야 종료됩니다.",
-  queue: "/queue — 대기열 보기\n에이전트가 일하는 중에 보낸 메시지가 어떤 순서로 처리될지 보여줍니다.\n보기만 하며 아무것도 바꾸지 않습니다. (순서 변경·비우기는 입력창 위 대기 칩에서)",
-  compact: "/compact — 컨텍스트 압축\n지금 대화를 요약해 컨텍스트 사용량을 줄입니다. 임계치에 닿으면 자동으로도 실행됩니다.\n대화가 아직 없으면 압축할 것이 없다고 알려줍니다.",
-  skills: "/skills — 스킬 목록\n현재 작업 폴더에서 불러온 스킬(.harnesside/skills/*.md)의 이름과 트리거 설명을 보여줍니다.\n보기만 합니다.",
-  rules: "/rules — 룰 목록\n시스템 프롬프트에 적용 중인 룰 파일(.harnesside/rules/, .clinerules)의 경로를 보여줍니다.\n보기만 합니다.",
-  improve: "/improve — 자기개선 제안\n반복된 실패 패턴을 분석해 룰 제안을 만듭니다.\n제안만 보여주고 디스크에는 아무것도 쓰지 않습니다. 저장은 /improve-apply 로 합니다.",
-  "improve-apply": "/improve-apply — 제안 저장\n마지막 /improve 제안을 룰 파일로 저장합니다. 다음 세션부터 시스템 프롬프트에 자동 반영됩니다.\n저장할 제안이 없으면 먼저 /improve 를 실행하라고 알려줍니다.",
-  "plan-clear": "/plan-clear — 계획 표시 초기화\n멈춘 계획 진행 표시와 체크포인트를 지웁니다.\n작업 중이던 계획 정보가 사라지므로 계획이 멈춰 있을 때만 사용하세요.",
-  term: "/term — 터미널/브라우저 정보\n이 창의 브라우저, 플랫폼, 화면 크기·배율, 클립보드 사용 가능 여부를 보여줍니다.\n콘솔 전용 항목(제어문자·대체화면 등)은 웹 창에 해당이 없습니다.",
-  cli: "/cli — AI CLI 를 tmux 탭으로\n/cli : 설치된 CLI 와 살아 있는 세션 목록 (아무것도 만들지 않음)\n/cli claude | gemini | codex | shell : 해당 CLI 탭을 하단에 엽니다. 같은 폴더의 살아 있는 세션이 있으면 새로 만들지 않고 붙습니다.\n/cli <이름> new : 새 세션 · /cli <이름> resume : 지난 대화 이어가기(확인된 CLI만)\n/cli kill <세션명> confirm : hs-… 세션 종료(confirm 없으면 미리보기)\n탭을 닫아도 CLI 는 tmux 안에서 계속 실행됩니다. 이 탭의 작업은 harnesside 승인 게이트 밖에서 실행됩니다.",
-  models: "/models — 구동 가능한 로컬 모델\n이 PC의 VRAM·RAM 기준으로 모델별 구동 가능 여부(✅ VRAM / ⚠️ RAM 스트리밍 / ❌)를 표로 보여줍니다.\n선택: 입력창에 /models <번호>. 실행 중인 서버를 바꾸려면 /models <번호> confirm 이 필요합니다(서버가 잠시 내려갑니다).",
-  server: "/server — 모델 서버 상태\n지금 떠 있는 llama-server의 포트·모델·빌드와 재시작 시 계획을 보여줍니다.\n재시작: 입력창에 /server restart (변경 내용 미리보기) → /server restart confirm 으로 확정. 확정하면 실행 중인 서버를 내렸다 올립니다.\n캘리브레이션: /server calibrate 는 지금 실제로 남은 VRAM과 모델 헤더(KV 비용·레이어 수)를 읽어 -ngl·컨텍스트·--n-cpu-moe·KV 캐시·스레드를 다시 계산합니다. 산술 추정 대신 실측 기준이라, 계산이 틀린 값(예: -ngl 999 → 32)을 잡아냅니다. 미리보기 → /server calibrate confirm 으로 적용하며, 새 설정으로 뜨지 않으면 예전 설정으로 되돌립니다.",
-  reset: "/reset — 설정 초기화\n현재 GPU·VRAM·RAM에 맞게 컨텍스트·스레드·오프로드 등 llama 설정을 다시 계산합니다.\n그냥 실행하면 미리보기만 하며 아무것도 바꾸지 않습니다. 적용은 /reset confirm (설정 파일을 덮어쓰며, 실행 중인 서버에는 /server restart 로 따로 반영).",
+const SLASH_TIP_KEYS: Record<string, string> = {
+  quit: "slash.tip.quit",
+  queue: "slash.tip.queue",
+  compact: "slash.tip.compact",
+  skills: "slash.tip.skills",
+  rules: "slash.tip.rules",
+  improve: "slash.tip.improve",
+  "improve-apply": "slash.tip.improve-apply",
+  "plan-clear": "slash.tip.plan-clear",
+  term: "slash.tip.term",
+  cli: "slash.tip.cli",
+  models: "slash.tip.models",
+  server: "slash.tip.server",
+  reset: "slash.tip.reset",
 };
 
 export default function App() {
@@ -243,10 +242,10 @@ export default function App() {
    * 히스토리가 있으면 `↑↓` 도 함께 알린다 — 키만으로 되는 기능은 알려지지 않는다.
    */
   const promptHint = useMemo(() => {
-    if (toCli && cliTarget) return `${cliTarget.title} 로 보냅니다 (Enter 로 전송 · Shift+Enter 줄바꿈 · / 로 이 CLI 의 명령)`;
-    const base = "무엇을 할까요? (Enter 로 전송 · Shift+Enter 줄바꿈 · / 로 명령";
-    return histCount > 0 ? `${base} · ↑↓ 지난 프롬프트)` : `${base})`;
-  }, [toCli, cliTarget, histCount]);
+    if (toCli && cliTarget) return t("prompt.cliHint", { title: cliTarget.title });
+    const base = t("prompt.hint");
+    return histCount > 0 ? `${base}${t("prompt.history")}` : `${base})`;
+  }, [toCli, cliTarget, histCount, t]);
 
   // CLI 대상일 때 터미널을 **메시지 출력창 자리**에 크게 보인다. harnesside 대화를 보려면 대상을 로컬로 바꾼다.
   const msgRef = useRef<HTMLDivElement | null>(null);
@@ -300,14 +299,14 @@ export default function App() {
     pushToast({
       id: "session:restored",
       kind: "info",
-      title: "이전 대화를 복원했습니다",
-      body: `블록 ${restored}개 — 창을 닫아도 남습니다.`,
+      title: t("toast.restored"),
+      body: t("toast.restoredBody", { count: restored }),
       at: Date.now(),
       ttlMs: 10_000,
       requiresAck: false,
       source: "session",
     });
-  }, [restored, pushToast]);
+  }, [restored, pushToast, t]);
 
   /**
    * 턴을 보낸다.
@@ -331,7 +330,7 @@ export default function App() {
     }
     if (toCli && cliTarget) {
       if (!cliTarget.alive) {
-        pushToast({ id: "cli:dead", kind: "warn", title: `${cliTarget.title} 이(가) 끝났습니다`, body: "/cli 로 다시 여세요.", at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "agent" });
+        pushToast({ id: "cli:dead", kind: "warn", title: t("toast.cliDead", { title: cliTarget.title }), body: t("toast.cliReopen"), at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "agent" });
         return;
       }
       // 여러 줄은 bracketed paste 로 한 번에, 한 줄은 그대로 + Enter. 입력 경로는 attach PTY 하나다.
@@ -343,7 +342,7 @@ export default function App() {
         await client.post(`/api/terminal/${encodeURIComponent(cliTarget.terminalId)}/input`, { data });
       } catch (e) {
         setDraft(text);
-        pushToast({ id: "cli:send", kind: "error", title: `${cliTarget.title} 로 보내지 못했습니다`, body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 12_000, requiresAck: false, source: "agent" });
+        pushToast({ id: "cli:send", kind: "error", title: t("toast.cliSendFail", { title: cliTarget.title }), body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 12_000, requiresAck: false, source: "agent" });
       }
       return;
     }
@@ -361,16 +360,16 @@ export default function App() {
       const r = await client.post<{ ok: boolean; detail: string; queued?: boolean }>("/api/agent/turn", { text });
       if (!r.ok) {
         setTurnRunning(false);
-        pushToast({ id: "turn:fail", kind: "error", title: "턴을 시작하지 못했습니다", body: r.detail, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
+        pushToast({ id: "turn:fail", kind: "error", title: t("toast.turnStartFail"), body: r.detail, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
       } else if (r.queued) {
-        pushToast({ id: `turn:queued:${Date.now()}`, kind: "info", title: "대기열에 넣었습니다", body: r.detail, at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "agent" });
+        pushToast({ id: `turn:queued:${Date.now()}`, kind: "info", title: t("toast.queued"), body: r.detail, at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "agent" });
       }
     } catch (e) {
       setTurnRunning(false);
-      pushToast({ id: "turn:fail", kind: "error", title: "턴 요청이 실패했습니다", body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
+      pushToast({ id: "turn:fail", kind: "error", title: t("toast.turnRequestFail"), body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
     }
     // `pushHistory` 는 `useCallback([])` 이므로 안정적이라 넣어도 재계산되지 않는다.
-  }, [draft, pushToast, pushHistory, toCli, cliTarget]);
+  }, [draft, pushToast, pushHistory, toCli, cliTarget, t]);
 
   /**
    * 슬래시 버튼 — 구 TUI(2026-10-04 삭제)의 `onSlashCommand` 와 **같은 내용**을 웹에서 실행하고,
@@ -415,9 +414,9 @@ export default function App() {
       setFocusReq({ n: Date.now(), session: r.session });
       setPromptTo("cli");
     } catch (e) {
-      pushToast({ id: "cli:pick", kind: "error", title: "CLI 를 열지 못했습니다", body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 12_000, requiresAck: false, source: "agent" });
+      pushToast({ id: "cli:pick", kind: "error", title: t("toast.cliOpenFail"), body: e instanceof ApiError ? e.message : String(e), at: Date.now(), ttlMs: 12_000, requiresAck: false, source: "agent" });
     }
-  }, [pushToast]);
+  }, [pushToast, t]);
   useEffect(() => {
     const el = msgRef.current;
     if (!el) return;
@@ -471,7 +470,7 @@ export default function App() {
       const q = third[2]!.toLowerCase();
       return (["new", "resume"] as const).filter((x) => x.includes(q)).map((x) => ({
         fill: `/cli ${third[1]!.toLowerCase()} ${x}`, exact: `/cli ${third[1]!.toLowerCase()} ${x}`, label: x,
-        description: x === "new" ? "같은 폴더에 이미 있어도 새 세션" : "지난 대화 이어가기(확인된 CLI만)",
+        description: x === "new" ? t("slash.cliNew") : t("slash.cliResume"),
       }));
     }
     const second = /^\/cli\s+(\S*)$/i.exec(draft);
@@ -481,12 +480,12 @@ export default function App() {
         const inst = cliInstalled[p.id];
         return {
           fill: `/cli ${p.id}`, exact: `/cli ${p.id}`, label: p.id,
-          description: `${p.label}${inst === false ? " — 설치 안 됨" : inst === true ? "" : ""}`,
+          description: `${p.label}${inst === false ? t("cli.notInstalled") : inst === true ? "" : ""}`,
           tip: inst === false ? p.installHint : undefined, dim: inst === false,
         };
       });
       const subs: SlashItem[] = CLI_SUBCOMMANDS.filter((x) => x === "kill" && x.includes(q)).map((x) => ({
-        fill: `/cli ${x} `, exact: `/cli ${x}`, label: x, description: "hs-… 세션 종료 (/cli kill <세션명> confirm)",
+        fill: `/cli ${x} `, exact: `/cli ${x}`, label: x, description: t("slash.cliKill"),
       }));
       return [...provs, ...subs];
     }
@@ -498,22 +497,22 @@ export default function App() {
         const q = arg3[2]!.toLowerCase();
         const base = `/${arg3[1]!.replace(/\s+/g, " ").toLowerCase()}`;
         return "confirm".includes(q)
-          ? [{ fill: `${base} confirm`, exact: `${base} confirm`, label: "confirm", description: base.startsWith("/server") ? "실행 중인 서버를 내렸다 올립니다(확정)" : "교체를 확정합니다(실행 중인 서버가 잠시 내려갑니다)" }]
+          ? [{ fill: `${base} confirm`, exact: `${base} confirm`, label: "confirm", description: base.startsWith("/server") ? t("slash.confirmServer") : t("slash.confirmReplace") }]
           : [];
       }
       const arg2 = /^\/(models|server|reset)\s+(\S*)$/i.exec(draft);
       if (arg2) {
         const cmd = arg2[1]!.toLowerCase();
         const q = arg2[2]!.toLowerCase();
-        const none: SlashItem = { fill: `/${cmd}`, exact: `/${cmd}`, label: `/${cmd}`, description: cmd === "models" ? "인자 없이 실행 — 구동 가능한 모델 목록" : cmd === "server" ? "인자 없이 실행 — 서버 상태 보기" : "인자 없이 실행 — 변경 미리보기(아무것도 바꾸지 않음)", tip: SLASH_TIPS[cmd] };
+        const none: SlashItem = { fill: `/${cmd}`, exact: `/${cmd}`, label: `/${cmd}`, description: cmd === "models" ? t("slash.noArgModels") : cmd === "server" ? t("slash.noArgServer") : t("slash.noArgPreview"), tip: SLASH_TIP_KEYS[cmd] ? t(SLASH_TIP_KEYS[cmd]) : undefined };
         const more: SlashItem[] =
           cmd === "server"
             ? [
-                { fill: "/server restart", exact: "/server restart", label: "restart", description: "재시작 미리보기 → 이어서 confirm" },
-                { fill: "/server calibrate", exact: "/server calibrate", label: "calibrate", description: "실측(남은 VRAM·모델 헤더)으로 최적값 재계산 → 이어서 confirm" },
+                { fill: "/server restart", exact: "/server restart", label: "restart", description: t("slash.serverRestart") },
+                { fill: "/server calibrate", exact: "/server calibrate", label: "calibrate", description: t("slash.serverCalibrate") },
               ]
-          : cmd === "reset" ? [{ fill: "/reset confirm", exact: "/reset confirm", label: "confirm", description: "설정을 다시 계산해 덮어씁니다(확정)" }]
-          : ["1", "2"].map((n) => ({ fill: `/models ${n}`, exact: `/models ${n}`, label: n, description: `목록의 ${n}번으로 교체 — 먼저 /models 로 목록을 확인하세요` }));
+          : cmd === "reset" ? [{ fill: "/reset confirm", exact: "/reset confirm", label: "confirm", description: t("slash.resetConfirm") }]
+          : ["1", "2"].map((n) => ({ fill: `/models ${n}`, exact: `/models ${n}`, label: n, description: t("slash.modelsPick", { n }) }));
         // 이미 쓴 글이 어느 후보와 정확히 같으면 그것을 맨 위로 — Enter 가 곧바로 실행된다.
         const typed = draft.trim().toLowerCase();
         return [none, ...more.filter((m) => m.label.startsWith(q) || q === "")].sort((a, b) => Number(b.exact === typed) - Number(a.exact === typed));
@@ -529,18 +528,18 @@ export default function App() {
       const items: SlashItem[] = hits.map((c) => ({
         fill: `/${c.name}`, exact: `/${c.name}`, label: `/${c.name}`,
         description: `${c.source === "custom" ? `[${c.label}] ` : ""}${c.description}`,
-        tip: `${c.description || c.name}\n출처: ${c.label}`,
+        tip: `${c.description || c.name}\n${t("slash.source", { label: c.label })}`,
       }));
-      if ("cli".includes(q) && q.length > 0) items.push({ fill: "/cli ", exact: "/cli", label: "/cli", description: "[harnesside] AI CLI 탭 관리" });
+      if ("cli".includes(q) && q.length > 0) items.push({ fill: "/cli ", exact: "/cli", label: "/cli", description: t("slash.cliTabMgmt") });
       return items;
     }
     const web = new Set(webSlashCommands().map((c) => c.key));
     const typed = draft.slice(1).toLowerCase();
     return slashMatches(draft).filter((c) => web.has(c.key)).sort((a, b) => Number(b.key.startsWith(typed)) - Number(a.key.startsWith(typed))).map((c) => ({
       fill: `/${c.key}${c.key === "models" || c.key === "server" || c.key === "reset" || c.key === "cli" ? " " : ""}`,
-      exact: `/${c.key}`, label: c.label, description: c.description, tip: SLASH_TIPS[c.key],
+      exact: `/${c.key}`, label: c.label, description: c.description, tip: SLASH_TIP_KEYS[c.key] ? t(SLASH_TIP_KEYS[c.key]) : undefined,
     }));
-  }, [draft, cliInstalled, toCli, cliCmds]);
+  }, [draft, cliInstalled, toCli, cliCmds, t]);
   const slashOpen = slashItems.length > 0 && !slashHidden;
   useEffect(() => { setSlashIdx(0); setSlashHidden(false); }, [draft]);
 
@@ -723,14 +722,16 @@ export default function App() {
         ].join("\n"));
       } else {
         const path = { compact: "/api/agent/compact", "improve-apply": "/api/agent/improve/apply", "plan-clear": "/api/agent/plan/clear" }[key];
-        if (!path) return done("웹에서 지원하지 않는 명령입니다", false);
+        if (!path) return done(t("slash.unsupported"), false);
         const r = await client.post<{ ok: boolean; detail: string }>(path, {});
         done(r.detail, r.ok);
       }
     } catch (e) {
       done(e instanceof ApiError ? e.message : String(e), false);
     }
-  }, []);
+    // t를 deps에 넣는다 — 로케일이 바뀌면 콜백을 새로 만든다. 전환 UI가 없어
+    // 실질적으로는 한 번만 만든다. stale t로 slash 오류를 찍는 쪽이 더 나쁘다.
+  }, [t]);
 
   const loadTree = useCallback(async () => {
     try {
@@ -742,7 +743,7 @@ export default function App() {
       pushToast({
         id: "tree:error",
         kind: "error",
-        title: "탐색기를 읽지 못했습니다",
+        title: t("toast.treeFailed"),
         body: e instanceof ApiError ? e.message : String(e),
         at: Date.now(),
         ttlMs: 10_000,
@@ -750,7 +751,7 @@ export default function App() {
         source: "fs",
       });
     }
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   /**
    * 에디터가 알림을 올릴 때 쓰는 경로 — **안정된 함수**로 둔다.
@@ -790,7 +791,7 @@ export default function App() {
         pushToast({
           id: "palette:files",
           kind: "error",
-          title: "파일 목록을 가져오지 못했습니다",
+          title: t("palette.openFilesFailed"),
           body: e instanceof Error ? e.message : String(e),
           at: Date.now(),
           ttlMs: 10_000,
@@ -800,7 +801,7 @@ export default function App() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileList.length]);
+  }, [fileList.length, t]);
 
   const runContentSearch = useCallback(async (pattern: string) => {
     const q = pattern.trim();
@@ -815,7 +816,7 @@ export default function App() {
       setSearchedQuery(q);
       setSelIndex(0);
       // **"잘렸습니다"는 반드시 보인다** — 조용히 자르면 사용자는 "이게 전부"로 믿는다.
-      setSearchTruncated(r.truncated ? (r.truncatedReason ?? "상한 50건 — 더 좁혀서 검색하십시오") : null);
+      setSearchTruncated(r.truncated ? t("palette.truncated", { reason: r.truncatedReason ?? t("palette.searchDefaultReason") }) : null);
     } catch (e) {
       // 깨진 정규식·빈 검색어는 서버가 400으로 말한다 — 그 말을 그대로 보여준다.
       setSearchHits([]);
@@ -824,7 +825,7 @@ export default function App() {
     } finally {
       setSearchBusy(false);
     }
-  }, []);
+  }, [t]);
 
   const openFileByPath = useCallback(async (path: string) => {
     try {
@@ -836,7 +837,7 @@ export default function App() {
       pushToast({
         id: `open:${path}`,
         kind: "error",
-        title: "파일을 열지 못했습니다",
+        title: t("file.openFailed"),
         body: `${path} — ${e instanceof ApiError ? e.message : String(e)}`,
         at: Date.now(),
         ttlMs: 10_000,
@@ -844,7 +845,7 @@ export default function App() {
         source: "fs",
       });
     }
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   // 부팅 상태 폴링 + 워크스페이스 지문
   useEffect(() => {
@@ -1051,8 +1052,8 @@ export default function App() {
             pushToast({
               id: `fs:${p}`,
               kind: "info",
-              title: "디스크에서 변경됨",
-              body: `${p} — 버퍼가 최신이 아닐 수 있습니다. 새로고침 하십시오.`,
+              title: t("file.changed"),
+              body: t("file.changedBody", { path: p }),
               at: Date.now(),
               ttlMs: 10_000,
               requiresAck: false,
@@ -1089,8 +1090,8 @@ export default function App() {
                   pushToast({
                     id: `fs:reload:${p}`,
                     kind: "warn",
-                    title: "바뀐 내용을 다시 읽지 못했습니다",
-                    body: `${p} — 화면은 연 시점의 내용을 그대로 보입니다. 직접 다시 열어 확인하십시오.`,
+                    title: t("file.rereadFailed"),
+                    body: t("file.rereadBody", { path: p }),
                     at: Date.now(),
                     ttlMs: 12_000,
                     requiresAck: false,
@@ -1129,7 +1130,9 @@ export default function App() {
     })();
 
     return () => ws.close();
-  }, [pushToast]);
+    // t를 deps에 넣는다 — 로케일이 바뀌면 소켓을 다시 붙인다. 전환 UI가 없어
+    // 실질적으로는 한 번만 붙는다. stale t로 토스트를 찍는 쪽이 더 나쁘다.
+  }, [pushToast, t]);
 
   // M7: 입력창 드래프트 자동 저장 — **서버 상태와 무관하게** (창 스코프)
   useEffect(() => {
@@ -1219,8 +1222,8 @@ export default function App() {
   );
 
   const onModelPhase = useCallback((p: { state: string; progress: number; message: string }) => {
-    setBlocks((prev) => applyEvent(prev, { type: "agent.status", text: `[업데이트] ${p.message}`, at: Date.now() }));
-  }, []);
+    setBlocks((prev) => applyEvent(prev, { type: "agent.status", text: t("update.status", { message: p.message }), at: Date.now() }));
+  }, [t]);
 
   /**
    * 명령 팔레트 (M5) — 2026-10-01.
@@ -1235,11 +1238,11 @@ export default function App() {
    */
   const commands: Command[] = useMemo(
     () => [
-      { id: "view.toggleLog", title: "서버 로그 접기/펼치기", category: "보기", keys: [], run: () => setLogOpen((v) => !v) },
+      { id: "view.toggleLog", title: t("log.toggle"), category: "view", keys: [], run: () => setLogOpen((v) => !v) },
       {
         id: "view.openSettings",
-        title: "설정 열기",
-        category: "설정",
+        title: t("settings.open"),
+        category: "settings",
         keys: [],
         // **별도 패널이 아니라 대화 안의 블록**으로 연다(2026-10-01 요구).
         // 상단 우측 ⚙ 아이콘과 같은 동작이다 — 팔레트는 키보드 경로다.
@@ -1247,11 +1250,11 @@ export default function App() {
         run: () => setBlocks((prev) => toggleView(prev, { what: "settings" }, Date.now())),
       },
 
-      { id: "palette.open", title: "명령 팔레트", category: "기타", keys: ["Ctrl+K"], run: () => { void openPalette("commands"); } },
-      { id: "palette.files", title: "파일 빠른 이동", category: "기타", keys: ["Ctrl+P"], run: () => { void openPalette("files"); } },
-      { id: "palette.search", title: "저장소 내용 검색", category: "기타", keys: ["Ctrl+Shift+F"], run: () => { void openPalette("search"); } },
+      { id: "palette.open", title: t("palette.cmdOpen"), category: "misc", keys: ["Ctrl+K"], run: () => { void openPalette("commands"); } },
+      { id: "palette.files", title: t("palette.cmdFiles"), category: "misc", keys: ["Ctrl+P"], run: () => { void openPalette("files"); } },
+      { id: "palette.search", title: t("palette.cmdSearch"), category: "misc", keys: ["Ctrl+Shift+F"], run: () => { void openPalette("search"); } },
     ],
-    [client, notice],
+    [client, notice, openPalette, t],
   );
 
   /**
@@ -1317,19 +1320,19 @@ export default function App() {
         <CrashBanner client={client} />
         {/* Q-5 부팅 실패 — **어느 단계 · 무엇 · 왜 · 다음** 을 창에도 보인다(로그와 같은 함수). 실패가 있을 때만. */}
         {!bootFailHidden && (steps ?? []).some((st) => describeBootFailure(st)) && (
-          <div role="alert" aria-label="부팅 문제" style={{ border: "1px solid #d29922", borderRadius: 6, background: "#161b22", padding: "6px 8px", fontSize: 12, color: FG, margin: "0 0 6px" }}>
+          <div role="alert" aria-label={t("boot.issue")} style={{ border: "1px solid #d29922", borderRadius: 6, background: "#161b22", padding: "6px 8px", fontSize: 12, color: FG, margin: "0 0 6px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span aria-hidden="true" style={{ color: "#d29922" }}>⚠</span>
-              <strong>부팅 중 문제가 있었습니다 — 서버와 창은 계속 동작합니다</strong>
+              <strong>{t("boot.title")}</strong>
               <span style={{ flex: 1 }} />
-              <button type="button" onClick={() => setBootFailHidden(true)} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}>닫기</button>
+              <button type="button" onClick={() => setBootFailHidden(true)} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}>{t("action.close")}</button>
             </div>
             {(steps ?? []).map((st) => describeBootFailure(st)).filter((f): f is NonNullable<typeof f> => !!f).map((f) => (
               <dl key={f.where} style={{ margin: "4px 0 0", display: "grid", gridTemplateColumns: "auto 1fr", gap: "1px 8px" }}>
-                <dt style={{ color: DIM }}>단계</dt><dd style={{ margin: 0 }}>{f.where}</dd>
-                <dt style={{ color: DIM }}>무엇</dt><dd style={{ margin: 0 }}>{f.what}</dd>
-                <dt style={{ color: DIM }}>왜</dt><dd style={{ margin: 0, fontFamily: "ui-monospace, monospace" }}>{f.why}</dd>
-                <dt style={{ color: DIM }}>다음</dt><dd style={{ margin: 0 }}>{f.next}</dd>
+                <dt style={{ color: DIM }}>{t("boot.step")}</dt><dd style={{ margin: 0 }}>{f.where}</dd>
+                <dt style={{ color: DIM }}>{t("boot.what")}</dt><dd style={{ margin: 0 }}>{f.what}</dd>
+                <dt style={{ color: DIM }}>{t("boot.why")}</dt><dd style={{ margin: 0, fontFamily: "ui-monospace, monospace" }}>{f.why}</dd>
+                <dt style={{ color: DIM }}>{t("boot.next")}</dt><dd style={{ margin: 0 }}>{f.next}</dd>
               </dl>
             ))}
           </div>
@@ -1384,7 +1387,7 @@ export default function App() {
       {openFile && (
         <div
           role="dialog"
-          aria-label={`파일 편집 · ${openFile.path}`}
+          aria-label={t("file.editing", { path: openFile.path })}
           style={{
             position: "fixed",
             inset: "34px 6px 26px 6px",
@@ -1399,10 +1402,10 @@ export default function App() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 8px", borderBottom: `1px solid ${BORDER}`, background: "#161b22" }}>
-            <span style={{ fontSize: 10, color: "#8b949e" }}>편집 중 · 자동 저장</span>
+            <span style={{ fontSize: 10, color: "#8b949e" }}>{t("file.editingLive")}</span>
             <span style={{ flex: 1 }} />
             <button type="button" onClick={() => setOpenFile(null)} style={{ fontSize: 10, background: "#21262d", color: "#c9d1d9", border: `1px solid ${BORDER}`, borderRadius: 4, padding: "1px 8px", cursor: "pointer" }}>
-              닫기
+              {t("action.close")}
             </button>
           </div>
           <div style={{ flex: "1 1 auto", minHeight: 0 }}>
@@ -1437,6 +1440,14 @@ export default function App() {
   };
 
   const visible = useMemo(() => visibleTail(filterEntries(logs, filter), 2000), [logs, filter]);
+  /** 팔레트 분류 라벨 — Command.category는 영문 키, 화면에는 카탈로그로 푼다. */
+  const catLabel: Record<Command["category"], string> = {
+    file: t("palette.catFile"),
+    agent: t("palette.catAgent"),
+    view: t("palette.catView"),
+    settings: t("palette.catSettings"),
+    misc: t("palette.catMisc"),
+  };
   const hits = useMemo(() => searchCommands(commands, paletteQuery, 12), [commands, paletteQuery]);
   // S-5 파일 빠른 이동 — 서버 목록을 rankFiles(공유 순수 함수)로 필터한다.
   const fileHits = useMemo(() => rankFiles(fileList, paletteQuery).slice(0, 12), [fileList, paletteQuery]);
@@ -1559,7 +1570,7 @@ export default function App() {
           openTabs={openTabs}
           onError={(m) => {
             setError(m);
-            pushToast({ id: "ws:error", kind: "error", title: "워크스페이스 전환 실패", body: m, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "workspace" });
+            pushToast({ id: "ws:error", kind: "error", title: t("ws.switchFailed"), body: m, at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "workspace" });
           }}
           onSwitched={({ to }) => {
             setWorkspace(to);
@@ -1568,8 +1579,8 @@ export default function App() {
             pushToast({
               id: "ws:switched",
               kind: "info",
-              title: "워크스페이스를 바꿨습니다",
-              body: `${to.name} — 도구 호출 기준도 여기로 바뀝니다.`,
+              title: t("ws.switched"),
+              body: t("ws.switchedBody", { name: to.name }),
               at: Date.now(),
               ttlMs: 10_000,
               requiresAck: false,
@@ -1577,24 +1588,24 @@ export default function App() {
             });
           }}
         />
-        <span style={{ color: DIM }}>{modelName ?? "모델 미연결"}</span>
+        <span style={{ color: DIM }}>{modelName ?? t("model.unconnected")}</span>
         {steps && <span style={{ color: DIM }}>{t("app.booting", { stage: bootDone, total: steps.length })}</span>}
-        {full && <span style={{ color: full.color, fontSize: 11 }} title="로그 상한">{full.text}</span>}
+        {full && <span style={{ color: full.color, fontSize: 11 }} title={t("log.limit")}>{full.text}</span>}
         {error && <span style={{ color: "#f85149" }}>{error}</span>}
         <span style={{ flex: 1 }} />
         {/* 설정 — 유일하게 남긴 패널 진입로. 대화 안에 블록으로 열린다.
             측면 액티비티바는 두지 않는다(사용자 지정). */}
         <button
           type="button"
-          aria-label="설정 열기"
-          title="설정 열기/닫기"
+          aria-label={t("settings.open")}
+          title={t("settings.toggle")}
           onClick={() => setBlocks((prev) => toggleView(prev, { what: "settings" }, Date.now()))}
           style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 14, padding: "0 4px" }}
         >
           <span aria-hidden="true">⚙</span>
         </button>
-        <span style={{ fontSize: 11, color: wsState === "open" ? "#3fb950" : wsState === "connecting" ? "#d29922" : "#f85149" }} title="WebSocket 연결 상태">
-          {wsState === "open" ? "● 실시간" : wsState === "connecting" ? "○ 연결 중" : "▲ 끊김"}
+        <span style={{ fontSize: 11, color: wsState === "open" ? "#3fb950" : wsState === "connecting" ? "#d29922" : "#f85149" }} title={t("ws.stateTitle")}>
+          {wsState === "open" ? t("status.wsOpen") : wsState === "connecting" ? t("status.wsConnecting") : t("status.wsClosed")}
         </span>
       </header>
 
@@ -1606,7 +1617,7 @@ export default function App() {
         </div>
         {slashOpen && (
           <div style={{ position: "relative", height: 0, flex: "0 0 auto", zIndex: 5 }}>
-            <div ref={slashListRef} role="listbox" aria-label="슬래시 명령 추천" style={{ position: "absolute", left: 8, bottom: 4, minWidth: 380, maxWidth: "calc(100% - 16px)", maxHeight: 240, overflowY: "auto", background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, boxShadow: "0 4px 16px rgba(0,0,0,.5)" }}>
+            <div ref={slashListRef} role="listbox" aria-label={t("prompt.slashList")} style={{ position: "absolute", left: 8, bottom: 4, minWidth: 380, maxWidth: "calc(100% - 16px)", maxHeight: 240, overflowY: "auto", background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, boxShadow: "0 4px 16px rgba(0,0,0,.5)" }}>
               {slashItems.map((c, i) => (
                 <div
                   key={c.fill}
@@ -1622,8 +1633,8 @@ export default function App() {
                 </div>
               ))}
               <div style={{ padding: "2px 10px", fontSize: 10, color: DIM, borderTop: `1px solid ${BORDER}` }}>
-                {toCli && cliTarget ? `${cliTarget.title} 명령 · ` : ""}↑↓ 선택 · Tab/Enter 완성 · Esc 닫기
-                {toCli && cliCmds?.stale ? " · ⚠ 내장 명령 표가 오래됐거나 미확인일 수 있음" : ""}
+                {toCli && cliTarget ? t("prompt.slashCommands", { title: cliTarget.title }) : ""}{t("prompt.slashKeys")}
+                {toCli && cliCmds?.stale ? t("prompt.staleTable") : ""}
               </div>
             </div>
           </div>
@@ -1631,8 +1642,8 @@ export default function App() {
         <div
           role="separator"
           aria-orientation="horizontal"
-          aria-label="입력창 높이 조절"
-          title="드래그 또는 ↑↓키로 입력창 높이 조절"
+          aria-label={t("prompt.resize")}
+          title={t("prompt.resizeTitle")}
           tabIndex={0}
           onPointerDown={onInputSepDown}
           onKeyDown={(e) => {
@@ -1686,31 +1697,31 @@ export default function App() {
               applyRecall(r.text);
               return;
             }
-          }} placeholder={promptHint} aria-label="프롬프트 입력" style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
+          }} placeholder={promptHint} aria-label={t("prompt.input")} style={{ background: "transparent", color: FG, border: 0, outline: "none", resize: "none", flex: 1, padding: 8, font: "inherit", minHeight: 0 }} />
           <button type="button" disabled={!draft.trim()} onClick={() => void sendTurn()} style={{ flex: "0 0 auto", alignSelf: "stretch", margin: 6, padding: "0 16px", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: draft.trim() ? "pointer" : "default", font: "inherit" }}>
-            {toCli ? "CLI로 보내기" : turnRunning ? "대기열에 추가" : "보내기"}
+            {toCli ? t("prompt.sendCli") : turnRunning ? t("prompt.queueAdd") : t("agent.send")}
           </button>
           </div>
           {/* O4 대기열 — 실행 중 들어온 입력과 순서 변경. 칩의 ↑↓로 순서를 바꾼다. */}
           {queueItems.length > 0 && (
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", padding: "2px 8px", borderTop: `1px solid ${BORDER}`, fontSize: 10 }}>
-              <span style={{ color: DIM }}>대기 {queueItems.length}</span>
+              <span style={{ color: DIM }}>{t("prompt.queue", { count: queueItems.length })}</span>
               {queueItems.map((q, i) => (
                 <span key={`${i}:${q.slice(0, 24)}`} style={{ display: "inline-flex", gap: 2, alignItems: "center", background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 999, padding: "0 2px 0 6px", color: FG, maxWidth: 220 }}>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i + 1}. {q.slice(0, 40)}</span>
-                  <button type="button" aria-label={`대기 ${i + 1}번째를 앞으로`} title="앞으로" disabled={i === 0} onClick={() => void client.post("/api/agent/queue/move", { from: i, to: i - 1 }).catch(() => {})} style={{ background: "none", border: 0, color: i === 0 ? "#484f58" : DIM, cursor: i === 0 ? "default" : "pointer", font: "inherit", padding: "0 2px" }}>↑</button>
-                  <button type="button" aria-label={`대기 ${i + 1}번째를 뒤로`} title="뒤로" disabled={i === queueItems.length - 1} onClick={() => void client.post("/api/agent/queue/move", { from: i, to: i + 1 }).catch(() => {})} style={{ background: "none", border: 0, color: i === queueItems.length - 1 ? "#484f58" : DIM, cursor: i === queueItems.length - 1 ? "default" : "pointer", font: "inherit", padding: "0 2px" }}>↓</button>
+                  <button type="button" aria-label={t("prompt.queueFirst", { n: i + 1 })} title={t("prompt.moveFirst")} disabled={i === 0} onClick={() => void client.post("/api/agent/queue/move", { from: i, to: i - 1 }).catch(() => {})} style={{ background: "none", border: 0, color: i === 0 ? "#484f58" : DIM, cursor: i === 0 ? "default" : "pointer", font: "inherit", padding: "0 2px" }}>↑</button>
+                  <button type="button" aria-label={t("prompt.queueLast", { n: i + 1 })} title={t("prompt.moveLast")} disabled={i === queueItems.length - 1} onClick={() => void client.post("/api/agent/queue/move", { from: i, to: i + 1 }).catch(() => {})} style={{ background: "none", border: 0, color: i === queueItems.length - 1 ? "#484f58" : DIM, cursor: i === queueItems.length - 1 ? "default" : "pointer", font: "inherit", padding: "0 2px" }}>↓</button>
                 </span>
               ))}
-              <button type="button" onClick={() => void client.post("/api/agent/queue/clear", {}).catch(() => {})} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", textDecoration: "underline" }}>비우기</button>
+              <button type="button" onClick={() => void client.post("/api/agent/queue/clear", {}).catch(() => {})} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", textDecoration: "underline" }}>{t("prompt.queueClear")}</button>
             </div>
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderTop: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
-            <span style={{ fontSize: 11, color: FG, fontWeight: 700 }}>프롬프트</span>
-            <button type="button" onClick={() => { clearDraft(typeof localStorage !== "undefined" ? localStorage : null); setDraft(""); }} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}>지우기</button>
+            <span style={{ fontSize: 11, color: FG, fontWeight: 700 }}>{t("prompt.label")}</span>
+            <button type="button" onClick={() => { clearDraft(typeof localStorage !== "undefined" ? localStorage : null); setDraft(""); }} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit", fontSize: 11 }}>{t("agent.clear")}</button>
             <select
-              aria-label="프롬프트 대상"
-              title="이 입력창이 보내는 곳 — 로컬 모델(harnesside 에이전트) 또는 사용자 환경에 설치된 AI CLI. 고르면 그 모델에 맞는 슬래시 명령이 제공됩니다."
+              aria-label={t("prompt.target")}
+              title={t("prompt.targetTitle")}
               value={toCli && cliTarget ? cliTarget.provider : "local"}
               onFocus={refreshProviders}
               onChange={(e) => void pickTarget(e.target.value)}
@@ -1719,7 +1730,7 @@ export default function App() {
               <option value="local" style={{ background: "#161b22", color: "#f0f6fc" }}>local_model{modelName ? ` · ${modelName.split("/").pop()}` : ""}</option>
               {cliProviders.filter((p) => p.id !== "shell").map((p) => (
                 <option key={p.id} value={p.id} style={{ background: "#161b22", color: p.installed === false ? "#6e7681" : "#f0f6fc" }} disabled={p.installed === false} title={p.installed === false ? p.installHint : undefined}>
-                  ◆ {p.label}{p.installed === false ? " — 설치 안 됨" : p.installed === null ? " — 확인 못 함" : ""}
+                  ◆ {p.label}{p.installed === false ? t("cli.notInstalled") : p.installed === null ? t("cli.unchecked") : ""}
                 </option>
               ))}
             </select>
@@ -1727,17 +1738,17 @@ export default function App() {
               const prov = CLI_PROVIDERS.find((p) => p.id === cliTarget.provider);
               const supported = !!prov?.yoloArgs;
               return (
-                <label title={supported ? "YOLO — 승인·확인 요청을 모두 자동 허용합니다(파일 수정·명령 실행이 묻지 않고 진행). 켜면 이 폴더에서 YOLO 세션을 새로 시작합니다(이전 대화는 이어가기)." : `${prov?.label ?? "이 CLI"} 의 YOLO 인자를 확인하지 못했습니다(미확인) — 지원하지 않습니다.`} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: cliTarget.yolo ? "#f85149" : supported ? FG : DIM, fontWeight: cliTarget.yolo ? 700 : 400, cursor: supported ? "pointer" : "not-allowed" }}>
+                <label title={supported ? t("cli.yoloTitle") : t("cli.yoloUnsupported", { label: prov?.label ?? t("cli.thisCli") })} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: cliTarget.yolo ? "#f85149" : supported ? FG : DIM, fontWeight: cliTarget.yolo ? 700 : 400, cursor: supported ? "pointer" : "not-allowed" }}>
                   <input type="checkbox" checked={!!cliTarget.yolo} disabled={!supported} onChange={(e) => (e.target.checked ? setYoloAsk(true) : void pickTarget(cliTarget.provider, { yolo: false }))} />
                   YOLO
                 </label>
               );
             })()}
             {toCli && cliTarget && yoloAsk && (
-              <span role="alertdialog" aria-label="YOLO 켜기 확인" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#f85149", border: "1px solid #f85149", borderRadius: 4, padding: "1px 8px", background: "#f8514922" }}>
-                ⚠ 승인 요청을 모두 자동 허용합니다 — 파일 수정·명령 실행이 묻지 않고 진행되고, claude 의 폴더 신뢰·우회 모드 경고도 대신 수락합니다.
-                <button type="button" onClick={() => { setYoloAsk(false); void pickTarget(cliTarget.provider, { yolo: true, resume: !!CLI_PROVIDERS.find((p) => p.id === cliTarget.provider)?.resumeArgs }); }} style={{ background: "#da3633", color: "#fff", border: 0, borderRadius: 4, cursor: "pointer", font: "inherit", padding: "1px 8px" }}>켜기</button>
-                <button type="button" onClick={() => setYoloAsk(false)} style={{ background: "none", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: "pointer", font: "inherit", padding: "1px 8px" }}>취소</button>
+              <span role="alertdialog" aria-label={t("cli.yoloConfirm")} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#f85149", border: "1px solid #f85149", borderRadius: 4, padding: "1px 8px", background: "#f8514922" }}>
+                {t("cli.yoloWarn")}
+                <button type="button" onClick={() => { setYoloAsk(false); void pickTarget(cliTarget.provider, { yolo: true, resume: !!CLI_PROVIDERS.find((p) => p.id === cliTarget.provider)?.resumeArgs }); }} style={{ background: "#da3633", color: "#fff", border: 0, borderRadius: 4, cursor: "pointer", font: "inherit", padding: "1px 8px" }}>{t("cli.yoloOn")}</button>
+                <button type="button" onClick={() => setYoloAsk(false)} style={{ background: "none", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: "pointer", font: "inherit", padding: "1px 8px" }}>{t("action.cancel")}</button>
               </span>
             )}
             {/* 슬래시 버튼 줄은 없다(사용자 지정, 2026-10-04) — 명령은 `/` 자동완성으로 쓴다. */}
@@ -1776,7 +1787,7 @@ export default function App() {
             type="button"
             onClick={() => setLogOpen(true)}
             aria-expanded={false}
-            title={t("panel.log") + " 펼치기"}
+            title={t("log.expandLog", { panel: t("panel.log") })}
             style={{
               display: "flex", gap: 8, alignItems: "center",
               background: "none", border: 0, color: DIM, cursor: "pointer",
@@ -1792,7 +1803,7 @@ export default function App() {
               </span>
             )}
             <span style={{ marginLeft: "auto" }}>
-              {visible.length.toLocaleString("ko-KR")}줄
+              {t("log.lines", { count: visible.length.toLocaleString("ko-KR") })}
             </span>
           </button>
         )}
@@ -1809,7 +1820,7 @@ export default function App() {
               }}
             >
               <span>▾ {t("panel.log")}</span>
-              <span style={{ marginLeft: "auto" }}>접기</span>
+              <span style={{ marginLeft: "auto" }}>{t("action.collapse")}</span>
             </button>
             <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}>
               <LogPanel entries={visible} status={logStatus ?? undefined} level={filter.level as LogLevel} onSetLevel={(l) => setFilter((f) => ({ ...f, level: l }))} height={layout.logHeight} filterLabel={filterLabel(filter)} />
@@ -1849,13 +1860,13 @@ export default function App() {
                   }
                 }
               }}
-              placeholder={paletteMode === "commands" ? "명령 검색…" : paletteMode === "files" ? "파일 이름으로 이동… (↑↓ 선택 · Enter 열기)" : "저장소 내용 검색… (Enter 검색 · ↑↓ 선택 · 다시 Enter 열기)"}
-              aria-label={paletteMode === "commands" ? "명령 팔레트" : paletteMode === "files" ? "파일 빠른 이동" : "내용 검색"}
+              placeholder={paletteMode === "commands" ? t("palette.searchCommands") : paletteMode === "files" ? t("palette.filesHint") : t("palette.searchHint")}
+              aria-label={paletteMode === "commands" ? t("palette.cmdOpen") : paletteMode === "files" ? t("palette.cmdFiles") : t("palette.cmdSearch")}
               style={{ width: "100%", background: "transparent", border: 0, borderBottom: `1px solid ${BORDER}`, color: FG, padding: 10, outline: "none", font: "inherit" }}
             />
             <div style={{ maxHeight: 320, overflow: "auto" }}>
               {paletteMode === "commands" && (<>
-              {hits.length === 0 && <div style={{ padding: 12, color: DIM }}>일치하는 명령이 없습니다</div>}
+              {hits.length === 0 && <div style={{ padding: 12, color: DIM }}>{t("palette.noCommand")}</div>}
               {/* **이 항목들은 선택 가능하다.** 예전에는 `div` 였고 `onClick` 도
                   `Enter` 처리도 **없었다** — 화면은 "메뉴" 처럼 보이는데 눌러도 아무
                   일도 없었다(2026-10-01 실측). 조용히 안 되는 메뉴는 죽었다고
@@ -1874,7 +1885,7 @@ export default function App() {
                     try {
                       void h.cmd.run();
                     } catch (e) {
-                      notice("error", "명령을 실행하지 못했습니다", e instanceof Error ? e.message : String(e));
+                      notice("error", t("palette.runFailed"), e instanceof Error ? e.message : String(e));
                     }
                   }}
                   style={{
@@ -1885,14 +1896,14 @@ export default function App() {
                   }}
                 >
                   <span style={{ flex: 1 }}>{h.cmd.title}</span>
-                  <span style={{ color: DIM, fontSize: 10 }}>{h.cmd.category}</span>
+                  <span style={{ color: DIM, fontSize: 10 }}>{catLabel[h.cmd.category]}</span>
                   {h.cmd.keys.length > 0 && <span style={{ color: DIM, fontSize: 10 }}>{h.cmd.keys.join(" ")}</span>}
                 </button>
               ))}
               </>)}
               {paletteMode === "files" && (<>
-                {fileListTruncated && <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>잘렸습니다 — 파일 목록 상한 초과, 더 좁혀서 입력하십시오</div>}
-                {fileHits.length === 0 && <div style={{ padding: 12, color: DIM }}>일치하는 파일이 없습니다</div>}
+                {fileListTruncated && <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>{t("palette.filesTruncated")}</div>}
+                {fileHits.length === 0 && <div style={{ padding: 12, color: DIM }}>{t("palette.noFile")}</div>}
                 {fileHits.map((h) => (
                   <button
                     key={h.path}
@@ -1913,13 +1924,13 @@ export default function App() {
                 ))}
               </>)}
               {paletteMode === "search" && (<>
-                {searchBusy && <div style={{ padding: 12, color: DIM }}>검색 중…</div>}
+                {searchBusy && <div style={{ padding: 12, color: DIM }}>{t("palette.searching")}</div>}
                 {searchError && <div style={{ padding: 12, color: "#f85149" }}>{searchError}</div>}
                 {!searchBusy && !searchError && searchTruncated && (
-                  <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>잘렸습니다 — {searchTruncated}</div>
+                  <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>{searchTruncated}</div>
                 )}
                 {!searchBusy && !searchError && searchHits.length === 0 && (
-                  <div style={{ padding: 12, color: DIM }}>Enter를 눌러 검색을 실행하십시오</div>
+                  <div style={{ padding: 12, color: DIM }}>{t("palette.searchIdle")}</div>
                 )}
                 {searchHits.map((h, i) => (
                   <button
