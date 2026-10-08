@@ -316,6 +316,34 @@ for (const [name, cmd] of Object.entries(pkg.scripts ?? {})) {
 }
 if (scriptHits === 0) pass(`package.json scripts 의 파일 참조 전부 존재 (${Object.keys(pkg.scripts ?? {}).length}개 스크립트)`);
 
+// ---------------------------------------------------------------- 4d. monaco-editor는 optional로만 (P2-3)
+//
+// 실측(2026-10-08): src에서 monaco를 정적 import하는 곳이 0건 —
+// 에디터는 textarea+pre 오버레이(EditorView)라 번들에 안 탄다(dist/web 696K).
+// dependencies에 들어가면 설치 필수·번들 5MB 위험이므로 optional/absent만 허용.
+// 정적 import가 생기면 여기서 빨간불. 미래 lazy 로딩은 동적 import()만 허용.
+{
+  const deps = pkg.dependencies ?? {};
+  if (deps["monaco-editor"]) fail("monaco-editor가 dependencies에 있다 — optionalDependencies로만 둘 것 (P2-3)");
+  else pass("monaco-editor가 필수 의존성이 아니다 (optional 또는 없음)");
+  // git grep 인용문 지옥을 피하려고 fs 직접 스캔. 정적 import만 잡는다.
+  const { readdir, readFile: rf } = await import("node:fs/promises");
+  const staticRe = /from\s+["']monaco-editor["']|require\(\s*["']monaco-editor["']\s*\)/;
+  const hits = [];
+  const walk = async (dir) => {
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { await walk(p); continue; }
+      if (!/\.(ts|tsx|js|mjs|cjs)$/.test(e.name)) continue;
+      const text = await rf(p, "utf8").catch(() => "");
+      if (staticRe.test(text)) hits.push(relative(ROOT, p));
+    }
+  };
+  await walk(join(ROOT, "src"));
+  if (hits.length) fail(`monaco 정적 import 발견 — 번들에 5MB가 탄다:\n${hits.join("\n")}`);
+  else pass("monaco 정적 import 0건 — 웹 번들에서 분리 유지");
+}
+
 // 4b 자기 검사 — **없는 경로를 실제로 잡는가.** 잡지 못하는 검사는 없는 검사다(Q-8 검증 1).
 {
   const probe = extractSrcPaths("문서 `src/__q8_probe_missing__.ts` 와 `src/server/index.ts:513` 그리고\n```\nsrc/__q8_fenced_probe__.tsx 설명\n```\n");
