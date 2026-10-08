@@ -41,6 +41,7 @@ import { recommendThresholds, type CompactionThresholds } from "../compaction/co
 // 시스템 프롬프트 정본(출력 형식 규칙 포함). 여기서 문자열을 두지 않는다 — 2026-10-05.
 import { buildSystemPrompt } from "../agent/systemPrompt.js";
 import { ApprovalGate } from "./approval.js";
+import { bindApprovalEvents, type ApprovalGateBindings } from "./approvalHub.js";
 import { SessionBridge } from "../session/bridge.js";
 import { searchHub, recommend, fillSizes } from "../models/hub.js";
 import { ModelDownloader, modelPathFor } from "../models/download.js";
@@ -729,17 +730,9 @@ const updates: UpdateService = new UpdateService({
         // **양쪽 다 보낸다**: 요청이 생났을 때(`approval.request`)와 결정됐을 때
         // (`approval.done`). 결정 이벤트에는 **무엇을 허용했는지** 를 실어 로그에도
         // 남긴다 — 나중에 "누가 이걸 승인했나" 를 확인할 수 있는 유일한 자리다.
-        approvalGate = new ApprovalGate({}, {
-          onRequest: (req) => {
-            hub?.publish({ type: "approval.request", request: req } as never);
-            ring.warn("approval", `승인 대기: ${req.summary}`, "server");
-          },
-          onDecision: (req, decision, by) => {
-            hub?.publish({ type: "approval.done", id: req.id, tool: req.tool, decision, by } as never);
-            // **거절도 기록한다.** 승인만 남기면 "이 도구는 아무도 안 쓰는가" 를 알 수 없다.
-            ring.info("approval", `승인 결정: ${req.tool} → ${decision}${by ? ` (${by})` : ""}`, "server");
-          },
-        });
+        // 결착은 bindApprovalEvents 헬퍼로 빼냈다(동작 무결성). 헬퍼는 게이트가
+        // 루프에 배선되어 지나는 경로를 유닛으로 고정하기 위한 것이다(§5 todo · S-6).
+        approvalGate = new ApprovalGate({}, bindApprovalEvents(hub, ring));
         // §5.5: 계측 시작. 1Hz 로 한 번만 재고 WS 로 브로드캐스트한다.
         // 라우트는 **계측하지 않고** 마지막 샘플만 읽는다(요청당 계측 금지).
         metrics.start();
