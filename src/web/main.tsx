@@ -48,7 +48,7 @@ import { loadDraft, saveDraft, clearDraft, searchCommands, toastView, type Comma
 import { rankFiles } from "../shared/searchRank.js";
 import { filterEntries, defaultFilter, visibleTail, bufferFullLabel, filterLabel, type Filter, type LogLevel } from "./panels/logFilter.js";
 import { useI18n } from "./i18n/index.js";
-import { ApprovalCard } from "./panels/ApprovalCard.js";
+import { ApprovalCard, applyApprovalEvent } from "./panels/ApprovalCard.js";
 import type { ApprovalRequest } from "./panels/ApprovalCard.js";
 // 이 import 가 카탈로그를 **등록한다**. 훅만 쓰고 여기 안 쓰면 사전이 비어 있고,
 // `t()` 는 키 문자열을 그대로 돌려준다(2026-09-30 까지 실제로 그랬다).
@@ -1009,18 +1009,13 @@ export default function App() {
           );
         } else if (ev.type === "approval.request") {
           // 승인 대기 — 서버가 보낸 요청을 **대화 위에 떠 있는 카드**로 연다.
-          // 이미 같은 id 가 있으면 무시(재연결/중복 broadcast 방지).
+          // 매핑 규칙은 applyApprovalEvent(순수 함수)에 있고 여기서 그대로 쓴다.
           const r = ev.request as ApprovalRequest | undefined;
-          if (r?.id) setApprovals((prev) => {
-            if (prev.has(r.id)) return prev;
-            const next = new Map(prev);
-            next.set(r.id, r);
-            return next;
-          });
+          setApprovals((prev) => applyApprovalEvent(prev, { type: "approval.request", request: r }));
         } else if (ev.type === "approval.done") {
           // 결정이 돌아오면 카드를 닫는다. "승인이 끝났는데 카드가 안 사라졌다" 가 없도록.
           const id = ev.id as string | undefined;
-          if (id) setApprovals((prev) => prev.has(id) ? (() => { const n = new Map(prev); n.delete(id); return n; })() : prev);
+          setApprovals((prev) => applyApprovalEvent(prev, { type: "approval.done", id }));
         } else if (ev.type === "model.changed") {
           // **서빙 중인 모델이 바뀌었다**(2026-10-05 실측).
           //

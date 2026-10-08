@@ -43,10 +43,31 @@ export interface ApprovalRequest {
   expiresAt: number;
 }
 
-/** 남은 시간 — **최대 몇 초**. 숫자가 없으면 사용자는 "언제까지 기다려야 하지" 를 모른다. */
 /** 남은 초 — 순수 함수로 분리해 테스트한다(60초 자동 거절의 화면 근거). */
 export function secondsLeft(r: ApprovalRequest, now: number): number {
   return Math.max(0, Math.ceil((r.expiresAt - now) / 1000));
+}
+
+/** 승인 이벤트 → 대기 맵. 순수 함수로 분리해 테스트한다.
+ *  request면 카드를 열고(done이면 닫는다). 같은 id 중복은 무시(재연결 broadcast 방지). */
+export function applyApprovalEvent(
+  prev: Map<string, ApprovalRequest>,
+  ev: { type: string; request?: ApprovalRequest; id?: string }
+): Map<string, ApprovalRequest> {
+  if (ev.type === "approval.request") {
+    const r = ev.request;
+    if (!r?.id || prev.has(r.id)) return prev;
+    const next = new Map(prev);
+    next.set(r.id, r);
+    return next;
+  }
+  if (ev.type === "approval.done") {
+    if (!ev.id || !prev.has(ev.id)) return prev;
+    const next = new Map(prev);
+    next.delete(ev.id);
+    return next;
+  }
+  return prev;
 }
 
 export function ApprovalCard({
