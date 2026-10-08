@@ -9,6 +9,7 @@ import {
   estimateTokens,
   estimateTokensFast,
   buildResumePrompt,
+  shouldEarlyCompact,
   CompactionThresholds,
   DEFAULT_TAIL_BUDGET_FRACTION,
   DEFAULT_SUMMARY_MAX_TOKENS,
@@ -420,6 +421,9 @@ export class AgentLoop {
    *  so a background analysis call must never fire while a turn is still
    *  actively in flight. */
   private hasNewFailuresThisTurn = false;
+  /** P3: 실패 턴 연속 횟수. 성공 턴이면 0으로 리셋. earlyCompaction(enabled)
+   *  일 때만 maybeCompact가 참조한다. 기본 off라 동작 변경 없음. */
+  private consecutiveFailTurns = 0;
   /** Set by cancelCurrentTurn() (TUI: Esc → Y confirms), consumed by
    *  runUntilIdle() at the two points a turn can actually notice it — the
    *  chat() catch block and the top of the tool-call loop. Kept as a flag
@@ -580,7 +584,11 @@ export class AgentLoop {
    *  turn has fully finished — never while one is still in flight. See the
    *  `hasNewFailuresThisTurn` docstring for why. */
   private checkForRealtimeImprovementAfterTurn(): void {
-    if (!this.hasNewFailuresThisTurn) return;
+    if (!this.hasNewFailuresThisTurn) {
+      this.consecutiveFailTurns = 0;
+      return;
+    }
+    this.consecutiveFailTurns++;
     this.hasNewFailuresThisTurn = false;
     this.triggerRealtimeImprovementCheck();
   }
@@ -1536,6 +1544,13 @@ export class AgentLoop {
     const used = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
     this.estimateCallsExact++;
     this.opts.onContextUsage?.(used, this.opts.thresholds.contextWindowTokens);
+    // P3 조기 압축 (opt-in, 기본 off): 실패 턴이 연속되고 사용량이 earlyRatio를
+    // 넘었으면 0.7을 기다리지 않고 압축. 일반 트리거는 아래에서 그대로 처리.
+    if (shouldEarlyCompact(used, window, this.consecutiveFailTurns, this.opts.thresholds)) {
+      await this.compact("early-quality", pendingToolCall);
+      this.consecutiveFailTurns = 0;
+      return { compacted: true, used };
+    }
     if (used >= window * this.opts.thresholds.autoTriggerRatio) {
       // Skip a compaction that would fire again almost immediately after
       // the previous one: when the fixed overhead (system prompt + tool

@@ -13,7 +13,7 @@ export interface Checkpoint {
   // this file only ever existed after a compaction, so a session killed
   // mid-task with no compaction yet lost its whole plan with nothing to
   // resume from.
-  reason: "auto-threshold" | "manual" | "plan-progress";
+  reason: "auto-threshold" | "manual" | "plan-progress" | "early-quality";
   /** One-line restatement of what the user originally asked for. */
   goal: string;
   steps: Array<{

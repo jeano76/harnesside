@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { estimateTokens, shouldCompact, buildResumePrompt, runCompaction, recommendThresholds, DEFAULT_TAIL_BUDGET_FRACTION, composeSystemMessage, selectKeptTail, splitSystemMessage, stripResumePrefix, estimateTextTokens, CONTINUE_AFTER_COMPACTION } from "./compactor.js";
+import { estimateTokens, shouldCompact, shouldEarlyCompact, buildResumePrompt, runCompaction, recommendThresholds, DEFAULT_TAIL_BUDGET_FRACTION, composeSystemMessage, selectKeptTail, splitSystemMessage, stripResumePrefix, estimateTextTokens, CONTINUE_AFTER_COMPACTION } from "./compactor.js";
 import { writeCheckpoint, Checkpoint } from "./checkpoint.js";
 import type { ChatCompletionRequest, ChatMessage, ChatCompletionResponse, ModelBackend } from "../backend/types.js";
 
@@ -1190,4 +1190,18 @@ test("buildResumePrompt structures sections as markdown but keeps the first line
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("P3 shouldEarlyCompact: 기본 off — 실패가 쌓여도 조기 압축 안 함", () => {
+  const t = { autoTriggerRatio: 0.7 } as any;
+  assert.equal(shouldEarlyCompact(6000, 10000, 5, t), false);
+  assert.equal(shouldEarlyCompact(6000, 10000, 5, { ...t, earlyCompaction: { enabled: false } }), false);
+});
+
+test("P3 shouldEarlyCompact: 실패 2연속+0.5 초과면 조기 압축", () => {
+  const t = { autoTriggerRatio: 0.7, earlyCompaction: { enabled: true } } as any;
+  assert.equal(shouldEarlyCompact(4000, 10000, 2, t), false, "0.5 미만은 아직");
+  assert.equal(shouldEarlyCompact(5500, 10000, 1, t), false, "1회 실패는 아직");
+  assert.equal(shouldEarlyCompact(5500, 10000, 2, t), true);
+  assert.equal(shouldEarlyCompact(7500, 10000, 2, t), false, "0.7 초과는 일반 경로가 처리");
 });

@@ -20,6 +20,35 @@ export interface CompactionThresholds {
    *  compactions when the post-budget math leaves no room. Defaults to
    *  0.05 in loop.ts. Overflow-retry still calls compact() directly. */
   minGrowthFraction?: number;
+  /** P3 조기 compaction (opt-in, 기본 off). 로컬 모델은 창이 차기 전
+   *  (절반~2/3)부터 지시 무시·환각이 시작한다는 보고가 있어, 실패 턴이
+   *  연속되면 0.7을 기다리지 않고 일찍 압축하는 옵션. 무조건 창 확대는
+   *  금지(KV가 가중치 잠식)라 임계 자체는 건드리지 않는다. */
+  earlyCompaction?: {
+    enabled: boolean;
+    /** 이 비율(기본 0.5)을 넘고 실패 턴이 연속되면 조기 압축. */
+    earlyRatio?: number;
+    /** 몇 턴 연속 실패부터 (기본 2). */
+    failTurns?: number;
+  };
+}
+
+/** P3 순수 판정 — 테스트 가능하게 분리. 기본 off이므로 enabled가 아니면 false. */
+export function shouldEarlyCompact(
+  used: number,
+  window: number,
+  consecutiveFailTurns: number,
+  thresholds: Pick<CompactionThresholds, "autoTriggerRatio" | "earlyCompaction">
+): boolean {
+  const cfg = thresholds.earlyCompaction;
+  if (!cfg?.enabled) return false;
+  const earlyRatio = cfg.earlyRatio ?? 0.5;
+  const failTurns = cfg.failTurns ?? 2;
+  if (consecutiveFailTurns < failTurns) return false;
+  if (used < window * earlyRatio) return false;
+  // 이미 일반 트리거를 넘었으면 조기 판정이 아니라 일반 경로가 처리한다.
+  if (used >= window * thresholds.autoTriggerRatio) return false;
+  return true;
 }
 
 /** What a compaction actually did to the conversation — requested directly
