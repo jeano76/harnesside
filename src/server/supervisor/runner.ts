@@ -23,6 +23,7 @@ import {
   type ChildExit,
   type SupervisorPolicy,
 } from "./policy.js";
+import { UPGRADE_EXIT_CODE } from "./upgrade.js";
 
 export interface SupervisorChild {
   pid?: number;
@@ -35,6 +36,9 @@ export type SupervisorEvent =
   | { type: "boot-healthy"; attempt: number }
   | { type: "boot-failed"; attempt: number; reason: string }
   | { type: "exited"; attempt: number; exit: string; delaySec: number }
+  | { type: "upgrade-restart"; attempt: number }
+  | { type: "upgrade-confirmed"; attempt: number; reason: string }
+  | { type: "upgrade-rolled-back"; attempt: number; detail: string }
   | { type: "stopped"; reason: string };
 
 export interface RunnerDeps {
@@ -52,6 +56,15 @@ export interface RunnerDeps {
   emit?: (e: SupervisorEvent) => void;
   /** 외부에서 `token.stop = true` 로 두면 자식을 죽이고 끝낸다. */
   stopToken?: { stop: boolean };
+  /**
+   * 업데이트 위임 — 없으면 코드 42 도 일반 비정상 종료로 취급한다(그래도 다시는 띄운다).
+   * 있으면: 42→재기동(충돌 집계 안 함)→기동 확인→마커 소비됐으면 확정,
+   * 남아 있으면 되돌리고 옛것을 다시 띄운다.
+   */
+  upgrade?: {
+    checkConfirmed: () => Promise<{ confirmed: boolean; reason: string }>;
+    rollback: () => Promise<{ ok: boolean; detail: string }>;
+  };
 }
 
 export interface SuperviseResult {
@@ -69,6 +82,8 @@ export async function supervise(deps: RunnerDeps): Promise<SuperviseResult> {
   const emit = deps.emit ?? (() => undefined);
   const restarts: number[] = [];
   let attempt = 0;
+  // 서버가 교체+마커 후 코드 42 로 끝낸 상태 — 다음 기동은 새 버전 확인 대상이다.
+  let pendingUpgrade = false;
 
   for (;;) {
     attempt++;
@@ -122,10 +137,49 @@ export async function supervise(deps: RunnerDeps): Promise<SuperviseResult> {
 
     if (sawHello) {
       emit({ type: "boot-healthy", attempt });
+      if (pendingUpgrade && deps.upgrade) {
+        const chk = await deps.upgrade.checkConfirmed();
+        if (chk.confirmed) {
+          pendingUpgrade = false;
+          emit({ type: "upgrade-confirmed", attempt, reason: chk.reason });
+        } else {
+          emit({ type: "boot-failed", attempt, reason: chk.reason });
+          const rb = await deps.upgrade.rollback();
+          if (!rb.ok) {
+            const reason = `되돌리기 실패 — 멈춥니다: ${rb.detail}`;
+            emit({ type: "stopped", reason });
+            return { reason, restarts, attempts: attempt };
+          }
+          pendingUpgrade = false;
+          emit({ type: "upgrade-rolled-back", attempt, detail: rb.detail });
+          continue;
+        }
+      }
     } else {
       // hello 없이 끝났다 — 기동 실패로 기록한다(죽었든, 시간 다 돼 죽였든).
       // code 0 으로 조용히 끝난 경우도 "떴다" 로 세지 않는다 — 고장난 서버를
       // 정상으로 보고하는 쪽이 더 나쁘다. 재시작 여부는 아래 정책이 정한다.
+      // 단, 새 버전 확인 중이었으면(pendingUpgrade) 먼저 되돌리고 옛것을 띄운다.
+      if (pendingUpgrade && deps.upgrade) {
+        if (!exited) {
+          try {
+            child.kill();
+          } catch {
+            /* 무시 */
+          }
+          await exitP;
+        }
+        emit({ type: "boot-failed", attempt, reason: "새 버전이 기동 신호를 보내지 않았습니다" });
+        const rb = await deps.upgrade.rollback();
+        if (!rb.ok) {
+          const reason = `되돌리기 실패 — 멈춥니다: ${rb.detail}`;
+          emit({ type: "stopped", reason });
+          return { reason, restarts, attempts: attempt };
+        }
+        pendingUpgrade = false;
+        emit({ type: "upgrade-rolled-back", attempt, detail: rb.detail });
+        continue;
+      }
       if (!exited) {
         try {
           child.kill();
@@ -158,6 +212,12 @@ export async function supervise(deps: RunnerDeps): Promise<SuperviseResult> {
       }
     }
     const finalExit: ChildExit = exited ?? { code: null, signal: null };
+    // 서버가 교체+마커 후 끝낸 코드 — 충돌 집계 없이 바로 다시 띄운다.
+    if (finalExit.code === UPGRADE_EXIT_CODE && deps.upgrade) {
+      pendingUpgrade = true;
+      emit({ type: "upgrade-restart", attempt });
+      continue;
+    }
     const d = decideRestart(finalExit, restarts, nowSec(), policy);
     if (d.action === "stop") {
       emit({ type: "stopped", reason: d.reason });

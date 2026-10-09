@@ -47,6 +47,7 @@ import { searchHub, recommend, fillSizes } from "../models/hub.js";
 import { ModelDownloader, modelPathFor } from "../models/download.js";
 import { planSwap } from "../models/manage.js";
 import { UpdateService } from "./updateService.js";
+import { UPGRADE_EXIT_CODE } from "./supervisor/upgrade.js";
 import type { ReleaseManifest } from "./update/manifest.js";
 import { parseManifest } from "./update/manifest.js";
 import { readBuildInfo } from "./buildInfo.js";
@@ -1524,6 +1525,20 @@ const updates: UpdateService = new UpdateService({
               slot: staged.slot ?? null,
               treeSha256: marker.treeSha256,
             });
+            // 감시기 아래에서는 재기동을 맡긴다 — 응답을 보내고 스스로 끝난다.
+            // 감시기가 코드 42 를 보고 새 버전으로 다시 띄우고, 기동 확인·실패 시
+            // 되돌리기를 한다. 감시기가 없으면 아래 수동 안내대로 둔다.
+            if (process.env.HARNESSIDE_SUPERVISED === "1") {
+              ring.info("update", "update-handed-to-supervisor", "server", { slot: staged.slot ?? null });
+              // 응답이 먼저 나가야 한다 — 바로 끝내면 적용 결과를 못 받는다.
+              setTimeout(() => process.exit(UPGRADE_EXIT_CODE), 500).unref();
+              return {
+                ok: true,
+                slot: staged.slot,
+                treeSha256: marker.treeSha256,
+                next: "감시기가 새 버전으로 재기동합니다. 기동을 확인하면 적용이 끝난 것이고, 실패하면 이전 버전으로 되돌리고 다시 띄웁니다.",
+              };
+            }
             return {
               ok: true,
               slot: staged.slot,

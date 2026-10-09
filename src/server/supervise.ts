@@ -31,6 +31,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { supervise, type SupervisorChild } from "./supervisor/runner.js";
 import { supervisedHello } from "./supervisor/probe.js";
+import { checkUpdateConfirmed, rollbackUpdate } from "./supervisor/upgrade.js";
 import { DEFAULT_SUPERVISOR_POLICY } from "./supervisor/policy.js";
 
 export interface SupervisorArgs {
@@ -124,6 +125,12 @@ async function main(): Promise<number> {
   const childEntry = join(dirname(here), "index.js");
 
   const portFile = join(tmpdir(), `harnesside-sv-${process.pid}.port`);
+  // 업데이트 위임 경로 — 서버의 stateDir·슬롯·설치 루트와 같은 곳을 본다.
+  // 감시기는 자식과 같은 cwd 에서 돈다는 전제다(다르면 포트를 못 찾는다 — 위 probe 와 같은 이유).
+  const projectRoot = process.cwd();
+  const stateDir = join(projectRoot, ".harnesside", "state");
+  const slotsDir = join(stateDir, "update-slots");
+  const installRoot = resolve(dirname(childEntry), "..", "..");
   const token = { stop: false };
   let child: ChildProcess | null = null;
   let attemptStart = 0;
@@ -195,7 +202,14 @@ async function main(): Promise<number> {
       else if (e.type === "boot-healthy") say(`시도 ${e.attempt} 기동 확인됨`);
       else if (e.type === "boot-failed") say(`시도 ${e.attempt} 기동 실패 — ${e.reason}`);
       else if (e.type === "exited") say(`시도 ${e.attempt} 종료(${e.exit}) — ${e.delaySec}초 뒤 재시작`);
+      else if (e.type === "upgrade-restart") say(`시도 ${e.attempt} 업데이트 적용됨 — 새 버전으로 재기동합니다`);
+      else if (e.type === "upgrade-confirmed") say(`시도 ${e.attempt} 업데이트 확인됨 — ${e.reason}`);
+      else if (e.type === "upgrade-rolled-back") say(`시도 ${e.attempt} 업데이트 실패, 되돌렸습니다 — ${e.detail}`);
       else say(`정지 — ${e.reason}`);
+    },
+    upgrade: {
+      checkConfirmed: () => checkUpdateConfirmed(stateDir),
+      rollback: () => rollbackUpdate(stateDir, slotsDir, installRoot),
     },
     stopToken: token,
   });

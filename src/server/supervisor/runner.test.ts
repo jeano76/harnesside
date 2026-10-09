@@ -17,6 +17,8 @@ interface Script {
   helloAfter: number;
   /** 시도별 생존 시간(실제 ms). 0이면 스폰 즉시 죽음(부팅 중 사망 재현). */
   dieAfterMs?: number[];
+  /** 업데이트 위임 가짜. confirmed 는 확인할 때마다 앞에서부터 소모한다. */
+  upgrade?: { confirmed: boolean[]; rollbackOk: boolean; rollbacks: string[] };
 }
 
 function rig(script: Script, opts: { bootGraceSec?: number; nowStep?: number } = {}) {
@@ -26,6 +28,7 @@ function rig(script: Script, opts: { bootGraceSec?: number; nowStep?: number } =
   let probes = 0;
   let now = 1000;
   const step = opts.nowStep ?? 1;
+  const confQueue = [...(script.upgrade?.confirmed ?? [])];
   const deps: RunnerDeps = {
     spawn: (attempt) => {
       spawns.push(attempt);
@@ -64,6 +67,18 @@ function rig(script: Script, opts: { bootGraceSec?: number; nowStep?: number } =
       await new Promise((res) => setTimeout(res, 0));
     },
     emit: (e) => events.push(e),
+    upgrade: script.upgrade
+      ? {
+          checkConfirmed: async () => {
+            const c = confQueue.length > 0 ? confQueue.shift()! : true;
+            return c ? { confirmed: true, reason: "소비됨" } : { confirmed: false, reason: "마커 남음" };
+          },
+          rollback: async () => {
+            script.upgrade!.rollbacks.push("rollback");
+            return script.upgrade!.rollbackOk ? { ok: true, detail: "되돌림" } : { ok: false, detail: "슬롯 없음" };
+          },
+        }
+      : undefined,
   };
   return { deps, events, spawns, delays, getProbes: () => probes };
 }
@@ -134,4 +149,67 @@ test("기동 성공 뒤의 정지도 끝낸다 — 대기만 하다 멈추면 �
   const out = await p;
   assert.equal(r.spawns.length, 1, "정지했는데 다시 띄웠다");
   assert.match(out.reason, /외부 정지/);
+});
+
+test("코드 42 는 충돌 집계 없이 바로 다시 띄운다 — 마커 확인되면 확정", async () => {
+  const up = { confirmed: [] as boolean[], rollbackOk: true, rollbacks: [] as string[] };
+  const r = rig({
+    exits: [{ code: 42, signal: null }, { code: 0, signal: null }],
+    helloAfter: 1,
+    dieAfterMs: [20, 30],
+    upgrade: up,
+  });
+  const out = await supervise(r.deps);
+  assert.deepEqual(r.spawns, [1, 2]);
+  assert.ok(
+    !r.delays.some((d) => d >= 1000) && !r.events.some((e) => e.type === "exited"),
+    `42에 백오프를 걸었다(충돌로 셈): ${JSON.stringify(r.delays)}`
+  );
+  assert.ok(r.events.some((e) => e.type === "upgrade-restart"), "위임 재기동이 없다");
+  assert.ok(r.events.some((e) => e.type === "upgrade-confirmed"), "확정이 없다");
+  assert.match(out.reason, /정상 종료/);
+});
+
+test("마커 남으면 되돌리고 옛것을 띄운다", async () => {
+  const up = { confirmed: [false], rollbackOk: true, rollbacks: [] as string[] };
+  const r = rig({
+    exits: [{ code: 42, signal: null }, { code: 0, signal: null }],
+    helloAfter: 1,
+    dieAfterMs: [20, 30],
+    upgrade: up,
+  });
+  const out = await supervise(r.deps);
+  assert.deepEqual(r.spawns, [1, 2, 3]);
+  assert.deepEqual(up.rollbacks, ["rollback"]);
+  assert.ok(r.events.some((e) => e.type === "upgrade-rolled-back"), "되돌림이 없다");
+  assert.match(out.reason, /정상 종료/);
+});
+
+test("새 버전이 안 뜨면 되돌리고 옛것을 띄운다", async () => {
+  const up = { confirmed: [] as boolean[], rollbackOk: true, rollbacks: [] as string[] };
+  const r = rig({
+    exits: [{ code: 42, signal: null }, { code: 0, signal: null }],
+    helloAfter: 1,
+    dieAfterMs: [20, 0, 30],
+    upgrade: up,
+  });
+  const out = await supervise(r.deps);
+  // 시도2는 스폰 즉시 죽는다 → 기동 실패 → 되돌림 → 시도3 옛것.
+  // dieAfterMs[1]=0 은 시도2에만 해당한다.
+  assert.ok(r.spawns.length >= 3, `옛것을 안 띄웠다: ${JSON.stringify(r.spawns)}`);
+  assert.deepEqual(up.rollbacks, ["rollback"]);
+  assert.match(out.reason, /정상 종료/);
+});
+
+test("되돌리기 실패하면 멈춘다 — 망가진 채로 돌리지 않는다", async () => {
+  const up = { confirmed: [false], rollbackOk: false, rollbacks: [] as string[] };
+  const r = rig({
+    exits: [{ code: 42, signal: null }],
+    helloAfter: 1,
+    dieAfterMs: [20, 30],
+    upgrade: up,
+  });
+  const out = await supervise(r.deps);
+  assert.deepEqual(r.spawns, [1, 2]);
+  assert.match(out.reason, /되돌리기 실패/);
 });
