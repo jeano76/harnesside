@@ -14,10 +14,10 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: supervisor 3단계 완료 (실기동 검증됨) — 4단계(업데이트 위임) 남음
+phase: push 완료 (origin/main 동기화) — README 최신화됨
 status: in_progress
-last_commit: "a78e984 fix(supervisor): 기동 성공 뒤 정지도 끝낸다"
-next_action: "supervisor 4단계 또는 브라우저 미측정 중 선택 (P13 업데이트 위임·승인카드 60초·접기 UI 등)"
+last_commit: "368282a docs(readme): 오래된 수치·서술 정리 + 감시기 절 추가"
+next_action: "브라우저 미측정 (승인카드 60초·접기 UI) 또는 기호 정의/참조 중 선택"
 blocking: 없음
 ```
 
@@ -142,6 +142,15 @@ wiring 검사가 잡았다(스스로 증명하지 않는 검사가 아님). 전�
 > - **실측 2차(수정 뒤)**: 기동 확인 → health → SIGTERM → **2초 만에 정상 종료,
 >   exit 0, 7317·8080 포트 회수**(자식이 자기 llama 까지 내림).
 > 미측정으로 남김: 실제 크래시→재기동 라이브(유닛으로만 봄).
+
+## 2026-10-09 · push + README 최신화
+
+> - 병합: `feat/live-diff-gpu`·`feat/think-live-draft` 둘 다 main 에 이미 포함 —
+>   머지할 것 없이 로컬 브랜치 정리. `git push origin main` 통과(38커밋), 0 ahead.
+> - README: verify-window 22/22→21/22 · 구조 수치 재측정(52,187·200파일·2367) ·
+>   팔레트 3모드·Esc 중단·`clear` 반영 · 릴리스표 미측정 정정 ·
+>   "자동 롤백은 없다"→감시기 아래 자동 확인·되돌리기 + 감시기 절 신설.
+>   커밋 `368282a`. `ci-checks` 전면 PASS (겸사겸사 이전 세션 CJK 오타 1건 수정).
 
 ## 2026-10-09 · supervisor 4단계 (업데이트 위임 — P13 감시기 대기 해소)
 
