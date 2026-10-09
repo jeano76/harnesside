@@ -121,3 +121,17 @@ test("외부 정지는 자식을 죽이고 끝낸다 — 재시작 없음", asyn
   assert.equal(r.spawns.length, 1);
   assert.match(out.reason, /외부 정지/);
 });
+
+test("기동 성공 뒤의 정지도 끝낸다 — 대기만 하다 멈추면 안 된다", async () => {
+  // 2026-10-09 실기동 회귀: SIGTERM 이 정상 상태에 오면 감시기가 8초 넘게 안 끝났다.
+  // 종료 대기에 정지 처리가 없어서였다.
+  const r = rig({ exits: [{ code: null, signal: null }], helloAfter: 1, dieAfterMs: [60000] });
+  const token = { stop: false };
+  const p = supervise({ ...r.deps, stopToken: token, bootGraceSec: 300 });
+  await new Promise((res) => setTimeout(res, 10));
+  assert.ok(r.events.some((e) => e.type === "boot-healthy"), "기동 성공을 못 봤다");
+  token.stop = true;
+  const out = await p;
+  assert.equal(r.spawns.length, 1, "정지했는데 다시 띄웠다");
+  assert.match(out.reason, /외부 정지/);
+});

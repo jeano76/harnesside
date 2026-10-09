@@ -141,7 +141,22 @@ export async function supervise(deps: RunnerDeps): Promise<SuperviseResult> {
     }
 
     // 여기 오면 자식의 종료 상태가 확정돼 있다(죽었거나, 죽였다).
-    if (!exited) await exitP;
+    // 단, 기동 성공 뒤에는 자식이 살아 있다 — 끝날 때까지 기다리되
+    // 외부 정지가 오면 자식을 죽이고 끝낸다(2026-10-09 실측: 대기만 하고 안 끝남).
+    while (!exited) {
+      await sleep(pollMs);
+      if (deps.stopToken?.stop ?? false) {
+        try {
+          child.kill();
+        } catch {
+          /* 이미 죽었으면 할 일 없음 */
+        }
+        await exitP;
+        const reason = "외부 정지 요청 — 자식을 종료하고 끝냅니다";
+        emit({ type: "stopped", reason });
+        return { reason, restarts, attempts: attempt };
+      }
+    }
     const finalExit: ChildExit = exited ?? { code: null, signal: null };
     const d = decideRestart(finalExit, restarts, nowSec(), policy);
     if (d.action === "stop") {
