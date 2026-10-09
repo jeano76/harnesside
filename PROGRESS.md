@@ -14,9 +14,9 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: M9 묶음3 완료 (main.tsx 크롬) — 묶음4 남음
+phase: UX 묶음(clear·다중선택 제안·ESC) 완료 — M9 묶음4 남음
 status: in_progress
-last_commit: "c883d2c feat(i18n): M9 묶음3 — main.tsx 크롬 문자열 카탈로그 전환"
+last_commit: "0ceaa7e feat(agent,web): clear 초기화·다중선택 제안·ESC 중단 + 미커밋 결함 수리"
 next_action: "M9 묶음4 (slash 실행 보고서 본문 약 20줄 + shared/slashCommands 설명 + think.ts 안내문) — 셋 다 대화 콘텐츠라 별도 묶음"
 blocking: 없음
 ```
@@ -83,6 +83,19 @@ wiring 검사가 잡았다(스스로 증명하지 않는 검사가 아님). 전�
 > `SLASH_TIPS`는 키 맵으로, `Command.category`는 영문 union으로.
 > slash 실행 보고서 본문은 묶음4로 남김(대화 콘텐츠). 렌더 텍스트 동일 — 화면 동작 변경 없음.
 > 커밋 `c883d2c`. 다음: M9 묶음4 (slash 보고서 본문 + slashCommands 설명 + think.ts 안내문).
+
+## 2026-10-09 · UX 묶음 (clear·다중선택 제안·ESC)
+
+> 중단 시 미커밋이던 작업 3건 + 결함 수리. `AgentService.reset()` + `POST /api/agent/reset`
+> (idle 대기열도 비움 — 아니면 다음 턴에 옛 말이 나온다) · 입력창 `clear` (서버+화면 동시 초기화) ·
+> 마지막 답이 선택지 나열이면 빈 입력창에 제안 주입(`multipleChoice.ts` 순수 함수) ·
+> ESC로 팔레트 닫기+턴 중단.
+> 수리: `t("prompt.suggest")` 누락(wiring 검사가 적발 — 키 없이 커밋될 뻔) ·
+> `lastVisibleRef` 턴 경계 미초기화(묵은 답이 다음 턴에 남음) · 목록 정규식 과검출(평문 2줄을 목록으로) ·
+> updater 내 토스트·포커스(StrictMode 이중실행) · ESC deps의 `turnRunning` 누락.
+> 커밋 `0ceaa7e`. 관련 32건 + `tsc` clean.
+> 전체 `npm test`는 `slashService.models` 2건 실패로 중단 — 주입된 switcher를 우회해 실경로로 가서
+> 각 120초 timeout. 본 묶음 파일과 무관(그 파일은 `slashService.js`만 import)이라 별도 확인 중.
 
 > `todo.md` ③-6 문서 3건 완료. `PROMPT_IDE_CLI.md` §16의 S-5 기록이 사실과 달라 정정했다:
 > 10-04에 "동작한다"고 체크돼 있었으나 Shift+F 분기가 코드에 없었다. 검증 없이 체크된 항목은
