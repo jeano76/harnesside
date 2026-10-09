@@ -21,6 +21,7 @@
  */
 
 import React, { useMemo } from "react";
+import { useFollowTail } from "./useFollowTail.js";
 import { colorFor, tokenizeLine, type Language } from "../editor/highlight.js";
 // 인덴트 가이드 — 규칙은 `editor/indentRules.ts`, 렌더는 `editor/IndentGuides.tsx`.
 // FilePreview 와 **똑같은 방식**(코드 텍스트 안쪽, 상대 좌표)이라 두 화면의 선이 어긋나지 않는다.
@@ -53,6 +54,12 @@ export interface CodeBlockProps {
   /** 처음에 접혀 있을지. 기본 false — 결과를 보러 왔으므로 펴 둔다. */
   defaultCollapsed?: boolean;
   maxHeight?: number;
+  /**
+   * 스트리밍 따라가기 — 내용이 자랄 때 끝 근처에 있으면 끝으로 옮긴다.
+   * 작성 중인 코드(LiveDraft)처럼 토큰이 계속 붙는 보기에만 켠다. 정적인
+   * 출력에 켜도 해는 없지만, 의미 없는 prop 은 거짓말이므로 끄고 둔다.
+   */
+  autoScroll?: boolean;
 }
 
 export const FIRST_COLLAPSED_LINES = LAYOUT.FOLD_AT_LINES;
@@ -90,6 +97,7 @@ export function CodeBlock({
   summary,
   defaultCollapsed = false,
   maxHeight = LAYOUT.CODE_MAX_HEIGHT,
+  autoScroll = false,
 }: CodeBlockProps) {
   const [open, setOpen] = React.useState(!defaultCollapsed);
   const [copied, setCopied] = React.useState(false);
@@ -106,6 +114,9 @@ export function CodeBlock({
 
   const shown = canToggle && !open ? lines.slice(0, FIRST_COLLAPSED_LINES) : lines;
   const hidden = lines.length - shown.length;
+  // 스트리밍 중에는 끝을 따라간다 — 스크롤바가 생겨도 새 토큰이 보이게.
+  // 사용자가 위로 올리면 그때부터는 손대지 않는다(판정은 followTail.ts).
+  const follow = useFollowTail<HTMLPreElement>(autoScroll, text);
 
   return (
     <div style={{ margin: "4px 0 0", border: `1px solid ${COLOR.SURFACE_3}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1 }}>
@@ -176,6 +187,8 @@ export function CodeBlock({
         </div>
       )}
       <pre
+        ref={follow.ref}
+        onScroll={follow.onScroll}
         style={{
           margin: 0,
           padding: "4px 0",

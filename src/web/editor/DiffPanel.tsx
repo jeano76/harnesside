@@ -11,6 +11,7 @@
  */
 
 import React, { useMemo, useRef, useEffect } from "react";
+import { useFollowTail } from "../panels/useFollowTail.js";
 import { diffText, type DiffResult, type DiffLine } from "./diff.js";
 import { inlineSpans, statLabel, type DiffSource, type Span } from "./inline.js";
 
@@ -37,6 +38,12 @@ export interface DiffPanelProps {
   onClose?: () => void;
   width?: number;
   height?: number;
+  /**
+   * 스트리밍 따라가기 — 새 내용이 올 때 끝 근처에 있으면 끝으로 옮긴다.
+   * 작성 중인 파일의 실시간 diff(LiveDraft)에만 켠다. CodeBlock 의
+   * `autoScroll` 과 같은 규칙(판정은 followTail.ts).
+   */
+  autoScroll?: boolean;
 }
 
 const DEFAULT_LEFT: Record<DiffSource, string> = { file: "디스크", git: "HEAD", tool: "실행 전" };
@@ -55,11 +62,14 @@ export function DiffPanel(props: DiffPanelProps) {
     onClose,
     width = 1200,
     height = 520,
+    autoScroll = false,
   } = props;
 
   const mode = layout ?? (width < 900 ? "inline" : "side");
   const diff: DiffResult = useMemo(() => diffText(oldText, newText), [oldText, newText]);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // 스트리밍 diff 는 끝을 따라간다 — body ref 가 밖에 있어 훅에 넘긴다.
+  const follow = useFollowTail<HTMLDivElement>(autoScroll, newText, bodyRef);
 
   // Ctrl+Alt+D 로 전체 화면 (§5.2). 브라우저 기본 기능과 겹치지 않는 조합이고,
   // 포커스가 패널 밖이어도 창 단위로 동작해야 discovery 가 가능하다.
@@ -148,9 +158,9 @@ export function DiffPanel(props: DiffPanelProps) {
           두 내용이 같습니다. 차분이 없습니다.
         </div>
       ) : mode === "side" ? (
-        <SideBySide lines={lines} bodyRef={bodyRef} height={height} />
+        <SideBySide lines={lines} bodyRef={bodyRef} height={height} onBodyScroll={follow.onScroll} />
       ) : (
-        <InlineView lines={lines} bodyRef={bodyRef} height={height} />
+        <InlineView lines={lines} bodyRef={bodyRef} height={height} onBodyScroll={follow.onScroll} />
       )}
     </section>
   );
@@ -205,10 +215,12 @@ function SideBySide({
   lines,
   bodyRef,
   height,
+  onBodyScroll,
 }: {
   lines: DiffLine[];
   bodyRef: React.RefObject<HTMLDivElement>;
   height: number;
+  onBodyScroll?: () => void;
 }) {
   const pairs = pairIndex(lines);
   const left: DiffLine[] = [];
@@ -229,7 +241,7 @@ function SideBySide({
   });
 
   return (
-    <div ref={bodyRef} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", overflow: "auto", height, flex: "1 1 auto", minHeight: 0 }}>
+    <div ref={bodyRef} onScroll={onBodyScroll} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", overflow: "auto", height, flex: "1 1 auto", minHeight: 0 }}>
       <div>
         <div style={{ position: "sticky", top: 0, background: "#161b22", padding: "3px 8px", color: DIM, borderBottom: "1px solid #21262d" }}>
           이전
@@ -267,13 +279,15 @@ function InlineView({
   lines,
   bodyRef,
   height,
+  onBodyScroll,
 }: {
   lines: DiffLine[];
   bodyRef: React.RefObject<HTMLDivElement>;
   height: number;
+  onBodyScroll?: () => void;
 }) {
   return (
-    <div ref={bodyRef} style={{ overflow: "auto", height, flex: "1 1 auto", minHeight: 0 }}>
+    <div ref={bodyRef} onScroll={onBodyScroll} style={{ overflow: "auto", height, flex: "1 1 auto", minHeight: 0 }}>
       {lines.map((l, i) => {
         const c = KIND_COLOR[l.kind];
         return (

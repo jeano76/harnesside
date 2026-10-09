@@ -233,6 +233,9 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
  *   (`DiffPanel` — 기존 검토 화면과 같은 렌더러).
  * - 새 파일이면 **IDE 처럼**(색·줄번호·인덴트 가이드) `CodeBlock` 으로 한 줄씩 자란다.
  *
+ * 자라는 동안 끝을 따라간다(`autoScroll`) — 220px 을 넘겨 스크롤바가 생겨도
+ * 새 토큰이 보이는 곳에 있다. 사용자가 위로 올리면 그때부터는 손대지 않는다.
+ *
  * 완성되면 도구 블록이 그 자리를 잇는다(main.tsx 가 호출 완료 때 비운다).
  */
 function LiveDraft({ name, args, client }: { name: string; args: string; client?: ApiClient }) {
@@ -275,9 +278,10 @@ function LiveDraft({ name, args, client }: { name: string; args: string; client?
           layout="inline"
           width={900}
           height={220}
+          autoScroll
         />
       ) : (
-        <CodeBlock lang={lang} text={edit.predicted ?? (view.hasBody ? view.text : "")} lineNumbers maxHeight={220} />
+        <CodeBlock lang={lang} text={edit.predicted ?? (view.hasBody ? view.text : "")} lineNumbers maxHeight={220} autoScroll />
       )}
     </div>
   );
