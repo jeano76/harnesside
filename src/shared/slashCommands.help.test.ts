@@ -27,10 +27,16 @@ import {
   webSlashCommands,
   parseSlash,
   renderHelpText,
+  type SlashCommandDef,
 } from "./slashCommands.js";
+import { ko } from "../web/i18n/ko.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const mainSrc = readFileSync(join(here, "..", "web", "main.tsx"), "utf8");
+
+/** 테스트용 해석기 — 화면과 같은 카탈로그로 푼다. 없는 키는 키 자체(화면과 같은 규칙). */
+const tr = (key: string): string => ko[key] ?? key;
+const textOf = (all = SLASH_COMMANDS, web = webSlashCommands()): string => renderHelpText(all, web, tr);
 
 test("`/help` 는 웹에서 실행 가능하다 — 실행되는 곳이 없는 명령이면 안 된다", () => {
   const help = SLASH_COMMANDS.find((c) => c.key === "help");
@@ -56,8 +62,8 @@ test("`/help` 를 치면 실제로 도는지 — 미지원 문장이 뜨면 안 
 });
 
 test("목록을 그리는 규칙은 **한 곳에만** 있다 — 화면에 복제본이 있으면 조용히 뒤처진다", () => {
-  // help 분기는 순수 함수를 **호출만** 한다.
-  assert.match(mainSrc, /done\(renderHelpText\(\)\)/, "help 분기가 renderHelpText() 를 쓰지 않는다");
+  // help 분기는 순수 함수를 **호출만** 한다 — 카탈로그 해석기(t)를 넘겨 풀어 그린다.
+  assert.match(mainSrc, /done\(renderHelpText\(SLASH_COMMANDS, webSlashCommands\(\), t\)\)/, "help 분기가 renderHelpText(정본, 웹목록, t) 를 쓰지 않는다");
   // 목록 그리기(라벨 정렬·그룹)는 순수 함수 쪽에 있다. 화면에 같은 코드가 있으면
   // 두 벌이 되고 어느 쪽이 진짜인지 아무도 모른다(저장소 규칙 4).
   const helpBranch = mainSrc.slice(mainSrc.indexOf('key === "help"'), mainSrc.indexOf('key === "term"'));
@@ -72,19 +78,19 @@ test("목록을 그리는 규칙은 **한 곳에만** 있다 — 화면에 복�
 });
 
 test("**모든 웹 명령의 이름과 설명이 도움말에 나온다** — 없는 명령을 찾지 않게", () => {
-  const text = renderHelpText();
+  const text = textOf();
   // 정본이 비어 있으면 검사도 통과하므로, 최소 한 개는 있어야 한다.
   assert.ok(webSlashCommands().length > 0, "웹 명령 목록이 비었다");
   for (const c of webSlashCommands()) {
     assert.ok(text.includes(c.label), `도움말에 ${c.label} 이 없다 — 사용자가 있는 줄을 못 찾는다`);
-    assert.ok(text.includes(c.description), `${c.label} 의 설명이 없다`);
+    assert.ok(text.includes(ko[c.descriptionKey] ?? ""), `${c.label} 의 설명(${c.descriptionKey})이 없다`);
   }
 });
 
 test("TUI 전용 명령은 **숨기지 않고 왜 안 되는지 말한다**", () => {
   // 조용히 없는 척 하지 않는다(저장소 규칙). 목록에서 빠진 명령이 있으면
   // 그 사실과 이유를 한 줄로 말한다.
-  const text = renderHelpText();
+  const text = textOf();
   assert.match(text, /이 창에서는 쓸 수 없는 명령/, "TUI 전용 명령의 존재를 사용자에게 말하지 않는다");
   for (const c of SLASH_COMMANDS.filter((c) => c.where === "tui")) {
     assert.ok(text.includes(c.label), `${c.label}(웹에서 못 쓰는 명령)이 도움말에 이름조차 없다`);
@@ -92,8 +98,9 @@ test("TUI 전용 명령은 **숨기지 않고 왜 안 되는지 말한다**", ()
 });
 
 test("그룹에 못 넣은 명령이 생겨도 **'기타' 로 반드시 보인다** — 조용히 빠지지 않는다", () => {
-  const fake = [{ key: "brand-new", label: "/brand-new", description: "새 명령", where: "both" as const }];
-  const text = renderHelpText(fake, fake);
+  const fake: SlashCommandDef[] = [{ key: "brand-new", label: "/brand-new", descriptionKey: "test.brandNew", where: "both" }];
+  const fakeTr = (key: string): string => (key === "test.brandNew" ? "새 명령" : tr(key));
+  const text = renderHelpText(fake, fake, fakeTr);
   assert.match(text, /기타/, "그룹에 없는 명령이 '기타' 로도, 본문에라도 나타나야 한다");
   assert.ok(text.includes("/brand-new"), "새 명령이 도움말에서 사라졌다");
 });
@@ -106,4 +113,25 @@ test("`/keys` 는 **여전히 `tui`** — 키바인딩 정본이 없으면 지�
   // 키바인딩 정본이 실제로 삭제됐는지 확인한다(있으면 오히려 `both` 가 맞다).
   const gone = !readFileSync(join(here, "slashCommands.ts"), "utf8").includes("KEY_BINDINGS");
   assert.ok(gone, "키바인딩 정본이 사라졌다면 `/keys` 를 웹에 노출하면 안 된다");
+});
+
+test("정본의 설명 키는 **전부 사전에 있다** — 화면은 키로만 말한다", () => {
+  // `t(c.descriptionKey)` 는 동적 키라 배선 검사(리터럴 스캔)가 못 잡는다.
+  // 그래서 여기서 직접 고정한다: 키가 없으면 화면에 키 자체가 나온다.
+  const missing = SLASH_COMMANDS.map((c) => c.descriptionKey).filter((k) => !(k in ko));
+  assert.deepEqual(missing, [], `사전에 없는 설명 키: ${missing.join(", ")}`);
+  for (const k of [
+    "slash.help.intro",
+    "slash.help.group.dialog",
+    "slash.help.group.skills",
+    "slash.help.group.models",
+    "slash.help.group.cli",
+    "slash.help.group.meta",
+    "slash.help.other",
+    "slash.help.tuiNote",
+  ]) {
+    assert.ok(k in ko, `도움말 틀 키 누락: ${k}`);
+  }
+  // `tuiOnly` 는 카운트·라벨 자리표시자를 그대로 둔다 — 순서가 바뀌어도 풀린다.
+  assert.match(ko["slash.help.tuiOnly"] ?? "", /\{\{count\}\}.*\{\{labels\}\}/, "tuiOnly 자리표시자가 깨졌다");
 });

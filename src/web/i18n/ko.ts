@@ -285,8 +285,7 @@ export const ko: Catalog = {
   "prompt.suggest": "무엇을 고를까요?",
 
   // ── 슬래시 자동완성 설명 ──────────────────────────────────────────────────
-  "slash.cliNew": "같은 폴더에 이미 있어도 새 세션",
-  "slash.cliResume": "지난 대화 이어가기(확인된 CLI만)",
+  "slash.cliNew": "같은 폴더에 이미 있어도 새 세션",  "slash.cliResume": "지난 대화 이어가기(확인된 CLI만)",
   "slash.cliKill": "hs-… 세션 종료 (/cli kill <세션명> confirm)",
   "slash.confirmServer": "실행 중인 서버를 내렸다 올립니다(확정)",
   "slash.confirmReplace": "교체를 확정합니다(실행 중인 서버가 잠시 내려갑니다)",
@@ -313,6 +312,34 @@ export const ko: Catalog = {
   "slash.tip.models": "/models — 구동 가능한 로컬 모델\n이 PC의 VRAM·RAM 기준으로 모델별 구동 가능 여부(✅ VRAM / ⚠️ RAM 스트리밍 / ❌)를 표로 보여줍니다.\n선택: 입력창에 /models <번호>. 실행 중인 서버를 바꾸려면 /models <번호> confirm 이 필요합니다(서버가 잠시 내려갑니다).",
   "slash.tip.server": "/server — 모델 서버 상태\n지금 떠 있는 llama-server의 포트·모델·빌드와 재시작 시 계획을 보여줍니다.\n재시작: 입력창에 /server restart (변경 내용 미리보기) → /server restart confirm 으로 확정. 확정하면 실행 중인 서버를 내렸다 올립니다.\n캘리브레이션: /server calibrate 는 지금 실제로 남은 VRAM과 모델 헤더(KV 비용·레이어 수)를 읽어 -ngl·컨텍스트·--n-cpu-moe·KV 캐시·스레드를 다시 계산합니다. 산술 추정 대신 실측 기준이라, 계산이 틀린 값(예: -ngl 999 → 32)을 잡아냅니다. 미리보기 → /server calibrate confirm 으로 적용하며, 새 설정으로 뜨지 않으면 예전 설정으로 되돌립니다.",
   "slash.tip.reset": "/reset — 설정 초기화\n현재 GPU·VRAM·RAM에 맞게 컨텍스트·스레드·오프로드 등 llama 설정을 다시 계산합니다.\n그냥 실행하면 미리보기만 하며 아무것도 바꾸지 않습니다. 적용은 /reset confirm (설정 파일을 덮어쓰며, 실행 중인 서버에는 /server restart 로 따로 반영).",
+
+  // ── 슬래시 명령 설명 (정본 shared/slashCommands.ts의 descriptionKey · M9 묶음4b) ─
+  "slash.desc.help": "이 프로그램의 명령 목록",
+  "slash.desc.keys": "키보드 단축키만 보기",
+  "slash.desc.quit": "정상종료 (창을 닫으면 함께 종료)",
+  "slash.desc.queue": "대기열 보기",
+  "slash.desc.compact": "지금 컨텍스트 압축 실행",
+  "slash.desc.copy": "화면 로그 복사 — /copy 20 처럼 줄 수 지정 (드래그 선택과 같은 클립보드)",
+  "slash.desc.skills": "불러온 스킬 목록",
+  "slash.desc.rules": "불러온 룰 목록",
+  "slash.desc.improve": "반복 실패 분석 → 룰 제안",
+  "slash.desc.improve-apply": "마지막 제안을 룰 파일로 저장",
+  "slash.desc.plan-clear": "멈춘 계획 표시 초기화",
+  "slash.desc.term": "감지된 터미널과 지원 기능 상태 ",
+  "slash.desc.mouse": "마우스 스크롤/클릭 켜기·끄기",
+  "slash.desc.cli": "AI CLI(claude·gemini·codex)를 tmux 탭으로 열기 · 목록 · 종료",
+  "slash.desc.models": "이 PC에서 구동 가능한 로컬 모델 메트릭스 · 선택",
+  "slash.desc.server": "모델 제공 서버 상태 확인 · restart 로 재시작(확인 후)",
+  "slash.desc.reset": "현재 GPU·VRAM·RAM에 맞는 모델/설정으로 다시 초기화",
+  "slash.help.intro": "harnesside 명령 — 입력창에 `/` 를 치면 자동완성됩니다. 인자가 필요하면 뒤에 공백을 두세요.",
+  "slash.help.group.dialog": "대화 · 컨텍스트",
+  "slash.help.group.skills": "규칙 · 스킬 · 자기개선",
+  "slash.help.group.models": "모델 · 서버",
+  "slash.help.group.cli": "터미널 · AI CLI",
+  "slash.help.group.meta": "안내 · 종료",
+  "slash.help.other": "기타",
+  "slash.help.tuiOnly": "이 창에서는 쓸 수 없는 명령 {{count}}개: {{labels}}",
+  "slash.help.tuiNote": "  — 콘솔(TUI) 전용이며 그 UI는 2026-10-04 에 삭제되었습니다.",
 
   // ── 슬래시 실행 보고서 (대화 안 블록 · M9 묶음4a) ──────────────────────────
   // `runSlash` 본문이다. 구조(padEnd·합치기)는 화면에 두고 고정 문구만 키로 뺀다.

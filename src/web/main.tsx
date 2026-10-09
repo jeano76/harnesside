@@ -36,7 +36,7 @@ import { MonitorStrip } from "./panels/MonitorPanel.js";
 import { EditorView } from "./editor/EditorView.js";
 import { dispatchWs } from "./wsBus.js";
 import { TerminalView } from "./panels/TerminalView.js";
-import { parseSlash, renderHelpText, slashMatches, webSlashCommands } from "../shared/slashCommands.js";
+import { parseSlash, renderHelpText, slashMatches, webSlashCommands, SLASH_COMMANDS } from "../shared/slashCommands.js";
 import { CLI_PROVIDERS, CLI_SUBCOMMANDS } from "../shared/cliProviders.js";
 import { describeBootFailure } from "../shared/bootFailure.js";
 import { CommitBox } from "./panels/CommitBox.js";
@@ -566,7 +566,7 @@ export default function App() {
     const typed = draft.slice(1).toLowerCase();
     return slashMatches(draft).filter((c) => web.has(c.key)).sort((a, b) => Number(b.key.startsWith(typed)) - Number(a.key.startsWith(typed))).map((c) => ({
       fill: `/${c.key}${c.key === "models" || c.key === "server" || c.key === "reset" || c.key === "cli" ? " " : ""}`,
-      exact: `/${c.key}`, label: c.label, description: c.description, tip: SLASH_TIP_KEYS[c.key] ? t(SLASH_TIP_KEYS[c.key]) : undefined,
+      exact: `/${c.key}`, label: c.label, description: t(c.descriptionKey), tip: SLASH_TIP_KEYS[c.key] ? t(SLASH_TIP_KEYS[c.key]) : undefined,
     }));
   }, [draft, cliInstalled, toCli, cliCmds, t]);
   const slashOpen = slashItems.length > 0 && !slashHidden;
@@ -735,7 +735,9 @@ export default function App() {
         // 새 명령이 조용히 한쪽만 빠진다. 이 저장소에서 가장 많이 기록된 실패 유형이다.
         // (브라우저 실측이 필요해서라고 여기서 그렸던 버전을 2026-10-04 에 되돌렸다 —
         //  출력물을 검사할 수 없다는 이유로 규칙을 복제하는 건 순서가 반대다.)
-        done(renderHelpText());
+        // 설명 본문은 카탈로그(`slash.desc.*`·`slash.help.*`)에서 풀어 그린다 — 정본의
+        // 키 목록은 그대로 읽는다(같은 일을 두 곳에 두지 않는다).
+        done(renderHelpText(SLASH_COMMANDS, webSlashCommands(), t));
       } else if (key === "term") {
         const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
         done([
