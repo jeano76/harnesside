@@ -245,3 +245,125 @@ export async function isMoeModel(opts: { path?: string; activeParamB?: number; f
   if (opts.filename && /-A\d+B(?:[-_.]|$)/i.test(opts.filename)) return true;
   return undefined;
 }
+
+/**
+ * A GGUF file's identity, read from its own header — for recognising the SAME
+ * weights republished under a different filename.
+ *
+ * Filename + byte size stopped being an identity when the publisher renamed
+ * `Ornith-1.5-35B-A3B-Q4_K_M.gguf` to `Ornith-1.5-35B-Q4_K_M.gguf` and re-cut
+ * the quant mix (same 753 tensors, same hyper-parameters, 150 MB lighter):
+ * the name disagreed AND the size disagreed, so the machine re-downloaded
+ * 21.7 GB of weights it already had. The header does not lie about what the
+ * weights ARE — architecture, layer counts, head counts, expert counts and
+ * tensor count are identical if and only if the model is the same model.
+ *
+ * Deliberately NOT the tensor bytes: hashing 20 GB at every launch costs a
+ * minute to prove what the header already says, and a header match with a
+ * close size is conclusive enough to reuse (the residual risk — same shapes,
+ * different data — is logged loudly at the reuse site, never silent).
+ */
+export interface GgufFingerprint {
+  arch: string;
+  blockCount?: number;
+  embeddingLength?: number;
+  headCount?: number;
+  kvHeads?: number;
+  expertCount?: number;
+  expertUsedCount?: number;
+  feedForwardLength?: number;
+  contextLength?: number;
+  /** Tensors declared in the header. A re-cut keeps the count; a new revision rarely does. */
+  tensorCount?: number;
+  /** True only when the header parsed far enough to be sure of the answer. */
+  conclusive: boolean;
+}
+
+/** The header (magic, version, tensor count) plus every pre-tokenizer key, or null. Never throws. */
+export async function readGgufHeader(path: string, headBytes = 4 * 1024 * 1024): Promise<{ tensorCount: number; keys: Record<string, number | string | number[]> } | null> {
+  let fh;
+  try {
+    fh = await open(path, "r");
+    const buf = Buffer.alloc(headBytes);
+    const { bytesRead } = await fh.read(buf, 0, headBytes, 0);
+    const head = buf.subarray(0, bytesRead);
+    if (head.length < 24 || head.toString("latin1", 0, 4) !== "GGUF") return null;
+    const r = new Reader(head as Buffer);
+    r.off = 4;
+    if (r.u32() < 2) return null;
+    const tensorCount = r.u64();
+    r.u64(); // kv count — parseGgufKeys re-reads it
+    const keys = parseGgufKeys(head as Buffer);
+    return keys ? { tensorCount, keys } : null;
+  } catch {
+    return null;
+  } finally {
+    await fh?.close().catch(() => {});
+  }
+}
+
+const fnum = (keys: Record<string, number | string | number[]>, arch: string, name: string): number | undefined => {
+  const v = keys[`${arch}.${name}`];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+};
+
+/** Pure: the fingerprint of already-parsed header keys. */
+export function fingerprintFromKeys(
+  keys: Record<string, number | string | number[]>,
+  tensorCount?: number
+): GgufFingerprint {
+  const arch = typeof keys["general.architecture"] === "string" ? (keys["general.architecture"] as string) : undefined;
+  if (!arch) return { arch: "", conclusive: false };
+  const kvRaw = keys[`${arch}.attention.head_count_kv`];
+  const kvHeads = Array.isArray(kvRaw) ? undefined : fnum(keys, arch, "attention.head_count_kv");
+  return {
+    arch,
+    blockCount: fnum(keys, arch, "block_count"),
+    embeddingLength: fnum(keys, arch, "embedding_length"),
+    headCount: fnum(keys, arch, "attention.head_count"),
+    kvHeads,
+    expertCount: fnum(keys, arch, "expert_count"),
+    expertUsedCount: fnum(keys, arch, "expert_used_count"),
+    feedForwardLength: fnum(keys, arch, "feed_forward_length") ?? fnum(keys, arch, "expert_feed_forward_length"),
+    contextLength: fnum(keys, arch, "context_length"),
+    tensorCount,
+    conclusive: true,
+  };
+}
+
+/** Reads the head of `path` and returns its fingerprint. Never throws. */
+export async function readGgufFingerprint(path: string): Promise<GgufFingerprint> {
+  const h = await readGgufHeader(path);
+  if (!h) return { arch: "", conclusive: false };
+  return fingerprintFromKeys(h.keys, h.tensorCount);
+}
+
+function fnumEq(a: number | undefined, b: number | undefined): boolean {
+  // A field present on one side only is "unknown", not "different": old files
+  // predate some keys, and refusing on that would un-reuse every legacy model.
+  // arch, blockCount and tensorCount are always present on a real file, so a
+  // same-weights verdict still rests on hard fields.
+  if (a === undefined || b === undefined) return true;
+  return a === b;
+}
+
+/**
+ * True when two fingerprints describe the same weights: same architecture and
+ * every hard shape field equal. A missing optional field never vetoes (see
+ * fnumEq); a missing arch or block count means "cannot tell" → false.
+ */
+export function sameFingerprint(a: GgufFingerprint, b: GgufFingerprint): boolean {
+  if (!a.conclusive || !b.conclusive || !a.arch || a.arch !== b.arch) return false;
+  if (a.blockCount === undefined || b.blockCount === undefined) return false;
+  return (
+    fnumEq(a.blockCount, b.blockCount) &&
+    fnumEq(a.embeddingLength, b.embeddingLength) &&
+    fnumEq(a.headCount, b.headCount) &&
+    fnumEq(a.kvHeads, b.kvHeads) &&
+    fnumEq(a.expertCount, b.expertCount) &&
+    fnumEq(a.expertUsedCount, b.expertUsedCount) &&
+    fnumEq(a.feedForwardLength, b.feedForwardLength) &&
+    fnumEq(a.contextLength, b.contextLength) &&
+    fnumEq(a.tensorCount, b.tensorCount)
+  );
+}

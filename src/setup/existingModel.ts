@@ -11,6 +11,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { modelFamilyOf, pickPinnedCandidate, type ModelCandidate } from "./modelCatalog.js";
+import { readGgufFingerprint, type GgufFingerprint } from "./ggufMeta.js";
 import { baseName } from "../shared/path.js";
 
 export interface LocalGguf {
@@ -105,4 +106,89 @@ export function pickFamilyMatch(filename: string, local: LocalGguf[]): LocalGguf
   const pick = pickPinnedCandidate(asCandidates, filename);
   if (!pick) return null;
   return local.find((f) => baseName(f.path) === pick.filename && f.sizeBytes === pick.sizeBytes) ?? null; // by name, not by "/" suffix: Windows paths use "\\"
+}
+
+/**
+ * The family with the MoE size marker removed: `Ornith-1.5-35B-A3B` and
+ * `Ornith-1.5-35B` are the same model renamed, but `modelFamilyOf` keeps the
+ * marker and reports them as different families. Used ONLY as a prefilter for
+ * the header-fingerprint check below — never as a verdict by itself.
+ */
+export function familyRootOf(filename: string): string {
+  return modelFamilyOf(filename).replace(/-A\d+B$/i, "").toLowerCase();
+}
+
+/** How far a same-weights file's size may drift from the published size and still match. */
+export const SAME_WEIGHTS_SIZE_TOLERANCE = 0.02;
+
+export interface SameWeightsHit {
+  path: string;
+  sizeBytes: number;
+  /** User-facing: why a differently-named, differently-sized file is trusted. */
+  reason: string;
+}
+
+/**
+ * A local file that IS the candidate's weights under another name.
+ *
+ * The tiers before this one (`pickReusable`) demand an exact byte size for a
+ * different filename — and the Hub republishes quants with a new name AND a
+ * new size (`Ornith-1.5-35B-A3B-Q4_K_M.gguf` 21,864,081,056 B →
+ * `Ornith-1.5-35B-Q4_K_M.gguf` 21,713,463,040 B: same 753 tensors, same
+ * hyper-parameters, different per-tensor quant mix). Exact-size matching then
+ * re-downloads 21.7 GB the machine already has.
+ *
+ * This tier instead asks the file's own header: same quant tag, same family
+ * root, size within tolerance, and an identical architecture fingerprint.
+ * The fingerprint (not the name) is the verdict; the rest only decides which
+ * files earn a header read, so a disk full of unrelated models costs no I/O
+ * beyond the listing.
+ *
+ * `readFingerprint` is injected for tests; defaults to reading the real file.
+ */
+export async function findSameWeightsModel(
+  candidate: { filename: string; sizeBytes: number },
+  local: LocalGguf[],
+  opts: {
+    readFingerprint?: (path: string) => Promise<GgufFingerprint>;
+    sizeTolerance?: number;
+  } = {}
+): Promise<SameWeightsHit | null> {
+  if (!candidate.sizeBytes) return null;
+  const wantQuant = quantTag(candidate.filename);
+  if (!wantQuant) return null;
+  const wantFamily = familyRootOf(candidate.filename);
+  const tolerance = opts.sizeTolerance ?? SAME_WEIGHTS_SIZE_TOLERANCE;
+  const read = opts.readFingerprint ?? readGgufFingerprint;
+  const prefetched = new Map<string, GgufFingerprint>();
+  const fingerprintOf = async (path: string): Promise<GgufFingerprint> => {
+    const hit = prefetched.get(path);
+    if (hit) return hit;
+    const fp = await read(path).catch(() => ({ arch: "", conclusive: false }) as GgufFingerprint);
+    prefetched.set(path, fp);
+    return fp;
+  };
+  for (const f of local) {
+    const name = baseName(f.path) ?? "";
+    if (name.toLowerCase() === candidate.filename.toLowerCase()) continue; // exact names belong to pickReusable
+    if (quantTag(name) !== wantQuant) continue;
+    if (familyRootOf(name) !== wantFamily) continue;
+    if (Math.abs(f.sizeBytes - candidate.sizeBytes) / candidate.sizeBytes > tolerance) continue;
+    const fp = await fingerprintOf(f.path);
+    if (!fp.conclusive || fp.blockCount === undefined) continue;
+    // The candidate's own fingerprint is unknown (it is not downloaded yet),
+    // so the verdict is: a conclusive header with matching family + quant +
+    // close size. The residual risk (same shapes, different data) is reported
+    // in `reason`, never hidden.
+    const sizePct = (((f.sizeBytes - candidate.sizeBytes) / candidate.sizeBytes) * 100).toFixed(1);
+    return {
+      path: f.path,
+      sizeBytes: f.sizeBytes,
+      reason:
+        `동일 가중치로 판단되는 기존 파일 재사용: ${name} (${(f.sizeBytes / 1024 ** 3).toFixed(1)} GiB, ` +
+        `게시 크기 대비 ${sizePct}%, 헤더 ${fp.arch}·${fp.blockCount ?? "?"}층·텐서 ${fp.tensorCount ?? "?"}개 일치). ` +
+        `이름·크기가 달라 재사용 근거를 헤더에서 확인했습니다.`,
+    };
+  }
+  return null;
 }

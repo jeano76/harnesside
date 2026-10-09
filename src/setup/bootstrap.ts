@@ -40,7 +40,7 @@ import { isMoeModel, readGgufKvShape } from "./ggufMeta.js";
 import { normalizeSha256, fileMatchesSha256 } from "./checksum.js";
 import { downloadFile, formatProgress, type TransferProgress } from "./download.js";
 import { selectModelPath, hasRoom, RESERVE_BYTES } from "./disk.js";
-import { scanModels, pickReusable } from "./existingModel.js";
+import { scanModels, pickReusable, findSameWeightsModel } from "./existingModel.js";
 import { discoverRunningServer, modelLoadBudgetMs, type Discovery } from "../backend/detect.js";
 import { rm } from "node:fs/promises";
 import { join as pathJoin } from "node:path";
@@ -1071,7 +1071,10 @@ export async function findModelAnywhere(
   const local = listExistingModels
     ? (await Promise.all(all.map((d) => listExistingModels(d).catch(() => [])))).flat()
     : await scanModels(all);
-  return pickReusable(candidate, local)?.path ?? null;
+  const exact = pickReusable(candidate, local)?.path ?? null;
+  if (exact) return exact;
+  // 이름·크기가 달라도 헤더가 같은 가중치면 재사용한다 (findSameWeightsModel 주석 참고).
+  return (await findSameWeightsModel(candidate, local))?.path ?? null;
 }
 
 async function listGgufsIn(dir: string): Promise<{ path: string; sizeBytes: number }[]> {
