@@ -617,7 +617,7 @@ export default function App() {
       setBlocks((prev) => addSlash(prev, qid, key, at));
       if (!armed) {
         quitArmedAt.current = at;
-        setBlocks((prev) => finishSlash(prev, qid, "정상종료합니다 — 체크포인트와 세션을 저장한 뒤 서버가 꺼집니다.\n정말 종료하려면 15초 안에 /quit 를 한 번 더 누르세요.", true));
+        setBlocks((prev) => finishSlash(prev, qid, t("slash.report.quitArm"), true));
         return;
       }
       quitArmedAt.current = 0;
@@ -655,18 +655,18 @@ export default function App() {
     try {
       if (key === "queue") {
         const r = await client.get<{ items: string[] }>("/api/agent/queue");
-        done(r.items.length ? `Queue (${r.items.length}):\n${r.items.map((q, i) => `${i + 1}. ${q}`).join("\n")}` : "The queue is empty.");
+        done(r.items.length ? `${t("slash.report.queueTitle", { count: r.items.length })}\n${r.items.map((q, i) => t("slash.report.queueItem", { n: i + 1, text: q })).join("\n")}` : t("slash.report.queueEmpty"));
       } else if (key === "skills") {
         const r = await client.get<{ skills: { name: string; trigger: string }[] }>("/api/agent/context-files");
-        done(r.skills.length ? `Loaded skills:\n${r.skills.map((x) => `- ${x.name}: ${x.trigger}`).join("\n")}` : "No skills registered (.harnesside/skills/*.md).");
+        done(r.skills.length ? `${t("slash.report.skillsTitle")}\n${r.skills.map((x) => t("slash.report.skillItem", { name: x.name, trigger: x.trigger })).join("\n")}` : t("slash.report.skillsEmpty"));
       } else if (key === "rules") {
         const r = await client.get<{ rules: { path: string }[] }>("/api/agent/context-files");
-        done(r.rules.length ? `Loaded rules:\n${r.rules.map((x) => `- ${x.path}`).join("\n")}` : "No rules applied (.harnesside/rules/ or .clinerules).");
+        done(r.rules.length ? `${t("slash.report.rulesTitle")}\n${r.rules.map((x) => t("slash.report.ruleItem", { path: x.path })).join("\n")}` : t("slash.report.rulesEmpty"));
       } else if (key === "improve") {
         const r = await client.post<{ ok: boolean; detail: string; proposal: { summary: string; ruleMarkdown: string } | null }>("/api/agent/improve", {});
         done(
           r.proposal
-            ? [`[self-improvement proposal] ${r.proposal.summary}`, "", r.proposal.ruleMarkdown, "", "Run /improve-apply to apply it (nothing is written to disk until you do)."].join("\n")
+            ? [t("slash.report.improveTitle", { summary: r.proposal.summary }), "", r.proposal.ruleMarkdown, "", t("slash.report.improveApplyHint")].join("\n")
             : r.detail,
           r.ok
         );
@@ -681,37 +681,37 @@ export default function App() {
           try { last = localStorage.getItem("harnesside.cli.last") ?? ""; } catch { /* 기억 못 해도 동작한다 */ }
           const order = [...st.providers].sort((a, b) => (a.id === last ? -1 : b.id === last ? 1 : 0));
           done([
-            `tmux: ${st.tmux.installed ? `${st.tmux.version ?? "?"} (소켓 ${st.tmux.socket ?? "기본"})` : "없음 — sudo apt install tmux"}`,
+            t("slash.report.cliTmux", { status: st.tmux.installed ? t("slash.report.cliTmuxOn", { version: st.tmux.version ?? "?", socket: st.tmux.socket ?? t("slash.report.cliTmuxSockDefault") }) : t("slash.report.cliTmuxOff") }),
             "",
             "CLI",
-            ...order.map((p) => `  ${p.id.padEnd(7)} ${p.label.padEnd(14)} ${p.installed === true ? `✅ 설치됨${p.version ? ` (${p.version})` : ""}` : p.installed === false ? `❌ 설치 안 됨 — ${p.installHint}` : "❔ 확인하지 못함(시간 초과)"}${p.id === last ? "  ← 마지막 선택" : ""}`),
+            ...order.map((p) => `  ${p.id.padEnd(7)} ${p.label.padEnd(14)} ${p.installed === true ? t("slash.report.cliInstalled", { version: p.version ? t("slash.report.cliInstalledVer", { version: p.version }) : "" }) : p.installed === false ? t("slash.report.cliNotInstalled", { hint: p.installHint }) : t("slash.report.cliUnchecked")}${p.id === last ? t("slash.report.cliLastPick") : ""}`),
             "",
-            ss.sessions.length ? "살아 있는 세션 (hs-*)" : "살아 있는 세션이 없습니다.",
-            ...ss.sessions.map((x) => `  ${x.name}  ${x.dead ? `종료됨(코드 ${x.exitCode ?? "?"})` : `실행 중 · 붙은 창 ${x.attachedClients}`}  ${x.cwd}\n    외부에서 붙기: tmux${ss.socket ? ` -L ${ss.socket}` : ""} attach -t ${x.name}`),
+            ss.sessions.length ? t("slash.report.cliSessionsAlive") : t("slash.report.cliSessionsEmpty"),
+            ...ss.sessions.map((x) => `  ${x.name}  ${x.dead ? t("slash.report.cliSessDead", { code: x.exitCode ?? "?" }) : t("slash.report.cliSessAlive", { count: x.attachedClients })}  ${x.cwd}\n    ${t("slash.report.cliAttach", { cmd: `tmux${ss.socket ? ` -L ${ss.socket}` : ""} attach -t ${x.name}` })}`),
             "",
-            "열기: /cli claude · /cli gemini · /cli codex · /cli shell   (새 세션 /cli claude new · 이어가기 /cli claude resume)",
-            "종료: /cli kill <세션명> confirm",
+            t("slash.report.cliOpenHelp"),
+            t("slash.report.cliKillHelp"),
           ].join("\n"));
         } else if (toks[0] === "kill") {
           const name = toks[1] ?? "";
-          if (!name) return done("사용법: /cli kill <세션명> [confirm]", false);
+          if (!name) return done(t("slash.report.cliKillUsage"), false);
           const r = await client.post<{ ok: boolean; detail: string }>(`/api/cli/sessions/${encodeURIComponent(name)}/kill`, { confirm: toks[2] === "confirm" });
           done(r.detail, r.ok || toks[2] !== "confirm");
         } else {
           const provider = toks[0]!;
           const sub = toks[1];
-          if (sub && sub !== "new" && sub !== "resume") return done(`알 수 없는 옵션입니다: ${sub} (new · resume)`, false);
+          if (sub && sub !== "new" && sub !== "resume") return done(t("slash.report.cliUnknownSub", { sub }), false);
           const r = await client.post<{ sessionName: string; reused: boolean; attachCommand: string; session: { title: string; cwd: string }; notes: string[] }>("/api/cli/sessions", { provider, forceNew: sub === "new", resume: sub === "resume" });
           try { localStorage.setItem("harnesside.cli.last", provider); } catch { /* 무시 */ }
           // 이미 열린 세션에 다시 붙은 경우엔 `terminal.open` 이 오지 않는다 — 직접 그 탭을 띄우고 대상을 맞춘다.
           setFocusReq({ n: Date.now(), session: r.session });
           setPromptTo("cli");
           done([
-            `${r.session.title} 탭을 ${r.reused ? "다시 붙였습니다 (살아 있는 세션)" : "열었습니다"} — 메시지창 자리에 터미널이 떴습니다.`,
-            `  세션 ${r.sessionName} · 폴더 ${r.session.cwd}`,
-            `  외부에서 붙기: ${r.attachCommand}`,
-            "  탭을 닫아도 CLI 는 계속 실행됩니다. 이 탭의 작업은 harnesside 승인 게이트 밖에서 실행됩니다.",
-            ...r.notes.map((n) => `  ! ${n}`),
+            t("slash.report.cliOpened", { title: r.session.title, how: r.reused ? t("slash.report.cliHowReused") : t("slash.report.cliHowNew") }),
+            t("slash.report.cliSessLine", { name: r.sessionName, cwd: r.session.cwd }),
+            `  ${t("slash.report.cliAttach", { cmd: r.attachCommand })}`,
+            t("slash.report.cliKeepAlive"),
+            ...r.notes.map((n) => t("slash.report.cliNote", { note: n })),
           ].join("\n"));
         }
       } else if (key === "models" || key === "server" || key === "reset") {
@@ -739,15 +739,15 @@ export default function App() {
       } else if (key === "term") {
         const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
         done([
-          `창          : 웹 브라우저 (콘솔 터미널이 아님)`,
-          `브라우저    : ${navigator.userAgent}`,
-          `플랫폼      : ${nav.userAgentData?.platform ?? navigator.platform}`,
-          `화면        : ${window.innerWidth}×${window.innerHeight}px · 배율 ${window.devicePixelRatio} · 색 ${screen.colorDepth}bit`,
-          `유니코드    : 켜짐 (브라우저 렌더링)`,
-          `마우스      : 항상 켜짐`,
-          `클립보드    : ${typeof navigator.clipboard?.writeText === "function" ? "사용 가능" : "사용 불가 (https/localhost 필요)"}`,
+          t("slash.report.termWindow"),
+          t("slash.report.termBrowser", { ua: navigator.userAgent }),
+          t("slash.report.termPlatform", { platform: nav.userAgentData?.platform ?? navigator.platform }),
+          t("slash.report.termScreen", { w: window.innerWidth, h: window.innerHeight, ratio: window.devicePixelRatio, depth: screen.colorDepth }),
+          t("slash.report.termUnicode"),
+          t("slash.report.termMouse"),
+          t("slash.report.termClipboard", { status: typeof navigator.clipboard?.writeText === "function" ? t("slash.report.termClipboardOn") : t("slash.report.termClipboardOff") }),
           "",
-          "콘솔(TUI)의 제어문자·대체화면·동기화 출력 같은 항목은 웹 창에는 해당이 없습니다.",
+          t("slash.report.termFooter"),
         ].join("\n"));
       } else {
         const path = { compact: "/api/agent/compact", "improve-apply": "/api/agent/improve/apply", "plan-clear": "/api/agent/plan/clear" }[key];
