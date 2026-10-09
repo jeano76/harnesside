@@ -14,10 +14,10 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: M9 묶음4 완료 (4a slash 보고서·4b slash 설명·4c think 안내) — slashService.models 실패 확인 남음
+phase: 게이트 수리 중 (slashService.models 주입 이음매 완료) — 전체 재측정 남음
 status: in_progress
-last_commit: "af74691 feat(i18n): M9 묶음4c — think 예산 안내 카탈로그 전환"
-next_action: "slashService.models 2건 실패 원인 규명 (주입 switcher 우회·각 120초) — 전체 게이트 차단 중"
+last_commit: "d04455a fix(server): /models 준비(빌드·다운로드) 주입 이음매"
+next_action: "전체 npm test 재측정 (이전 30분 hang + 2건 실패 후)"
 blocking: 없음
 ```
 
@@ -95,6 +95,17 @@ wiring 검사가 잡았다(스스로 증명하지 않는 검사가 아님). 전�
 > - **4c** (`af74691`): `thinkNotice`가 키+vars 반환으로(판정은 로직, 본문은 `think.notice.*` 6키).
 >   `ThinkIndicator`는 그 자리에서 풂. 6종 IDENTICAL · think+wiring 49/49.
 > 범위 밖으로 기록: `models`/`server`/`reset`의 `job.text`는 서버 생성이라 웹 묶음 밖.
+
+## 2026-10-09 · 게이트 차단 결함 (`slashService.models` 실다운로드)
+
+> 전체 `npm test`가 30분째 출력 없이 멈춰 있어 뜯어보니, `slashService.models` 2건이
+> 각 120초 타임아웃이었다. `switchServer`·`reportServer`는 주입돼 있었는데
+> `provisionForSwitch`(빌드·다운로드)가 직접 호출돼, 존재하지 않는 픽스처 모델을
+> **진짜로 내려받았다**(5.4 GiB · 2.8 MB/s · 23:57 남음 실측).
+> 테스트 머리말의 "진짜 서버를 건드리지 않는다"는 서버 프로세스에 대해서만 참이었고
+> 네트워크·디스크에는 닿고 있었다. `provision` 주입 이음매를 추가하고(기본값 그대로)
+> 테스트는 없는 파일 경로를 돌려줘 측정이 fast-fail 로 끝나게 했다.
+> 커밋 `d04455a`. 4/4 (2.9초) · `tsc` clean.
 
 ## 2026-10-09 · UX 묶음 (clear·다중선택 제안·ESC)
 
