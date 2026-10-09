@@ -14,10 +14,10 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: UX 묶음(clear·다중선택 제안·ESC) 완료 — M9 묶음4 남음
+phase: M9 묶음4 완료 (4a slash 보고서·4b slash 설명·4c think 안내) — slashService.models 실패 확인 남음
 status: in_progress
-last_commit: "0ceaa7e feat(agent,web): clear 초기화·다중선택 제안·ESC 중단 + 미커밋 결함 수리"
-next_action: "M9 묶음4 (slash 실행 보고서 본문 약 20줄 + shared/slashCommands 설명 + think.ts 안내문) — 셋 다 대화 콘텐츠라 별도 묶음"
+last_commit: "af74691 feat(i18n): M9 묶음4c — think 예산 안내 카탈로그 전환"
+next_action: "slashService.models 2건 실패 원인 규명 (주입 switcher 우회·각 120초) — 전체 게이트 차단 중"
 blocking: 없음
 ```
 
@@ -83,6 +83,18 @@ wiring 검사가 잡았다(스스로 증명하지 않는 검사가 아님). 전�
 > `SLASH_TIPS`는 키 맵으로, `Command.category`는 영문 union으로.
 > slash 실행 보고서 본문은 묶음4로 남김(대화 콘텐츠). 렌더 텍스트 동일 — 화면 동작 변경 없음.
 > 커밋 `c883d2c`. 다음: M9 묶음4 (slash 보고서 본문 + slashCommands 설명 + think.ts 안내문).
+
+## 2026-10-09 · M9 묶음4 (slash 보고서·slash 설명·think 안내 카탈로그 전환)
+
+> 대화 콘텐츠라 별도 묶음으로 나눠 셋으로 했다. 셋 다 렌더 텍스트 동일(바이트 대조).
+> - **4a** (`fa80548`): `runSlash` 보고서 본문 → `slash.report.*` 40키. 구조(padEnd·합치기)는
+>   화면에, 고정 문구만 카탈로그로. 36종 바이트 대조 IDENTICAL · wiring+help+slash 14/14.
+> - **4b** (`abd7238`): `SLASH_COMMANDS.description` → `descriptionKey`(본문은 `slash.desc.*`에
+>   하나만) · `HELP_GROUPS` 제목·intro·기타·TUI 꼬리표 → `slash.help.*`,
+>   `renderHelpText`는 `tr` 주입으로 품. 신구 도움말 출력 IDENTICAL(28줄) · 20/20.
+> - **4c** (`af74691`): `thinkNotice`가 키+vars 반환으로(판정은 로직, 본문은 `think.notice.*` 6키).
+>   `ThinkIndicator`는 그 자리에서 풂. 6종 IDENTICAL · think+wiring 49/49.
+> 범위 밖으로 기록: `models`/`server`/`reset`의 `job.text`는 서버 생성이라 웹 묶음 밖.
 
 ## 2026-10-09 · UX 묶음 (clear·다중선택 제안·ESC)
 
