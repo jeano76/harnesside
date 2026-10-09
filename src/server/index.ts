@@ -24,7 +24,7 @@ import { resolveBrowserIntent } from "./browserIntent.js";
 import { acquireInstanceLock, type InstanceLock } from "./bootstrap.js";
 import { portOwner } from "../instanceGuard.js";
 import { HttpServer, readBody, clampInt } from "./httpServer.js";
-import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, type DaemonMode } from "./daemon.js";
+import { defaultPaths, initDaemonLogging, clearInstance, writeInstance, announcePortFile, type DaemonMode } from "./daemon.js";
 import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
 import { safeListDir, safeReadFile, safeWriteFile, safeResolve } from "../fs/safePath.js";
@@ -1530,7 +1530,9 @@ const updates: UpdateService = new UpdateService({
               treeSha256: marker.treeSha256,
               // ── R-6.2: 없는 걸 있다고 말하지 않는다 ────────────────────────
               // 이 서버는 **자기 자신을 재시작할 수 없다.** 재기동·부팅 확인·자동
-              // 롤백은 **상위 감시기(supervisor)** 가 해야 하고, 지금은 없다.
+              // 롤백은 **상위 감시기(supervisor)** 가 해야 하고, 기본 실행에는 없다
+              // (`node dist/server/supervise.js` 로 띄우면 자식 재시작은 맡는다 —
+              // 업데이트 위임은 4단계라 아직 손댄 곳 없음).
               // 그래서 사용자에게 정확히 무엇을 시켜야 하는지 말하고 끝낸다.
               next:
                 "서버를 재시작하면 새 버전으로 기동합니다. 이 기동이 마커를 소비하면 적용이 확인된 것입니다. " +
@@ -1577,6 +1579,14 @@ const updates: UpdateService = new UpdateService({
             return { ok: true, id };
           });
         const { port: actual } = await http.start();
+        // 상위 감시기 announce — 감시기가 준 파일에만 포트를 적는다.
+        // 감시기가 자식의 포트를 모르면 남의 서버를 프로브한다(D8).
+        // 파일이 없으면(감시기 없이 실행) 아무것도 안 하고, 실패해도 부팅을 막지 않는다.
+        try {
+          await announcePortFile(process.env.HARNESSIDE_SV_PORT_FILE, actual);
+        } catch {
+          /* 관측 실패 — 부팅은 계속된다 */
+        }
         // P13 적용 마커 소비 — 여기까지 부팅됐다는 것이 곧 새 실행 파일의 기동 확인이다.
         //
         // ── R-6.1/R-6.2: 여기서 **무엇을 확인하는가** ────────────────────────
@@ -1593,7 +1603,7 @@ const updates: UpdateService = new UpdateService({
         //   3) 그때 **되돌릴 곳**(슬롯)이 있는가 — 없으면 "되돌릴 수 없다" 고 **말한다.**
         //
         // **자동 롤백은 하지 않는다.** 이 서버는 자기 자신이 아니면 부팅 실패를 알 수 없고,
-        // 재시작도 못 한다. 상위 감시기(supervisor) 가 없으므로 자동 복구는 **불가능**하고,
+        // 재시작도 못 한다. 기본 실행에 상위 감시기(supervisor) 가 없으므로 자동 복구는 **불가능**하고,
         // 없는 걸 있다고 말하지 않는다. 대신 **미확인 사실과 슬롯 경로를 확실히 남긴다.**
         try {
           const pending = JSON.parse(await readFile(updateMarker, "utf8")) as {

@@ -91,6 +91,23 @@ export async function clearInstance(paths: Paths): Promise<void> {
   await unlink(paths.instanceLock).catch(() => {});
 }
 
+/**
+ * 감시기에 자식 포트 알리기 — 감시기가 준 파일에만 쓴다.
+ *
+ * 감시기가 자식의 포트를 모르면 남의 서버를 프로브한다(D8). 경로는 감시기가
+ * 정한다(자기 tmp) — 서버가 정하면 두 진실원이 된다. `path` 가 없으면
+ * 아무것도 안 하고 false (관측 실패가 부팅을 막지 않는다).
+ */
+export async function announcePortFile(path: string | undefined, port: number): Promise<boolean> {
+  if (!path) return false;
+  try {
+    await writeFile(path, `${port}\n`, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** §3.7.2: 이미 있으면 새 인스턴스를 띄우지 않는다. */
 export async function ensureSingleInstance(paths: Paths): Promise<{ ok: true } | { ok: false; running: InstanceRecord }> {
   const rec = await readInstance(paths);

@@ -7,7 +7,7 @@
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,6 +17,7 @@ import {
   formatBytes,
   writeInstance,
   clearInstance,
+  announcePortFile,
   readInstance,
   ensureSingleInstance,
   isAlive,
@@ -62,6 +63,23 @@ test("상태 파일에 실행 정보를 남기고, 읽어올 수 있다", async 
     assert.equal(rec?.mode, "daemon");
     assert.equal(rec?.llamaPort, 8080);
     assert.equal(rec?.gpuMode, "off");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("감시기 포트 알림: 경로가 있으면 포트를 적고, 없으면 조용히 false", async () => {
+  const s = await sandbox();
+  try {
+    const p = join(s.paths.stateDir, "sv.port");
+    assert.equal(await announcePortFile(p, 7317), true);
+    assert.equal(await readFile(p, "utf8"), "7317\n");
+    assert.equal(await announcePortFile(undefined, 7317), false, "경로 없이 성공이라 했다");
+    assert.equal(
+      await announcePortFile(join(s.paths.stateDir, "no-such-dir", "sv.port"), 7317),
+      false,
+      "쓸 수 없는 경로인데 성공이라 했다"
+    );
   } finally {
     await s.cleanup();
   }

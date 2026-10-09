@@ -76,10 +76,17 @@ export async function supervise(deps: RunnerDeps): Promise<SuperviseResult> {
     emit({ type: "started", attempt, pid: child.pid });
 
     // 자식 종료를 먼저 걸어 둔다 — 프로브 대기 중에 죽으면 바로 안다.
+    // `waitExit` 이 던져도 감시기가 같이 죽으면 안 된다 — 스폰 실패(ENOENT 등)도
+    // "원인 불명 종료" 로 취급해 정책대로 처리한다(무한 루프는 crash-loop 가 막는다).
     let exited: ChildExit | null = null;
-    const exitP = child.waitExit().then((e) => {
-      exited = e;
-    });
+    const exitP = child.waitExit().then(
+      (e) => {
+        exited = e;
+      },
+      () => {
+        exited = { code: null, signal: null };
+      }
+    );
 
     // 부팅 대기: hello 가 오거나, 자식이 죽거나, 외부 정지 중 하나까지.
     const bootStart = nowSec();

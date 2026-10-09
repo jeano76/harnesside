@@ -767,7 +767,8 @@ export class UpdateService {
     //
     // **주의**: 이 메서드가 실행 중인 프로세스라면 `restart` 가 그 프로세스를 죽인다.
     // 그래야 `apply` 는 되돌리기까지 할 수 없고, 실제로는 **상위 감시기(supervisor)** 가
-    // 이 일을 맡는다(§5.13.1). `restart`/`probeHello` 가 주입인 이유이고, 자기가
+    // 이 일을 맡는다(§5.13.1 — `supervise.js` 자식 재시작까지 구현됨, 업데이트 위임은 4단계).
+    // `restart`/`probeHello` 가 주입인 이유이고, 자기가
     // 자신을 갈아끼우면서 롤백까지 하려면 별도 프로세스가 필요하다.
     this.phase("verifying", "새 버전을 실행하고 기동을 확인합니다", 80);
     try {
