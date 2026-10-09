@@ -70,6 +70,12 @@ export interface SlashServiceOptions {
   reportServer?: typeof reportServer;
   /** `switchModelAndServer` 자리 — 같은 이유. 주입하면 아무 서버도 뜨지 않는다. */
   switchServer?: typeof switchModelAndServer;
+  /**
+   * `provisionForSwitch` 자리 — 빌드·다운로드를 한다. 주입하지 않으면 `/models <n> confirm` 이
+   * 실제로 수 GB 를 내려받는다(2026-10-09 실측: 5.4 GiB 가 2.8 MB/s 로 — 테스트 타임아웃).
+   * 주입하면 디스크·네트워크에 닿지 않는다.
+   */
+  provision?: typeof provisionForSwitch;
 }
 
 function recordedTuning(config: unknown) {
@@ -268,7 +274,7 @@ export class SlashService {
         return;
       }
       say([...head, `  · 서버를 준비합니다 (빌드·설치·다운로드) — ${result.llama.detail}`].join("\n"));
-      const provisioned = await provisionForSwitch({
+      const provisioned = await (this.opts.provision ?? provisionForSwitch)({
         projectRoot,
         modelFilename: baseName(result.modelPath),
         port: result.port,

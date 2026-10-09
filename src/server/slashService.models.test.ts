@@ -36,6 +36,13 @@ async function run(root: string, arg: string, opts: { report: unknown; calls: st
   const svc = new SlashService({
     projectRoot: root,
     reportServer: async () => opts.report as never,
+    // 준비(빌드·다운로드)도 주입한다 — 안 그러면 존재하지 않는 픽스처 모델을
+    // 진짜로 내려받는다(2026-10-09 실측: 5.4 GiB · 2.8 MB/s · 타임아웃).
+    // 측정은 없는 파일을 fast-fail 로 읽어 "측정할 수 없어" 로 끝난다.
+    provision: async (o) => ({
+      ok: true, port: o.port, binPath: "/bin/llama-server",
+      modelPath: join(root, "missing-fixture.gguf"), lines: [],
+    }),
     switchServer: async (o) => {
       opts.calls.push(`switch:-ngl${o.tuning.gpuLayers}:ctx${o.tuning.contextSize}`);
       return (opts.switchResult ?? {
@@ -98,6 +105,10 @@ test("the report the calibration uses is read AFTER the switch, never before", a
       order.push("report");
       return liveReport as never;
     },
+    provision: async (o) => ({
+      ok: true, port: o.port, binPath: "/bin/llama-server",
+      modelPath: join(root, "missing-fixture.gguf"), lines: [],
+    }),
     switchServer: async (o) => {
       order.push("switch");
       return { ok: true, port: o.port, ready: true, lines: [], launched: { binPath: o.binPath, modelPath: o.modelPath, tuning: o.tuning } } as never;
