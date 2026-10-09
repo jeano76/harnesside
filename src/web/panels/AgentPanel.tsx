@@ -11,7 +11,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { animationFor, initialThink, ingest, finish, thinkNotice, speed, type ThinkState, type ThinkStyle } from "../agent/think.js";
+import { animationFor, initialThink, ingest, finish, thinkNotice, speed, type ThinkState, type ThinkStyle, type ThinkNotice } from "../agent/think.js";
 // 블록 규칙의 **정본**은 여기다. 이 파일은 그려 줄 뿐이다(두 곳에 판단을 두면 어긋난다).
 import { appendToBlock, applyEvent, groupTurns, type AgentBlock } from "../../session/blocks.js";
 import type { ApiClient } from "../api.js";
@@ -283,11 +283,14 @@ function LiveDraft({ name, args, client }: { name: string; args: string; client?
   );
 }
 
-function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; style: ThinkStyle; notice?: { short: string; title: string } | null; live: boolean }) {
+function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; style: ThinkStyle; notice?: ThinkNotice | null; live: boolean }) {
   const t = useI18n();
   const anim = animationFor(style);
   // 꺼져 있으면 표시줄 자체가 없다 — 단, 예산 안내가 있으면 그 한 줄은 보인다.
   if (!state.enabled && !notice) return null;
+  // 키로 받은 안내는 여기서 푼다 — 판정은 think.ts, 문구 본문은 카탈로그(M9 묶음4c).
+  const short = notice ? t(notice.shortKey) : null;
+  const title = notice ? t(notice.titleKey, notice.vars) : null;
   const used = state.usedTokens.toLocaleString("ko-KR");
   const cap = state.maxReasoningTokens.toLocaleString("ko-KR");
   // 속도는 **실측 시간 ÷ 추정 토큰**이다. 토큰 수는 길이 추정치라 서버의 실제
@@ -300,7 +303,7 @@ function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; sty
   return (
     <div
       style={{ display: "flex", alignItems: "center", gap: 6, color: "#6e7681", fontSize: 11 }}
-      {...(notice ? { title: notice.title } : { title: t("think.estimateTitle") })}
+      {...(title ? { title } : { title: t("think.estimateTitle") })}
     >
       {live && state.enabled && anim.dots > 0 && (
         <span style={{ display: "inline-flex", gap: 3 }}>
@@ -324,7 +327,7 @@ function ThinkIndicator({ state, style, notice, live }: { state: ThinkState; sty
         {t("think.tokens", {
           range: live ? `${used}/${cap}` : `${state.lastUsedTokens.toLocaleString("ko-KR")}/${cap}`,
           pace,
-          suffix: notice ? ` — ${notice.short}` : "",
+          suffix: short ? ` — ${short}` : "",
         })}
       </span>
     </div>

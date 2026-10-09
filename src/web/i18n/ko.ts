@@ -111,6 +111,12 @@ export const ko: Catalog = {
   // ── Thinking 표시줄 ───────────────────────────────────────────────────────
   "think.estimateTitle": "토큰 수는 길이 추정치(사고+답변+도구호출 합산). 속도는 델타 사이 대기(슬롯·도구·프리필)를 뺀 순수 출력 구간 기준",
   "think.tokens": "Thinking · {{range}} 토큰{{pace}}{{suffix}}",
+  "think.notice.soonText": "추론 예산 곧 초과 ({{used}}/{{cap}}·추정)",
+  "think.notice.soonShort": "곧 초과",
+  "think.notice.soonTitle": "추론이 예산에 가까워졌습니다. 상한({{cap}})을 넘으면 이번 턴은 도구 호출로 전환합니다. 숫자는 길이에서 추정한 값이라 실제 토큰 수와 다릅니다.",
+  "think.notice.overText": "추론 예산 초과 → 도구 호출로 전환 ({{used}}/{{cap}}·추정)",
+  "think.notice.overShort": "초과 → 도구 호출로 전환",
+  "think.notice.overTitle": "추정 {{used}} 토큰이 상한 {{cap}}을 넘어서, 이번 턴은 \"더 생각하기\" 대신 \"직접 도구를 호출하기\" 로 전환했습니다. thinking 설정이 꺼진 것이 아니며 이 턴이 끝나면 원래대로 돌아갑니다. 숫자는 길이에서 추정한 값이라 실제 토큰 수와 다릅니다.",
 
   // ── 상태바·묶음 ───────────────────────────────────────────────────────────
   "status.wsOpen": "● 실시간",

@@ -263,12 +263,17 @@ export function exhaustedMessage(s: RetryState): string {
  * 추정치라는 사실**을 함께 말한다.
  */
 export interface ThinkNotice {
-  /** 상태 줄에 보이는 짧은 말. */
-  text: string;
-  /** Thinking 표시줄에 붙는 한 줄 꼬리표 — 숫자는 표시줄에 이미 있으므로 반복하지 않는다. */
-  short: string;
-  /** 마우스를 올렸을 때의 설명. */
-  title: string;
+  /** 상태 줄에 보이는 짧은 말의 카탈로그 키(`think.notice.*` · M9 묶음4c).
+   *
+   * 판정(`needsWarning`·`enabled`)은 여기서 하고 문구 본문은 카탈로그에 하나만 둔다.
+   * 푸는 건 그리는 쪽(`AgentPanel`)과 검사다 — 숫자는 `vars` 로 넘긴다. */
+  textKey: string;
+  /** Thinking 표시줄에 붙는 한 줄 꼬리표의 키 — 숫자는 표시줄에 이미 있으므로 반복하지 않는다. */
+  shortKey: string;
+  /** 마우스를 올렸을 때의 설명 키. */
+  titleKey: string;
+  /** `{{used}}`·`{{cap}}` 자리표시자 값(ko-KR 천단위). */
+  vars: { used: string; cap: string };
   /** 이 값이 추정치인가 — 화면이 "확실한 수치" 처럼 말하지 않게 하는 근거. */
   estimated: boolean;
 }
@@ -291,18 +296,18 @@ export function thinkNotice(s: ThinkState, running: boolean): ThinkNotice | null
   if (s.enabled) {
     // 켜져 있지만 위험 — 곧 전환된다는 뜻. 아직 "꺼졌다"고 말할 단계가 아니다.
     return {
-      text: `추론 예산 곧 초과 (${used}/${cap}·추정)`,
-      short: "곧 초과",
-      title: `추론이 예산에 가까워졌습니다. 상한(${cap})을 넘으면 이번 턴은 도구 호출로 전환합니다. 숫자는 길이에서 추정한 값이라 실제 토큰 수와 다릅니다.`,
+      textKey: "think.notice.soonText",
+      shortKey: "think.notice.soonShort",
+      titleKey: "think.notice.soonTitle",
+      vars: { used, cap },
       estimated: true,
     };
   }
   return {
-    text: `추론 예산 초과 → 도구 호출로 전환 (${used}/${cap}·추정)`,
-    short: "초과 → 도구 호출로 전환",
-    title:
-      `추정 ${used} 토큰이 상한 ${cap}을 넘어서, 이번 턴은 "더 생각하기" 대신 "직접 도구를 호출하기" 로 전환했습니다. ` +
-      `thinking 설정이 꺼진 것이 아니며 이 턴이 끝나면 원래대로 돌아갑니다. 숫자는 길이에서 추정한 값이라 실제 토큰 수와 다릅니다.`,
+    textKey: "think.notice.overText",
+    shortKey: "think.notice.overShort",
+    titleKey: "think.notice.overTitle",
+    vars: { used, cap },
     estimated: true,
   };
 }

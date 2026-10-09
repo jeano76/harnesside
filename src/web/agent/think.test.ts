@@ -23,7 +23,15 @@ import {
   DEFAULT_MAX_REASONING,
   thinkNotice,
   adoptServerThink,
+  type ThinkNotice,
 } from "./think.js";
+import { ko } from "../i18n/ko.js";
+import { I18n } from "../i18n/index.js";
+
+/** 화면과 같은 카탈로그로 푼다 — 판정(키 선택)과 문구(본문)를 함께 고정한다. */
+const i18n = new I18n({ catalogs: { ko } });
+const say = (n: ThinkNotice, field: "textKey" | "shortKey" | "titleKey"): string =>
+  i18n.t(n[field], n.vars, "ko");
 
 test("기본값은 thinking **ON** — 사고가 안 보이면 '기능이 없다' 고 읽힌다 (2026-10-01)", () => {
   const s = initialThink();
@@ -219,38 +227,38 @@ test("**꺼졌다고 말하지 않는다** — 설정이 꺼진 것도 사고가
   const s = { ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 };
   const n = thinkNotice(s, true);
   assert.ok(n, "전환되었는데 말하지 않는다");
-  assert.ok(!n.text.includes("꺼짐"), `라벨이 여전히 꺼졌다고 말한다: ${n.text}`);
-  assert.ok(!n.title.includes("꺼졌"), `툴팁이 아직 꺼졌다고 말한다: ${n.title}`);
+  assert.ok(!say(n, "textKey").includes("꺼짐"), `라벨이 여전히 꺼졌다고 말한다: ${say(n, "textKey")}`);
+  assert.ok(!say(n, "titleKey").includes("꺼졌"), `툴팁이 아직 꺼졌다고 말한다: ${say(n, "titleKey")}`);
 });
 
 test("**무엇이 일어났는지와 다음 무엇을 말하는지**가 둘 다 있다", () => {
   const s = { ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 };
   const n = thinkNotice(s, true)!;
-  assert.match(n.text, /추론 예산 초과/, `무엇이 일어났는지 없는다: ${n.text}`);
-  assert.match(n.text, /도구 호출/, `무엇을 하게 되었는지 없다: ${n.text}`);
-  assert.match(n.title, /원래대로 돌아갑니다|이 턴이 끝나면/, "이 전환이 영구적인지 말하지 않는다");
+  assert.match(say(n, "textKey"), /추론 예산 초과/, `무엇이 일어났는지 없는다: ${say(n, "textKey")}`);
+  assert.match(say(n, "textKey"), /도구 호출/, `무엇을 하게 되었는지 없다: ${say(n, "textKey")}`);
+  assert.match(say(n, "titleKey"), /원래대로 돌아갑니다|이 턴이 끝나면/, "이 전환이 영구적인지 말하지 않는다");
 });
 
 test("**숫자가 추정치라고 말한다** — 서버 로그도 스스로 추정치라고 적어 놓고 있다", () => {
   const s = { ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 };
   const n = thinkNotice(s, true)!;
   assert.equal(n.estimated, true);
-  assert.match(n.text, /추정/, `추정치라는 표시가 없다: ${n.text}`);
-  assert.match(n.title, /추정한 값/, "툴팁에 추정이 없다");
+  assert.match(say(n, "textKey"), /추정/, `추정치라는 표시가 없다: ${say(n, "textKey")}`);
+  assert.match(say(n, "titleKey"), /추정한 값/, "툴팁에 추정이 없다");
 });
 
 test("**아직 초과하지 않았으면 초과라고 말하지 않는다** — 곧 임을 알린다", () => {
   const s = { ...initialThink(), enabled: true, needsWarning: true, usedTokens: 3900 };
   const n = thinkNotice(s, true)!;
-  assert.match(n.text, /곧 초과/, `이미 초과한 것처럼 말한다: ${n.text}`);
-  assert.ok(!n.text.includes("초과 →"), "아직 초과하지 않았는데 전환된 것처럼 말한다");
+  assert.match(say(n, "textKey"), /곧 초과/, `이미 초과한 것처럼 말한다: ${say(n, "textKey")}`);
+  assert.ok(!say(n, "textKey").includes("초과 →"), "아직 초과하지 않았는데 전환된 것처럼 말한다");
 });
 
 test("**상한과 추정치를 눈에 보이는 숫자로 함께 보여 준다** — 비교의 근거가 있어야 한다", () => {
   const s = { ...initialThink(), enabled: false, needsWarning: true, usedTokens: 4321, maxReasoningTokens: 4096 };
   const n = thinkNotice(s, true)!;
-  assert.match(n.text, /4,321/, `쓴 양이 없다: ${n.text}`);
-  assert.match(n.text, /4,096/, `상한이 없다: ${n.text}`);
+  assert.match(say(n, "textKey"), /4,321/, `쓴 양이 없다: ${say(n, "textKey")}`);
+  assert.match(say(n, "textKey"), /4,096/, `상한이 없다: ${say(n, "textKey")}`);
 });
 
 // ── 서버 정본을 따른다 (2026-10-05) ────────────────────────────────────────
@@ -309,7 +317,7 @@ test("상한의 80%에 들면 **끄지 않고** 곧 초과를 알린다 — 예�
   assert.equal(s.needsWarning, true, "임박했는데 조용하다");
   assert.equal(s.forcedToolChoice, false, "임박했는데 강제 전환했다");
   const n = thinkNotice(s, true)!;
-  assert.match(n.text, /곧 초과/, `예보가 아니다: ${n.text}`);
+  assert.match(say(n, "textKey"), /곧 초과/, `예보가 아니다: ${say(n, "textKey")}`);
 });
 
 test("80% 미만이면 조용하다 — 상시 경고는 경고가 아니다", () => {
@@ -356,10 +364,25 @@ test("초과 → 턴 종료 → 다음 턴: 경고가 따라오지 않는다 (�
 
 test("안내에 한 줄 꼬리표가 있다 — 표시줄과 숫자를 반복하지 않기 위해서", () => {
   const soon = thinkNotice({ ...initialThink(), enabled: true, needsWarning: true, usedTokens: 3900 }, true)!;
-  assert.equal(soon.short, "곧 초과");
-  assert.ok(!soon.short.includes("3,900"), `꼬리표에 숫자가 또 들어간다: ${soon.short}`);
+  assert.equal(soon.shortKey, "think.notice.soonShort");
+  assert.equal(say(soon, "shortKey"), "곧 초과");
+  assert.ok(!say(soon, "shortKey").includes("3,900"), `꼬리표에 숫자가 또 들어간다: ${say(soon, "shortKey")}`);
   const over = thinkNotice({ ...initialThink(), enabled: false, needsWarning: true, usedTokens: 5000 }, true)!;
-  assert.match(over.short, /초과/);
+  assert.equal(over.shortKey, "think.notice.overShort");
+  assert.match(say(over, "shortKey"), /초과/);
+});
+
+test("안내 키는 **전부 사전에 있다** — 키 자체가 화면에 나오면 안 된다", () => {
+  for (const k of [
+    "think.notice.soonText",
+    "think.notice.soonShort",
+    "think.notice.soonTitle",
+    "think.notice.overText",
+    "think.notice.overShort",
+    "think.notice.overTitle",
+  ]) {
+    assert.ok(k in ko, `안내 키 누락: ${k}`);
+  }
 });
 
 test("finish 는 끝난 추론의 최종 속도를 남긴다 — 다음 턴까지 보인다", () => {
