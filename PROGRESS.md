@@ -14,10 +14,10 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-08)
 
 ```yaml
-phase: M9 묶음2 완료 (AgentPanel) — 묶음3 남음
+phase: M9 묶음3 완료 (main.tsx 크롬) — 묶음4 남음
 status: in_progress
-last_commit: "143f7a5 feat(i18n): M9 묶음2 — AgentPanel 카탈로그 전환"
-next_action: "M9 묶음3 (main.tsx 프롬프트 bar·CLI 선택·YOLO 확인, 약 100줄) — think.ts 로직 문구는 범위 밖으로 기록"
+last_commit: "c883d2c feat(i18n): M9 묶음3 — main.tsx 크롬 문자열 카탈로그 전환"
+next_action: "M9 묶음4 (slash 실행 보고서 본문 약 20줄 + shared/slashCommands 설명 + think.ts 안내문) — 셋 다 대화 콘텐츠라 별도 묶음"
 blocking: 없음
 ```
 
@@ -76,6 +76,13 @@ wiring 검사가 잡았다(스스로 증명하지 않는 검사가 아님). 전�
 > `think.ts`의 예산 안내 문구(`thinkNotice` 반환)는 로직+테스트가 묶여 있어 이번 묶음 밖 —
 > UI 전환 시 같이 옮긴다. 렌더 텍스트 동일. 전체 **2353/2353**(1회 cancelled은
 > 플레이크로 재실행 2회 연속 통과).
+
+## 2026-10-08 · M9 묶음3 (main.tsx 크롬 카탈로그 전환)
+
+> 범위: 프롬프트 bar·CLI 선택·YOLO·대기열·팔레트·토스트·슬래시완성·부팅배너.
+> `SLASH_TIPS`는 키 맵으로, `Command.category`는 영문 union으로.
+> slash 실행 보고서 본문은 묶음4로 남김(대화 콘텐츠). 렌더 텍스트 동일 — 화면 동작 변경 없음.
+> 커밋 `c883d2c`. 다음: M9 묶음4 (slash 보고서 본문 + slashCommands 설명 + think.ts 안내문).
 
 > `todo.md` ③-6 문서 3건 완료. `PROMPT_IDE_CLI.md` §16의 S-5 기록이 사실과 달라 정정했다:
 > 10-04에 "동작한다"고 체크돼 있었으나 Shift+F 분기가 코드에 없었다. 검증 없이 체크된 항목은

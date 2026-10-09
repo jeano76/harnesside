@@ -424,3 +424,40 @@ test("thresholds 팩토리는 호출 시점에 풀린다 — 부팅 뒤 정해�
     await s.cleanup();
   }
 });
+
+test("reset은 실행 중이 아니어도 대기열을 비운다 — clear는 새 시작이다", async () => {
+  const events: AgentEvent[] = [];
+  const s = await sandbox();
+  try {
+    const svc = service(fakeBackend(), events, s.dir);
+    (svc as unknown as { queue: string[] }).queue.push("묵은 말");
+    const r = await svc.reset();
+    assert.equal(r.ok, true);
+    assert.deepEqual(svc.queueView(), [], "대기열이 남았다 — 다음 턴에 옛 말이 나온다");
+    assert.ok(events.some((e) => e.type === "agent.queue"), "대기열 비움을 화면에 알리지 않았다");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("reset은 대화 블록을 비우고 다음 턴이 새로 돈다", async () => {
+  const events: AgentEvent[] = [];
+  const s = await sandbox();
+  try {
+    const svc = service(fakeBackend({ text: "첫 답" }), events, s.dir);
+    await svc.send("첫 질문");
+    assert.ok(svc.conversation.length > 0, "대화 블록이 쌓이지 않았다");
+    await svc.reset();
+    // reset은 "대화를 시작합니다" 상태 한 줄만 남긴다 — 옛 질문·답은 지운다.
+    // 서버 emit이 블록을 쌓으므로 빈 배열이 아니라 1줄이다.
+    assert.ok(
+      svc.conversation.every((b) => b.text !== "첫 질문" && b.text !== "첫 답"),
+      "옛 대화가 남았다 — clear인데 옛 말이 보인다"
+    );
+    assert.equal(svc.turn.running, false);
+    const r = await svc.send("새 질문");
+    assert.equal(r.ok, true, "reset 뒤 새 턴이 막혔다");
+  } finally {
+    await s.cleanup();
+  }
+});

@@ -1153,6 +1153,8 @@ const updates: UpdateService = new UpdateService({
             return agent.setThinking(body.enabled === true);
           })
           .route("POST", "/api/agent/cancel", async () => agent.cancel())
+          // `clear` — 모든 대화 컨텍스트를 초기화한다. 새 시작(빈 블록).
+          .route("POST", "/api/agent/reset", async () => agent.reset())
           // ── 슬래시 명령의 서버 경로 (사용자 요구) ────────────────────────────
           // 구 Ink TUI(2026-10-04 삭제, Q-2)는 이 작업을 루프에 직접 있었다.
           // 웹 창에는 루프가 없고 라우트만 있다 — 없으면 명령이 **조용히 아무것도 안 하고** 끝난다.

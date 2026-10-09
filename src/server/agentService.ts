@@ -606,6 +606,32 @@ export class AgentService {
     return { ok: true, detail: dropped > 0 ? `취소했습니다 (대기열 ${dropped}개도 비웠습니다)` : "취소했습니다" };
   }
 
+  /** `clear` — 진행 중인 턴을 멈추고 대화(블록·루프·대기열·툴 호출 카운터)를 초기화한다.
+   *
+   * 이전 세션의 블록은 그대로 두고 **새 시작**으로 보낸다. 화면에도 서버에 같은
+   * 규칙(`session/blocks.ts`)으로 그리므로 두 개의 빈 대화가 아니라 하나의 빈 대화
+   * 로 시작한다. 루프(백엔드·프로젝트 기준)는 재사용하지 않고 버린다 — 새 세션은
+   * 다음 턴에 `ensureLoop()`로 새로 만든다. */
+  async reset(): Promise<{ ok: boolean; detail: string }> {
+    // 진행 중인 턴이 있으면 먼저 멈춘다(비동기라 await).
+    // 대기열은 실행 중이 아니어도 비운다 — `clear` 는 "새 시작" 이라 남기면 다음 턴에 옛 말이 나온다.
+    const dropped = this.queue.length;
+    this.queue = [];
+    if (dropped > 0) this.emitQueue();
+    if (this.state.running) {
+      await this.loop?.cancelCurrentTurn();
+      this.state = { ...this.state, running: false, cancelled: true };
+    }
+    // 대화 블록과 카운터를 초기화한다. 루프는 `loop` 필드 자체를 버린다 — 다음 턴이
+    // 새 기준(새 워크스페이스·세션)으로 만든다.
+    this.blocks = [];
+    this.toolCalls = 0;
+    this.reasoningTokens = 0;
+    this.loop = null;
+    this.emit({ type: "agent.status", text: "대화를 시작합니다", at: (this.opts.now ?? Date.now)() });
+    return { ok: true, detail: "대화를 초기화했습니다" };
+  }
+
   // ── 슬래시 명령용 경로 (사용자 요구: 웹 프롬프트에서도 콘솔의 쉘 기능) ────────
   //
   // 구 Ink TUI(2026-10-04 삭제, Q-2)는 이 작업을 `AgentLoop` 에 **직접** 있었다.

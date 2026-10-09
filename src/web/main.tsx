@@ -30,6 +30,7 @@ import {
   shouldRecallDown,
   type PromptHistoryState,
 } from "./agent/promptHistory.js";
+import { isMultipleChoice } from "./multipleChoice.js";
 import type { WorkspaceFingerprint } from "../server/workspace.js";
 import { MonitorStrip } from "./panels/MonitorPanel.js";
 import { EditorView } from "./editor/EditorView.js";
@@ -150,6 +151,15 @@ export default function App() {
   const draftRef = useRef<HTMLTextAreaElement | null>(null);
   const focusDraft = useCallback(() => draftRef.current?.focus(), []);
   const [draft, setDraft] = useState(() => loadDraft(typeof localStorage !== "undefined" ? localStorage : null)?.text ?? "");
+
+  /** 마지막 턴의 가시 텍스트 누적 — 다중 선택 제안인지 탐지한다.
+   *
+   * `agent.delta`로 들어오는 답변 토큰을 이 ref에 쌓고, 턴이 끝나면(
+   * `agent.done`/`error`) 마지막 응답이 여러 선택지를 나열했는지 스캔한다.
+   * ref로 둔 이유: 누적 자체는 렌더를 타지 않아도 되고, 스캔은 turn 끝에 한 번만
+   * 하므로 state가 아닌 게 맞다(`draft`를 매 토큰마다 덮어쓰지 않기 위해).
+   * 턴 시작(`sendTurn`)에 비우고 끝(`done`/`error`)에 비운다 — 묵은 답이 다음 턴에 남으면 안 된다. */
+  const lastVisibleRef = useRef("");
 
   /**
    * 프롬프트 히스토리 — `↑` `↓` 로 지난 말을 다시 꺼낸다 (2026-10-05).
@@ -319,6 +329,25 @@ export default function App() {
     const text = draft.trim();
     // 실행 중이어도 받는다 — 서버 대기열에 넣는다(거절하지 않는다, O4).
     if (!text) return;
+    // **`clear`** (입력 요구 2번) — 한 줄로 모든 대화 컨텍스트를 지운다. 슬래시
+    // 기호가 아니라서 `parseSlash`가 문장으로 보지만, 우리는 "명령"으로 취급한다.
+    // 서버 `reset()` 이 블록·루프·대기열·tool 호출 기록을 초기화하고, 여기서
+    // 화면의 blocks/draft/화면 카운트도 함께 비운다. 실행 중이어도 즉시 멈춘다.
+    if (text.toLowerCase() === "clear") {
+      setTurnRunning(false);
+      try {
+        await client.post("/api/agent/reset");
+      } catch {
+        /* 서버가 실패해도 로컬 상태는 이미 초기화한다 */
+      }
+      lastVisibleRef.current = "";
+      setLiveDraft(null);
+      setQueueItems([]);
+      setThink((s) => finish(s));
+      setBlocks([]);
+      setDraft("");
+      return;
+    }
     // 슬래시 명령을 입력창에 직접 써도 된다(`/models 3`, `/copy 20`) — 모델로 보내지 않고
     // 명령으로 실행한다. 등록된 명령이 아니면(`/home/...`) 평범한 문장이라 그대로 보낸다.
     const sl = parseSlash(text);
@@ -973,6 +1002,8 @@ export default function App() {
             // 답변 토큰도 속도 분자에 넣는다 — 사고만 재면 답변이 긴 턴이 느리게 보인다.
             // 상한(예산) 계산에는 쓰지 않는다(ingest가 text를 예산에서 뺀다).
             setThink((s) => ({ ...ingest(s, { text: ev.text as string }), startedAt: s.startedAt ?? Date.now() }));
+            // 마지막 가시 텍스트도 누적한다 — turn 끝에 다중 선택 제안인지 스캔하기 위함.
+            lastVisibleRef.current += ev.text;
           }
           if (evType === "agent.tool.draft") {
             // 파일 본문이 생성되는 순간 — 두 가지를 같이 한다.
@@ -998,8 +1029,28 @@ export default function App() {
             if (evType === "agent.error" || pending === 0) setTurnRunning(false);
             else setTurnRunning(true);
           }
-          if (evType === "agent.status" && /응답 중/.test(String(ev.text ?? ""))) setTurnRunning(true);
+          if (evType === "agent.status" && /응답 중/.test(String(ev.text ?? ""))) {
+            setTurnRunning(true);
+            // 새 턴 시작 — 묵은 답을 비운다. 대기열에 넣은 시점이 아니라 서버가
+            // 실제로 시작을 알린 시점에 비워야 현재 턴의 누적이 지워지지 않는다.
+            lastVisibleRef.current = "";
+          }
           if (evType === "agent.done" || evType === "agent.error") setThink((s) => finish(s));
+          // 다중 선택 제안 스캔 — 마지막 답변이 여러 선택지를 나열하고 고르라고 하면
+          // 입력창이 **아직 비어 있을 때** 미리 "무엇을 고를까요?" 로 채운다. 사용자가
+          // 이미 뭔가 썼으면(역사/다른 질문) 덮어쓰지 않는다. 마지막 답변은
+          // lastVisibleRef에 누적돼 있다. 스캔 뒤에는 비운다 — 묵은 답이 다음 턴에 남으면 안 된다.
+          if (evType === "agent.done" || evType === "agent.error") {
+            const suggestion = evType === "agent.done" ? isMultipleChoice(lastVisibleRef.current) : false;
+            lastVisibleRef.current = "";
+            // textarea가 제어 컴포넌트라 ref 값이 곧 draft 상태다 — updater 안에서
+            // 토스트·포커스를 하면 StrictMode에서 두 번 실행된다. 밖에서 보고 한 번만 한다.
+            if (suggestion && !(draftRef.current?.value ?? "").trim()) {
+              setDraft(t("prompt.suggest"));
+              requestAnimationFrame(() => focusDraft());
+              pushToast({ id: `suggestion:${Date.now()}`, kind: "info", title: t("toast.multipleChoice"), body: t("toast.multipleBody"), at: Date.now(), ttlMs: 15_000, requiresAck: false, source: "agent" });
+            }
+          }
           setBlocks((prev) =>
             applyEvent(prev, {
               type: evType,
@@ -1196,7 +1247,10 @@ export default function App() {
         if (paletteOpen) setPaletteOpen(false);
         else void openPalette("search");
       } else if (e.key === "Escape") {
-        setPaletteOpen(false);
+        // ESC: palette 닫기 + 진행 중인 에이전트 턴 중단. 입력창에 포커스가 없어도
+        // 끝낸다 — 멈춤이 눈에 보이려면 Enter를 놓을 필요가 없다(사용자 요구).
+        if (paletteOpen) setPaletteOpen(false);
+        else if (turnRunning) void client.post("/api/agent/cancel").catch(() => {});
       } else if (e.altKey && e.key.startsWith("Arrow")) {
         // §5.8: 드래그 없이도 패널을 이동할 수 있어야 한다
         const map: Record<string, Zone> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "top", ArrowDown: "bottom" };
@@ -1212,7 +1266,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [paletteOpen, openPalette]);
+  }, [paletteOpen, openPalette, turnRunning]);
 
   /** 헤더·셸·설정이 **같은 알림 경로**를 쓴다 — 한 종류의 알림이 화면 한 곳에 모인다. */
   const notice = useCallback(

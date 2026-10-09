@@ -280,6 +280,9 @@ export const ko: Catalog = {
   "toast.turnRequestFail": "턴 요청이 실패했습니다",
   "toast.cliOpenFail": "CLI 를 열지 못했습니다",
   "toast.treeFailed": "탐색기를 읽지 못했습니다",
+  "toast.multipleChoice": "무엇을 고를까요?",
+  "toast.multipleBody": "여러 선택지를 나열했네요. 입력창에 제안 문구를 채워두었어요.",
+  "prompt.suggest": "무엇을 고를까요?",
 
   // ── 슬래시 자동완성 설명 ──────────────────────────────────────────────────
   "slash.cliNew": "같은 폴더에 이미 있어도 새 세션",
