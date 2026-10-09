@@ -52,12 +52,23 @@ test("**없는 의존을 있는 것처럼 통과시키지 않는다** — 게이
 });
 
 test("**설치 루트 밖에서 해석된 의존은 드러낸다** — 시스템 패키지는 버전이 다르다", async () => {
-  // 실측(배포 준비 중 발견): 이 머신에는 `/usr/share/nodejs/ws` 가 있고 노드가 그걸
-  // 찾아 **"설치돼 있다"** 고 답한다. 그래서 실제 해석기는 빈 폴더에서도 `ws` 를 통과시킨다.
+  // 실측(배포 준비 중 발견): 이 머신에는 시스템 `ws` 가 있고 노드가 그걸 찾아 **"설치돼 있다"**
+  // 고 답한다. 그래서 실제 해석기는 빈 폴더에서도 `ws` 를 통과시킨다.
   //
   // 게이트가 노드보다 낙관적이면 안 되므로 판정은 그대로 따른다(프로그램도 그걸 로드한다).
   // 하지만 **조용히 두면 안 된다** — 사용자는 시스템 패키지 버전을 모르게 실행한다.
-  const r = await root();
+  //
+  // 이 테스트는 **머신 상태에 기대지 않는다.** 예전엔 `tmpdir()`(/tmp) 바로 아래를 설치 루트로 써서,
+  // 그 부모의 `node_modules`(/tmp/node_modules — npm 이 남긴 찌꺼기)가 "설치본 소유" 로 잡혀 external 이
+  // 비었다. 이제 `<dir>/node_modules/ws` 를 **설치본 밖의 조상**으로 직접 만든다:
+  //   <dir>/node_modules/ws        ← 외부(시스템) 패키지 역할
+  //   <dir>/a/b/dist               ← 설치 루트 (소유 목록: <dir>/a/b/node_modules, <dir>/a/node_modules)
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-deps-"));
+  const root0 = join(dir, "a", "b", "dist");
+  await mkdir(root0, { recursive: true });
+  await mkdir(join(dir, "node_modules", "ws"), { recursive: true });
+  await writeFile(join(dir, "node_modules", "ws", "package.json"), JSON.stringify({ name: "ws", version: "7.0.0" }), "utf8");
+  const r = { root: root0, done: () => rm(dir, { recursive: true, force: true }) };
   try {
     const external = checkDependencies(r.root, { dependencies: { "definitely-not-installed-xyzzy": "^1" } }, makeResolver(r.root));
     assert.equal(external.ready, false, `없는 의존을 통과시켰다: ${external.detail}`);
