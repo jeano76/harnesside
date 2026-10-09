@@ -27,6 +27,21 @@ export type DaemonMode = "window" | "daemon";
  */
 export type ChromeState = "alive" | "dead" | "never-opened";
 
+/**
+ * 창 상태의 순수 판정. `never-opened`(한 번도 못 띄움)와 `dead`(떠 있다가 닫힘)는
+ * 워치독에게 전혀 다른 사실이다 — 뒤쪽만 서버 종료(S1)로 이어진다.
+ */
+export function windowStateOf(s: {
+  noBrowser: boolean;
+  pidAlive: boolean;
+  wasAlive: boolean;
+  launchAttempted: boolean;
+}): ChromeState {
+  if (s.noBrowser || s.pidAlive) return "alive";
+  if (s.wasAlive) return "dead";
+  return s.launchAttempted ? "never-opened" : "alive";
+}
+
 export interface WatchdogDeps {
   mode: DaemonMode;
   ring: LogRing;

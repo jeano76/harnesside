@@ -8,7 +8,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { LogRing, resetLogRing } from "./logRing.js";
-import { startWatchdog, heartbeatFresh, type DaemonMode } from "./watchdog.js";
+import { startWatchdog, heartbeatFresh, windowStateOf, type DaemonMode } from "./watchdog.js";
 
 function setup(mode: DaemonMode, over: Partial<Parameters<typeof startWatchdog>[0]> = {}) {
   resetLogRing();
@@ -425,4 +425,22 @@ test("expectChrome:false 여도 llama 죽음은 **알린다** — 무음으로 �
       resolve();
     }, 80);
   });
+});
+
+// ── 창 상태 판정: "떠 있다가 닫힘" 은 "못 띄움" 이 아니다 ─────────────────────────
+
+test("windowStateOf: 떠 있던 창이 사라지면 dead — 닫힘으로 읽어 S1 이 발동하게 한다", () => {
+  const closedByUser = { noBrowser: false, pidAlive: false, wasAlive: true, launchAttempted: true };
+  assert.equal(windowStateOf(closedByUser), "dead", "닫은 창을 못 띄움으로 읽으면 S1 이 막힌다");
+});
+
+test("windowStateOf: 한 번도 뜨지 않았으면 never-opened", () => {
+  const failed = { noBrowser: false, pidAlive: false, wasAlive: false, launchAttempted: true };
+  assert.equal(windowStateOf(failed), "never-opened");
+});
+
+test("windowStateOf: 띄우지 않는 모드(--no-browser)와 살아 있는 창은 alive", () => {
+  assert.equal(windowStateOf({ noBrowser: true, pidAlive: false, wasAlive: true, launchAttempted: true }), "alive");
+  assert.equal(windowStateOf({ noBrowser: false, pidAlive: true, wasAlive: true, launchAttempted: true }), "alive");
+  assert.equal(windowStateOf({ noBrowser: false, pidAlive: false, wasAlive: false, launchAttempted: false }), "alive");
 });

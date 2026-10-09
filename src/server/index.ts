@@ -56,7 +56,7 @@ import { TerminalManager, exitLabel } from "./terminal.js";
 import type { UpdateChannel, ApplyGuard } from "./update/pipeline.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
-import { startWatchdog, type Watchdog } from "./watchdog.js";
+import { startWatchdog, windowStateOf, type Watchdog } from "./watchdog.js";
 import { issueToken } from "../auth/token.js";
 import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
@@ -423,7 +423,7 @@ const updates: UpdateService = new UpdateService({
     // 헛터졌다. 팩토리인 이유: 이 서비스는 부팅 전에 만들어지고 루프는 턴마다
     // 지연 생성되므로, 읽는 시점에는 이미 `boot` 가 있다(위 model/baseUrl 과
     // 같은 패턴). config.yaml 명시값이 있으면 그 키만 덮는다.
-    thresholds: () => ({ ...recommendThresholds(boot?.tuning?.contextSize ?? 32_768), ...compactionOverrides }),
+    thresholds: () => ({ ...recommendThresholds(boot?.tuning?.contextSize ?? configuredContextSize ?? 32_768), ...compactionOverrides }),
     // 읽어 온 설정값만 넘긴다 — 없는 키를 `undefined` 로 넘기면 기본값과 섞인다.
     ...(thinkCfg.set ? { maxReasoningTokens: thinkCfg.maxReasoningTokens } : {}),
     emit: (e) => {
@@ -469,6 +469,8 @@ const updates: UpdateService = new UpdateService({
   let adoptedProbe: (() => boolean) | null = null;
   /** 창을 띄우려 한 적이 있는가. `never-opened` 판정의 전제다. */
   let browserLaunchAttempted = false;
+  /** 창이 실제로 떠 있었던 적이 있는가. `never-opened` 와 `dead` 를 가르는 기준이다. */
+  let browserWasAlive = false;
   /** 단계 11 실패 설명용 — Chrome 이 낸 마지막 오류 줄(Q-5). */
   let lastChromeErr: string | null = null;
   /** 진행 중인 턴이 있는가 — S3 유예 사유 중 하나(§4.4). */
@@ -645,6 +647,10 @@ const updates: UpdateService = new UpdateService({
   // config.yaml 의 compaction 명시값도 여기서 한 번만 읽는다 — 아래 thresholds
   // 팩토리가 적응형 추천값 위에 덮는다(명시값 우선, 없는 키는 추천값).
   let compactionOverrides: Partial<CompactionThresholds> = {};
+  // 붙은(attach) 서버는 부팅이 튜닝을 만들지 않는다(`tuning: undefined`). 그때 창 크기를
+  // 32768 로 가정하면 실제 `-c` 와 어긋난다(실측: 86016 서버에서 32,768 로 표시). 그래서
+  // 설정에 적힌 llama.contextSize 를 다음 근거로 쓴다.
+  let configuredContextSize: number | undefined;
   {
     const raw = await readFile(join(projectRoot, ".harnesside", "config.yaml"), "utf8").catch(() => null);
     if (raw) {
@@ -653,6 +659,8 @@ const updates: UpdateService = new UpdateService({
       try { cfg = parseYaml(raw); } catch { cfg = null; }
       const notice = remoteBaseUrlNotice(cfg);
       if (notice) emit(`[warn] ${notice}`);
+      const ctx = (cfg as { llama?: { contextSize?: unknown } } | null)?.llama?.contextSize;
+      if (typeof ctx === "number" && Number.isFinite(ctx) && ctx > 0) configuredContextSize = Math.floor(ctx);
       const c = (cfg as { compaction?: Record<string, unknown> } | null)?.compaction;
       if (c && typeof c === "object") {
         const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -1771,10 +1779,16 @@ const cdpPort = cdpEnv !== undefined && cdpEnv.trim() !== "" ? Number(cdpEnv) : 
           // `dead` 로 넘기면 워치독이 "창이 닫혔다" 고 읽고 서버를 죽인다 — 실제로
           // 그랬다(CDP 미첨부). 그 로그를 읽으면 "창이 안 떠서 서버가 죽었다" 로
           // 잘못 이해한다. 서버는 살아 있고 주소만 알려 주면 된다(요구 9 의 degrade).
+          // 단, 한 번이라도 떠 있었던 창이 사라졌다면 그것은 "닫힘"(dead)이다. 이 구분이 없으면
+          // 사용자가 닫은 창이 "못 띄움" 으로 읽혀 S1 이 막히고, S3 만 남아 "못 띄웠는데 종료" 가 된다.
           chromeState: () => {
-            if (NO_BROWSER) return "alive";
-            if (browser?.pid) return "alive";
-            return browserLaunchAttempted ? "never-opened" : "alive";
+            if (browser?.pid) browserWasAlive = true;
+            return windowStateOf({
+              noBrowser: NO_BROWSER,
+              pidAlive: !!browser?.pid,
+              wasAlive: browserWasAlive,
+              launchAttempted: browserLaunchAttempted,
+            });
           },
           // S3 — 마지막 클라이언트 이탈 후 경과 시간. `null` 은 판정 대상이 아니다.
           msSinceLastClientGone: () => hub?.msSinceLastClientGone() ?? null,
