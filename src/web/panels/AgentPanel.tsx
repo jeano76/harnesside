@@ -11,6 +11,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useStickToBottom } from "./useFollowTail.js";
 import { animationFor, initialThink, ingest, finish, thinkNotice, speed, type ThinkState, type ThinkStyle, type ThinkNotice } from "../agent/think.js";
 // 블록 규칙의 **정본**은 여기다. 이 파일은 그려 줄 뿐이다(두 곳에 판단을 두면 어긋난다).
 import { appendToBlock, applyEvent, groupTurns, type AgentBlock } from "../../session/blocks.js";
@@ -442,7 +443,9 @@ export function AgentPanel({
   const bottom = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
   /** **맨 아래에 붙어 있는가.** 이 값이 오토 스크롤의 조건이다. */
-  const [pinned, setPinned] = useState(true);
+  // 바닥 따라가기는 DOM 을 직접 관찰한다 — 자라는 것이 블록 글자 수에 안 들어 있어도(코드 초안·도구 출력) 따라간다.
+  const stick = useStickToBottom(scroller);
+  const pinned = stick.pinned;
   /** 접은 묶음의 인덱스. **마지막 묶음은 항상 펼친다** — 진행 중인데 접으면 안 된다. */
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   const turns = useMemo(() => groupTurns(blocks), [blocks]);
@@ -468,10 +471,7 @@ export function AgentPanel({
    * 설정 블록 자체는 대화 안에 열린다(`viewExtra.settings`).
    */
 
-  useEffect(() => {
-    // **붙어 있을 때만** 따라간다. 안 그러면 읽던 곳을 빼앗긴다.
-    if (pinned) scrollToBottom(scroller.current);
-  }, [blocks.length, blocks[blocks.length - 1]?.text.length, pinned, turns.length]);
+  // 따라가기 자체는 `useStickToBottom` 이 한다("붙어 있을 때만" — 안 그러면 읽던 곳을 빼앗긴다).
 
   // 새 턴이 시작되면 마지막 지점으로 먼저 간다 (사용자 요구).
   // 읽던 중이었어도 새 출력이 시작됐다는 사실이 더 중요하다 — 배지는 턴 중간
@@ -479,8 +479,7 @@ export function AgentPanel({
   const wasRunning = useRef(running);
   useEffect(() => {
     if (running && !wasRunning.current) {
-      setPinned(true);
-      scrollToBottom(scroller.current);
+      stick.pin();
     }
     wasRunning.current = running;
   }, [running]);
@@ -630,8 +629,9 @@ export function AgentPanel({
           따라가고, 아니면 **"아래에 새 내용"** 배지를 띄운다. */}
       <div
         ref={scroller}
-        onScroll={() => setPinned(nearBottom(scroller.current))}
-        style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto", padding: "4px 6px" }}
+        onScroll={stick.onScroll}
+        // overflowAnchor: 브라우저의 스크롤 앵커링이 우리가 놓은 위치를 몰래 바꾸지 못하게 한다.
+        style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto", overflowAnchor: "none", padding: "4px 6px" }}
       >
         {blocks.length === 0 && !running && <FirstRun onPick={onExample} />}
 
@@ -741,7 +741,7 @@ export function AgentPanel({
         {!pinned && (
           <button
             type="button"
-            onClick={() => scrollToBottom(scroller.current, true)}
+            onClick={() => stick.pin(true)}
             style={{
               position: "sticky", bottom: 4, left: 0, margin: "0 auto", display: "block",
               background: "#21262d", color: "#c9d1d9", border: "1px solid #30363d",
@@ -839,19 +839,6 @@ function BlockBody({
       onEditFile={onEditFile}
     />
   );
-}
-
-/** 스크롤이 바닥에 얼마나 가까운가. 40px 안이면 "붙어 있다" 고 본다. */
-function nearBottom(el: HTMLElement | null): boolean {
-  if (!el) return true;
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-}
-
-function scrollToBottom(el: HTMLElement | null, smooth = false): void {
-  // 스트리밍 중에는 즉시 점프해야 한다. `smooth` 는 목표가 계속 움직이면
-  // 애니메이션이 영원히 뒤처져 "완료된 뒤에야" 도착한다(실측).
-  // 사용자가 배지를 눌렀을 때만 부드럽게 간다.
-  el?.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
 }
 
 /** 델타 한 개로 think 상태를 갱신한다(예산 초과 시 강제 전환은 여기서 일어난다). */

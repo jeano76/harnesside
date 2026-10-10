@@ -8,7 +8,8 @@
  *  - 행은 `React.memo` 로 격리 — 새 줄이 와도 보이는 행만 다시 그려진다.
  */
 
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { nextStick } from "./followTail.js";
 import type { LogEntry, LogLevel, LogSource } from "../../server/logRing.js";
 
 export interface LogPanelProps {
@@ -82,8 +83,8 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
   const [autoScroll, setAutoScroll] = useState(true);
   const [truncatedNotice, setTruncatedNotice] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const pending = useRef<LogEntry[]>([]);
-  const raf = useRef<number | null>(null);
+  /** 우리가 마지막으로 놓은 scrollTop — 이 위치의 스크롤 이벤트는 우리 것이다. */
+  const lastSet = useRef<number | null>(null);
 
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -102,25 +103,16 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
   // "왜 debug 가 보이냐" 를 설명하는 문구가 서로 달라진다.
   const shownFilterLabel = filterLabelProp ?? (relaxed ? `검색 중: 디버그 포함` : `레벨 ${level} 이상`);
 
-  // 50ms 버퍼 + rAF 커밋: 새 줄이 와도 초당 20회 넘게 리렌더하지 않는다(§5.6 규칙 재사용).
-  useEffect(() => {
-    if (entries.length === 0) return;
-    pending.current = entries.slice(-1);
-    if (raf.current !== null) return;
-    raf.current = window.setTimeout(() => {
-      raf.current = null;
-      // 강제 리렌더 대신 스크롤 위치만 맞춘다(리스트는 부모가 소유).
-      if (autoScroll && scrollRef.current) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      }
-    }, 50);
-    return () => {
-      if (raf.current !== null) {
-        window.clearTimeout(raf.current);
-        raf.current = null;
-      }
-    };
-  }, [entries, autoScroll]);
+  // 새 줄이 오면 **그려진 직후** 바닥으로 옮긴다. 예전에는 50ms 디바운스였는데, 새 줄이 50ms 보다 빠르게
+  // 오면 타이머가 매번 취소되어 **영영 발동하지 않았다**(스트리밍 중 자동 스크롤이 안 되던 경우). 리스트는
+  // 창(window) 처리되어 그려지는 행이 적으므로 렌더마다 한 번 옮겨도 비용이 작다.
+  const lastSeq = visible.length > 0 ? visible[visible.length - 1].seq : 0;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!autoScroll || !el) return;
+    el.scrollTop = el.scrollHeight;
+    lastSet.current = el.scrollTop;
+  }, [lastSeq, visible.length, autoScroll]);
 
   // 잘림 배너는 **한 번만**(§5.12.2). 계속 띄우면 패널이 지저분해진다.
   useEffect(() => {
@@ -130,8 +122,9 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < ROW_H * 2;
-    setAutoScroll(atBottom);
+    // 우리가 방금 옮긴 위치의 이벤트는 사용자가 움직인 것이 아니다 — 그 사이 줄이 더 붙었다고 체크박스를
+    // 스스로 끄지 않는다(빠른 로그에서 "자동 스크롤" 이 저절로 꺼지던 원인).
+    setAutoScroll((prev) => nextStick(prev, el, lastSet.current, ROW_H * 2));
   }, []);
 
   const total = visible.length;
