@@ -23,7 +23,7 @@
 |---|---|---|---|
 | 1 | **Q-11** ✅ | 설치 경로를 **1개**로. 지금 README 에 `npm run dev` / `npm link` / `node dist/...` 셋이고, 영문·한글 두 벌이 같은 내용을 중복한다. Q-4 에서 `files`·`prepublishOnly` 를 넣었으니 `npm i -g harnesside` 가 자연스럽다 — **반대 근거도 적을 것** | ✅ `801dd9d` · `npm pack` 121파일 733kB → 깨끗한 prefix 에 설치 후 6개 명령 실행 (`docs/VERIFICATION.md` "Packaged install") |
 | 2 | **Q-12** ✅ | README 3,075줄 → 3문서. `README.md`(60초 시작) · `docs/VERIFICATION.md`(검증 + "무엇을 검증하지 않는가") · `docs/ARCHITECTURE.md`(구조·블록·스킬·CDP). `## Implementation status` 2,000줄은 `PROGRESS.md` 가 정본이므로 지운다. **검증 섹션을 지우는 것이 아니라 옮긴다** | ✅ `docs/VERIFICATION.md` 420줄 · `docs/ARCHITECTURE.md` 463줄 · `docs/IMPLEMENTATION-HISTORY.md` 2,117줄 + 드리프트 검사 대상 10 → **17개 문서** |
-| 3 | **Q-13** ✅ | `harnesside doctor` 확장 (읽기 전용 유지). 판정만 추가: Node 버전 · 터미널 capability · 포트 3상태(빈 것 / 우리가 씀 / 남이 씀) · **`dist` 가 `src` 보다 오래됐는가** · 설정 provenance(비밀값은 절대 출력 안 함) · 모델 파일. 모르는 것은 `미확인` 으로 — 0·false 로 채우지 않는다 | ✅ 판정 모듈 `src/server/doctorChecks.ts` (순수 판정 + 주입 가능한 I/O) · 유닛 23 · **읽기 전용을 프로세스로 실측** 4 · 결함 1건(우리가 띄운 서버를 "다른 프로그램" 이라 말함) |
+| 3 | **Q-13** ✅ | `harnesside doctor` 확장 (읽기 전용 유지). 판정만 추가: Node 버전 · 터미널 capability · 포트 3상태(빈 것 / 우리가 씀 / 남이 씀) · **`dist` 가 `src` 보다 오래됐는가** · 설정 provenance(비밀값은 절대 출력 안 함) · 모델 파일. 모르는 것은 `미확인` 으로 — 0·false 로 채우지 않는다 | ✅ 판정 모듈 `src/server/doctorChecks.ts` (순수 판정 + 주입 가능한 I/O) · 유닛 **24** · **읽기 전용을 프로세로 실측** 4 · 결함 1건(우리가 켠 서버를 "other program"이라 말함 → 세 가지로 정정: dist 진입점 경로·serverPid 우선·OS 리스너 pid 보강) |
 
 ---
 
