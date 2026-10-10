@@ -338,7 +338,8 @@ export class AgentService {
       // 프롬프트도 **호출 시점**의 값을 쓴다. 규칙 파일 전환이 반영되려면
       // 상수를 캡처해서는 안 된다.
       systemPrompt: typeof this.opts.systemPrompt === "function" ? this.opts.systemPrompt() : this.opts.systemPrompt,
-      thresholds: resolveThresholds(this.opts.thresholds),
+      // 함수는 **그대로 넘긴다** — 루프가 쓸 때마다 읽어, 서버가 늦게 알려 준 창 크기를 따라간다.
+      thresholds: typeof this.opts.thresholds === "function" ? this.opts.thresholds : resolveThresholds(this.opts.thresholds),
       // 기본 ON(사용자 명시). 예산 폭주는 상한+강제 전환이 받는다.
       enableThinking: this.think.enabled,
       now,

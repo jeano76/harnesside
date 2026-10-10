@@ -246,7 +246,12 @@ export interface AgentLoopOptions {
   model: string;
   backend: ModelBackend;
   systemPrompt: string;
-  thresholds: CompactionThresholds;
+  /**
+   * 창 크기와 압축 임계값. **함수**를 주면 쓸 때마다 새로 읽는다 — 루프는 한 번 만들어 오래 쓰는데,
+   * 서버의 실제 컨텍스트는 루프보다 늦게 알려지거나(부팅 중 세션 복원) 바뀔 수 있다(서버 재기동).
+   * 값으로 고정하면 처음 추측한 창 크기가 세션 내내 남는다.
+   */
+  thresholds: CompactionThresholds | (() => CompactionThresholds);
   /** On by default (panel improvement 2026-10-01: Thinking 상시) — see
    *  config.ts's `enableThinking` for the measured reason the old default
    *  was off (an entire max_tokens budget spent on invisible
@@ -1296,9 +1301,9 @@ export class AgentLoop {
                 result.content,
                 result.lineRange,
                 JSON.parse(call.function.arguments).path,
-                this.opts.thresholds.contextWindowTokens
+                this.thresholds.contextWindowTokens
               )
-            : capToolResult(result.content, this.opts.thresholds.contextWindowTokens);
+            : capToolResult(result.content, this.thresholds.contextWindowTokens);
           if (result.diff) {
           doneDiff = result.diff;
             this.opts.onDiff?.(this.summarizeArgs(call.function.arguments), result.diff);
@@ -1366,7 +1371,7 @@ export class AgentLoop {
           // into the history uncapped, pushed usage past the compaction
           // trigger on its own, got compacted away before the model read it,
           // and the model reran it — a compaction every ~16s, live.
-          content = capToolResult(`ERROR: ${err.message}`, this.opts.thresholds.contextWindowTokens);
+          content = capToolResult(`ERROR: ${err.message}`, this.thresholds.contextWindowTokens);
           logFailure({
             timestamp: new Date().toISOString(),
             summary: `tool ${call.function.name} failed`,
@@ -1559,8 +1564,8 @@ export class AgentLoop {
     pendingToolCall: Checkpoint["pendingToolCall"] = null,
     opts: { fast?: boolean } = {}
   ): Promise<{ compacted: boolean; used: number }> {
-    const window = this.opts.thresholds.contextWindowTokens;
-    const trigger = window * this.opts.thresholds.autoTriggerRatio;
+    const window = this.thresholds.contextWindowTokens;
+    const trigger = window * this.thresholds.autoTriggerRatio;
     // P0-2: 배치 내에서는 fast 근사로 먼저 보고, 임계 근처에서만 exact로 확정.
     // 근사는 template 오버헤드를 과소평가하므로(~19% 실측), safety margin 안에서만
     // exact를 생략한다. 턴 경계·overflow·compaction 직후 기준선은 항상 exact.
@@ -1576,15 +1581,15 @@ export class AgentLoop {
     }
     const used = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
     this.estimateCallsExact++;
-    this.opts.onContextUsage?.(used, this.opts.thresholds.contextWindowTokens);
+    this.opts.onContextUsage?.(used, this.thresholds.contextWindowTokens);
     // P3 조기 압축 (opt-in, 기본 off): 실패 턴이 연속되고 사용량이 earlyRatio를
     // 넘었으면 0.7을 기다리지 않고 압축. 일반 트리거는 아래에서 그대로 처리.
-    if (shouldEarlyCompact(used, window, this.consecutiveFailTurns, this.opts.thresholds)) {
+    if (shouldEarlyCompact(used, window, this.consecutiveFailTurns, this.thresholds)) {
       await this.compact("early-quality", pendingToolCall);
       this.consecutiveFailTurns = 0;
       return { compacted: true, used };
     }
-    if (used >= window * this.opts.thresholds.autoTriggerRatio) {
+    if (used >= window * this.thresholds.autoTriggerRatio) {
       // Skip a compaction that would fire again almost immediately after
       // the previous one: when the fixed overhead (system prompt + tool
       // schema) alone leaves little room, postCompactionBudget() can land
@@ -1594,10 +1599,10 @@ export class AgentLoop {
       // before auto-firing again. The overflow-retry path calls compact()
       // directly and is unaffected, so a genuinely oversized request still
       // recovers instead of being skipped here.
-      const minGrowth = window * (this.opts.thresholds.minGrowthFraction ?? DEFAULT_MIN_GROWTH_FRACTION);
+      const minGrowth = window * (this.thresholds.minGrowthFraction ?? DEFAULT_MIN_GROWTH_FRACTION);
       if (
         this.lastCompactionUsed !== null &&
-        this.lastCompactionUsed < window * this.opts.thresholds.autoTriggerRatio &&
+        this.lastCompactionUsed < window * this.thresholds.autoTriggerRatio &&
         used - this.lastCompactionUsed < minGrowth
       ) {
         return { compacted: false, used };
@@ -1651,8 +1656,14 @@ export class AgentLoop {
    *  neighborhood. 2,048 clears the known gap with a real cushion (~70%
    *  more) for the next one to vary by, rather than being tuned to just
    *  barely survive this specific incident. */
+  /** 지금 유효한 임계값. 함수로 받았으면 호출 시점의 값. */
+  private get thresholds(): CompactionThresholds {
+    const t = this.opts.thresholds;
+    return typeof t === "function" ? t() : t;
+  }
+
   private computeMaxTokens(usedTokens: number): number {
-    const window = this.opts.thresholds.contextWindowTokens;
+    const window = this.thresholds.contextWindowTokens;
     const SAFETY_MARGIN_TOKENS = 2048;
     const CEILING_FRACTION = 0.75;
     const available = window - usedTokens - SAFETY_MARGIN_TOKENS;
@@ -1671,7 +1682,7 @@ export class AgentLoop {
   private async postCompactionBudget(
     maxTailBudgetFraction: number
   ): Promise<{ tailBudgetFraction: number; summaryMaxTokens: number | undefined }> {
-    const window = this.opts.thresholds.contextWindowTokens;
+    const window = this.thresholds.contextWindowTokens;
     const systemText = typeof this.messages[0]?.content === "string" ? this.messages[0].content : "";
     // The one-character user turn is there because some chat templates
     // (Ornith-1.5's) reject a conversation with no user message; without
@@ -1694,8 +1705,8 @@ export class AgentLoop {
     // minutes. 0.4 roughly doubles the room vs 0.75, at the cost of
     // keeping less recent conversation verbatim. Configurable via
     // thresholds.postCompactionTargetRatio.
-    const targetRatio = this.opts.thresholds.postCompactionTargetRatio ?? DEFAULT_POST_COMPACTION_TARGET_RATIO;
-    const target = Math.floor(window * this.opts.thresholds.autoTriggerRatio * targetRatio);
+    const targetRatio = this.thresholds.postCompactionTargetRatio ?? DEFAULT_POST_COMPACTION_TARGET_RATIO;
+    const target = Math.floor(window * this.thresholds.autoTriggerRatio * targetRatio);
     const room = target - overhead;
     if (room < 512 && !this.warnedWindowTooSmall) {
       this.warnedWindowTooSmall = true;
@@ -1714,7 +1725,7 @@ export class AgentLoop {
     // backend, so 4096 was ~107 s of generation for a summary that is supposed
     // to COMPRESS the history, not restate it. `compaction.summaryMaxTokens` in
     // config.yaml overrides it, because the right trade is a judgement call.
-    const configured = this.opts.thresholds.summaryMaxTokens;
+    const configured = this.thresholds.summaryMaxTokens;
     const defaultSummaryMaxTokens = Math.max(
       256,
       Math.min(configured ?? DEFAULT_SUMMARY_MAX_TOKENS, Math.floor(window * 0.25))
@@ -1787,7 +1798,7 @@ export class AgentLoop {
           this.opts.backend,
           this.opts.model,
           partial,
-          this.opts.thresholds.contextWindowTokens,
+          this.thresholds.contextWindowTokens,
           budget.tailBudgetFraction,
           budget.summaryMaxTokens
         );

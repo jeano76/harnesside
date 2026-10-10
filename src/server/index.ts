@@ -57,6 +57,7 @@ import type { UpdateChannel, ApplyGuard } from "./update/pipeline.js";
 import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, windowStateOf, type Watchdog } from "./watchdog.js";
+import { probeServerContext } from "../backend/serverContext.js";
 import { issueToken } from "../auth/token.js";
 import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
@@ -423,7 +424,14 @@ const updates: UpdateService = new UpdateService({
     // 헛터졌다. 팩토리인 이유: 이 서비스는 부팅 전에 만들어지고 루프는 턴마다
     // 지연 생성되므로, 읽는 시점에는 이미 `boot` 가 있다(위 model/baseUrl 과
     // 같은 패턴). config.yaml 명시값이 있으면 그 키만 덮는다.
-    thresholds: () => ({ ...recommendThresholds(boot?.tuning?.contextSize ?? configuredContextSize ?? 32_768), ...compactionOverrides }),
+    // 창 크기의 근거는 **서버가 알려 준 값**이 먼저다(`probeServerContext`). 튜닝·설정·기본값은 추측이라
+    // 서버와 어긋난다 — 실측: 서버 `-c 20480` 인데 에이전트는 86016 으로 알아 압축이 늦고 컨텍스트가 가득 찼다.
+    // 동기 팩토리라서 값은 캐시에서 읽고, 오래됐으면 뒤에서 새로 묻는다(서버가 재기동하며 바뀔 수 있다).
+    thresholds: () => {
+      if (Date.now() - serverContextAt > SERVER_CONTEXT_TTL_MS) refreshServerContext();
+      const window = serverContextSize ?? boot?.tuning?.contextSize ?? configuredContextSize ?? 32_768;
+      return { ...recommendThresholds(window), ...compactionOverrides };
+    },
     // 읽어 온 설정값만 넘긴다 — 없는 키를 `undefined` 로 넘기면 기본값과 섞인다.
     ...(thinkCfg.set ? { maxReasoningTokens: thinkCfg.maxReasoningTokens } : {}),
     emit: (e) => {
@@ -651,6 +659,19 @@ const updates: UpdateService = new UpdateService({
   // 32768 로 가정하면 실제 `-c` 와 어긋난다(실측: 86016 서버에서 32,768 로 표시). 그래서
   // 설정에 적힌 llama.contextSize 를 다음 근거로 쓴다.
   let configuredContextSize: number | undefined;
+  /** 서버에게 직접 물어 알아낸 창 크기. 있으면 다른 어떤 추측보다 우선한다. */
+  let serverContextSize: number | undefined;
+  let serverContextAt = 0;
+  const SERVER_CONTEXT_TTL_MS = 30_000;
+  const refreshServerContext = (): void => {
+    serverContextAt = Date.now();
+    void probeServerContext(`http://127.0.0.1:${boot?.ports?.llamaPort ?? 8080}`).then((n) => {
+      if (n && n !== serverContextSize) {
+        if (serverContextSize !== undefined) emit(`[llama] 서버 컨텍스트가 ${serverContextSize} → ${n} 토큰으로 바뀌었습니다 — 압축 임계값을 맞춥니다.`);
+        serverContextSize = n;
+      }
+    });
+  };
   {
     const raw = await readFile(join(projectRoot, ".harnesside", "config.yaml"), "utf8").catch(() => null);
     if (raw) {
@@ -1852,6 +1873,7 @@ const cdpPort = cdpEnv !== undefined && cdpEnv.trim() !== "" ? Number(cdpEnv) : 
     // 것만 죽인다.
     emit(`[7] 기존 llama-server 를 채택했습니다: http://127.0.0.1:${adopted.port} (${adopted.model}) — 스폰하지 않습니다.`);
     emit("[8] 헬스체크: 채택한 서버 사용 (스폰 없음)");
+    refreshServerContext();
   } else if (llama && model?.path && tuning && ports) {
   let lastLlamaErr: string | null = null;
   launcher = new LlamaLauncher(
@@ -1887,6 +1909,7 @@ const cdpPort = cdpEnv !== undefined && cdpEnv.trim() !== "" ? Number(cdpEnv) : 
   for (const r of built.rationale) emit(`    - ${r}`);
 
   const ready = await launcher.waitUntilReady(120_000);
+  refreshServerContext();
   emit(`[8] 헬스체크: ${ready ? "준비 완료 (/v1/models 200)" : "실패 — 창은 계속 뜹니다"}`);
   if (!ready) {
     // 계획 단계(bootstrap)의 [8] 은 "준비될 수 있다" 였다 — **실제** 결과로 덮어 창(/api/bootstrap)도 같은 말을 하게 한다(Q-5).

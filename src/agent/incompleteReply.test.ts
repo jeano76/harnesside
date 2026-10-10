@@ -101,3 +101,38 @@ test("빈 응답이 상한 안에서 두 번 나온 뒤 정상 응답이 오면 
   assert.equal(requests.length, 3);
   assert.ok(status[status.length - 1].startsWith("[done"));
 });
+
+// ── 임계값 팩토리: 루프를 만든 뒤에 알려진 창 크기도 따라간다 ──────────────────────
+
+test("thresholds 를 함수로 주면 루프는 쓸 때마다 새로 읽는다 — 늦게 알려진 서버 창 크기가 반영된다", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-thfactory-"));
+  let window = 100_000; // 루프를 만들 때의 추측값
+  const totals: number[] = [];
+  const backend: ModelBackend = {
+    async chat(req) {
+      return req.tools ? reply("ok") : reply("summary");
+    },
+    async listModels() {
+      return ["m"];
+    },
+    async tokenize() {
+      return 3;
+    },
+  };
+  try {
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: () => ({ autoTriggerRatio: 0.9, contextWindowTokens: window }),
+      onContextUsage: (_used, total) => totals.push(total),
+    });
+    await loop.send("one");
+    window = 20_480; // 서버가 실제 창을 알려 줬다
+    await loop.send("two");
+    assert.deepEqual([totals[0], totals[totals.length - 1]], [100_000, 20_480], `창 크기가 고정됐다: ${JSON.stringify(totals)}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
