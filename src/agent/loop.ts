@@ -34,6 +34,7 @@ import {
 } from "./harness.js";
 import { appendNote, clearNotes, readNotes, NOTES_HEADER } from "../compaction/notes.js";
 import { gitCheckpoint } from "./gitCheckpoint.js";
+import { judgeReply, incompleteReplyNudge, MAX_INCOMPLETE_REPLY_RETRIES } from "./incompleteReply.js";
 
 // Sent as the `tools` field on every main-loop request (never on the
 // compaction summary request, which omits tools entirely) — computed once
@@ -681,6 +682,11 @@ export class AgentLoop {
     // one-off, server-side streaming artifact.
     const MAX_UTF8_SPLIT_RETRIES = 1;
     let utf8SplitRetries = 0;
+    // A reply with no tool call is normally the end of the turn, but a reasoning-only (empty) or
+    // length-cut reply is an unfinished turn, not a finished one (see incompleteReply.ts). Counts
+    // CONSECUTIVE such replies; any normal reply resets it, so a long task can recover many times
+    // while a model that never recovers still surfaces as a real stop.
+    let incompleteReplyRetries = 0;
     // Reported live: the text nudge alone was not enough — a real retry
     // regenerated the EXACT same content and got cut off at the EXACT
     // same character column as the first attempt, twice, because nothing
@@ -1075,6 +1081,33 @@ export class AgentLoop {
       // context and reinforce the same pattern on a later turn.
       if (typeof message.content === "string") {
         message.content = stripToolCallTemplateLeak(message.content);
+      }
+      const replyVerdict = judgeReply(message, res.choices[0].finish_reason);
+      if (replyVerdict === "complete") {
+        incompleteReplyRetries = 0;
+      } else {
+        if (replyVerdict === "cut-off") this.messages.push(message); // keep what was said; "empty" has nothing worth keeping
+        this.opts.onAssistantDone?.();
+        if (incompleteReplyRetries >= MAX_INCOMPLETE_REPLY_RETRIES) {
+          this.opts.onStatus?.(
+            `[stopped] the model returned ${replyVerdict === "empty" ? "an empty reply (reasoning only)" : "a reply cut off by the output limit"} ` +
+              `${incompleteReplyRetries + 1} times in a row — stopping so it doesn't loop. Tell it to continue, or ask for a smaller step.`
+          );
+          logFailure({
+            timestamp: new Date().toISOString(),
+            summary: `incomplete model reply (${replyVerdict}) repeated`,
+            toolName: "chat",
+            errorMessage: `${replyVerdict} reply ${incompleteReplyRetries + 1} times in a row`,
+          });
+          this.hasNewFailuresThisTurn = true;
+          return;
+        }
+        incompleteReplyRetries++;
+        this.opts.onStatus?.(
+          `[${replyVerdict === "empty" ? "empty reply" : "reply cut off"}] the model's turn was unfinished — asking it to continue (${incompleteReplyRetries}/${MAX_INCOMPLETE_REPLY_RETRIES}).`
+        );
+        this.messages.push({ role: "user", content: incompleteReplyNudge(replyVerdict) });
+        continue;
       }
       this.messages.push(message);
       this.opts.onAssistantDone?.();
