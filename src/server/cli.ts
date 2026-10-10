@@ -53,6 +53,8 @@ doctor 는 **아무것도 고치지 않는다.** 손대려면 doctor --install �
   --no-shortcut  setup 에서 바탕화면 바로가기를 만들지 않는다
   --models-dir=DIR setup·doctor --install 의 모델 디렉터리 (기본 ~/.harnesside/models)
   --no-browser    창을 띄우지 않고 서버만 (디버깅용)
+  --here          현재 폴더에서 시작 (프로젝트로 쓴 적 없는 폴더에서도 마지막 작업 폴더로 가지 않음)
+  --last          현재 폴더가 프로젝트여도 마지막 작업 폴더에서 시작
   --daemon        = up -d
   --version       버전만 출력
   --dry           12단계만 출력, 부수효과 없음

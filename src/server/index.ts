@@ -58,6 +58,10 @@ import { BrowserLauncher } from "./browserLauncher.js";
 import { WsHub } from "./wsHub.js";
 import { startWatchdog, windowStateOf, type Watchdog } from "./watchdog.js";
 import { probeServerContext } from "../backend/serverContext.js";
+import { decideStartRoot, inspectStart, readLastWorkspace, rememberWorkspace } from "./lastWorkspace.js";
+import { buildLastWorkBrief, type GitBrief } from "../session/lastWork.js";
+import { SessionStore } from "../session/store.js";
+import { readNotes } from "../compaction/notes.js";
 import { issueToken } from "../auth/token.js";
 import { detectModelAt } from "../backend/detect.js";
 import { writeCheckpoint } from "../compaction/checkpoint.js";
@@ -112,9 +116,43 @@ function stateDir(projectRoot: string): string {
 /** 모듈 로드 시각 — 프로세스 기동의 기준. `/api/health` 가 그대로 노출한다. */
 const STARTED_AT = Date.now();
 
+/** 폴더의 git 상태를 짧게 모은다. git 이 없거나 저장소가 아니면 null. 실패해도 던지지 않는다. */
+async function collectGitBrief(root: string): Promise<GitBrief | null> {
+  const { execFile } = await import("node:child_process");
+  const run = (args: string[]): Promise<string | null> =>
+    new Promise((resolve) => {
+      execFile("git", args, { cwd: root, timeout: 4000, maxBuffer: 256 * 1024 }, (err, out) => resolve(err ? null : String(out)));
+    });
+  const branch = await run(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch === null) return null;
+  const log = (await run(["log", "--oneline", "-n", "5"])) ?? "";
+  const status = (await run(["status", "--short"])) ?? "";
+  const lines = (t: string) => t.split("\n").map((l) => l.trimEnd()).filter(Boolean);
+  return { branch: branch.trim(), commits: lines(log), changes: lines(status) };
+}
+
 async function main(): Promise<number> {
-  const projectRoot = process.cwd();
   const home = homedir();
+  // **어느 폴더에서 시작할지**를 가장 먼저 정한다. 프로젝트로 쓴 적 없는 폴더(홈 등)에서 띄웠으면 마지막
+  // 작업 폴더로 돌아간다 — 그 폴더에서 설정·모델·세션이 모두 시작되므로 이후 단계는 이 루트만 본다.
+  const cwd0 = process.cwd();
+  const lastWs = await readLastWorkspace(home);
+  const startRoot = decideStartRoot({
+    cwd: cwd0,
+    last: lastWs?.path ?? null,
+    here: flag("--here"),
+    forceLast: flag("--last"),
+    ...(await inspectStart(cwd0, lastWs?.path ?? null)),
+  });
+  if (startRoot.moved) {
+    try {
+      process.chdir(startRoot.root);
+      emit(`[start] 마지막 작업 폴더로 이동: ${startRoot.root} — ${startRoot.reason}`);
+    } catch (e) {
+      emit(`[start] 마지막 작업 폴더로 이동하지 못했습니다(${e instanceof Error ? e.message : String(e)}) — 현재 폴더에서 시작합니다`);
+    }
+  }
+  const projectRoot = process.cwd();
   const modelsDir = process.env.HARNESSIDE_MODELS_DIR ?? join(home, ".harnesside", "models");
   const paths = defaultPaths(projectRoot, home);
   await mkdir(stateDir(projectRoot), { recursive: true });
@@ -175,6 +213,7 @@ async function main(): Promise<number> {
         warnings: e.switchPlan.warnings,
       });
       emit(`[workspace] ${e.from.root} → ${e.to.root}`);
+      void rememberWorkspace(home, e.to.root);
     },
   });
   // M1 터미널. PTY 는 **워크스페이스 루트 에서만** 연다 — 밖에서 열면 승인 게이트를
@@ -206,6 +245,7 @@ async function main(): Promise<number> {
     buildSystemPrompt({
       workspaceRoot: workspace.root(),
       ruleFiles: workspace.rules().map((r) => r.path),
+      extra: lastWorkBrief && workspace.root() === briefRoot ? lastWorkBrief : undefined,
     });
 
   // §5.2: 워크스페이스 파일 변경 감지. 자기 쓰기는 `self:true` 로 표시되어
@@ -250,6 +290,7 @@ async function main(): Promise<number> {
   // §8.3: 지문을 **한 번** 구한다. 이후 모든 판정이 같은 값을 봐야 전환 중에
   // 트리와 도구의 기준이 어긋나지 않는다.
   await workspace.init();
+  void rememberWorkspace(home, workspace.root());
 
   // §5.3 에이전트. llama 포트(BaseUrl)는 **부팅 후에** 정해지므로(단계 6·7) 이 시점의
   // 값으로 박지 않는다 — 부팅 전에 만들어 두면 어차피 옛 값이다.
@@ -263,6 +304,22 @@ async function main(): Promise<number> {
       emit(`[session] 저장 실패: ${m}`);
     },
   });
+  // 마지막 작업 요약 — `session.start()` **전에** 읽는다(시작하면 빈 새 세션이 "가장 최근" 이 된다).
+  // 이 프로세스가 시작한 루트에서만 쓴다: 화면에서 폴더를 바꾸면 그 요약은 더 이상 이 폴더의 것이 아니다.
+  const briefRoot = workspace.root();
+  const lastWorkBrief = await (async () => {
+    try {
+      const prev = await new SessionStore(stateDir(projectRoot)).latest(briefRoot);
+      return buildLastWorkBrief({
+        doc: prev,
+        git: await collectGitBrief(briefRoot),
+        notes: await readNotes(briefRoot).catch(() => ""),
+      });
+    } catch {
+      return null; // 요약을 못 만드는 것이 시작을 막을 이유는 아니다
+    }
+  })();
+  if (lastWorkBrief) emit(`[resume] 마지막 작업 요약을 에이전트에게 전달했습니다 (${lastWorkBrief.length}자) — 확인: /api/session/lastwork`);
   session.start();
   // §9.1 업데이트. GitHub 를 **실제로** 본다. 네트워크 주입은 테스트에만 쓴다.
   const updateSlotsDir = join(stateDir(projectRoot), "update-slots");
@@ -1243,6 +1300,8 @@ const updates: UpdateService = new UpdateService({
             lastError: session.lastError,
           }))
           .route("GET", "/api/session/list", async () => ({ sessions: await session.list() }))
+          // 에이전트에게 전달한 "마지막 작업 요약" 을 그대로 보여 준다 — 모델이 무엇을 알고 시작했는지 확인용.
+          .route("GET", "/api/session/lastwork", () => ({ root: briefRoot, brief: lastWorkBrief }))
           .route("POST", "/api/session/save", async () => session.saveNow())
           // ── llama.cpp 상태 (최초 구동 판정) ─────────────────────────────────
           //
