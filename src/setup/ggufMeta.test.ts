@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, chmod, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseGgufArchInfo, readGgufArchInfo, isMoeModelFile, isMoeModel } from "./ggufMeta.js";
+import { parseGgufArchInfo, readGgufArchInfo, isMoeModelFile, isMoeModel, readRemoteGgufFingerprint, readGgufFingerprint, sameFingerprint } from "./ggufMeta.js";
 import { tuneForHardware } from "./tuning.js";
 import { LlamaServerManager } from "../backend/llamaServer.js";
 import { isKnownDenseFamily } from "./modelCatalog.js";
@@ -263,4 +263,40 @@ test("tuner: a dense model bigger than the card is offloaded partially, not with
   // A model that fits keeps the full offload.
   const fits = tuneForHardware(hw, { modelBytes: 5.1 * GiB, moe: false, kvElementsPerToken: QWEN_ELEMENTS, modelLayers: 32 });
   assert.equal(fits.gpuLayers, 999);
+});
+
+// ── 헤더 지문: 로컬 파일과 원격(Range) 읽기가 같은 답을 낸다 ─────────────────────
+const headerWith = (tensors: number, blocks: number) =>
+  Buffer.concat([
+    Buffer.from("GGUF"), u32(3), u64(tensors), u64(4),
+    kvStr("general.architecture", "qwen35moe"), kvU32("qwen35moe.block_count", blocks),
+    kvU32("qwen35moe.expert_count", 256), kvStrArr("tokenizer.ggml.tokens", ["a"]),
+  ]);
+
+test("원격 헤더(206) 지문 == 같은 바이트를 가진 로컬 파일의 지문", async () => {
+  const bytes = headerWith(753, 40);
+  const remote = await readRemoteGgufFingerprint("https://example.test/m.gguf", {
+    fetch: (async (_u: string, init?: RequestInit) => {
+      assert.match(String((init?.headers as Record<string, string>).Range), /^bytes=0-\d+$/, "Range 를 요청하지 않았다");
+      return new Response(new Uint8Array(bytes), { status: 206 });
+    }) as unknown as typeof fetch,
+  });
+  assert.ok(remote && remote.conclusive);
+  assert.equal(remote.tensorCount, 753);
+  assert.equal(remote.blockCount, 40);
+  await withFile(bytes, async (path) => {
+    const local = await readGgufFingerprint(path);
+    assert.deepEqual(local, remote, "같은 바이트인데 로컬과 원격 지문이 다르다");
+    assert.equal(sameFingerprint(local, remote), true);
+  });
+});
+
+test("층 수나 텐서 수가 다르면 sameFingerprint 가 아니다", async () => {
+  const get = async (b: Buffer) =>
+    (await readRemoteGgufFingerprint("https://example.test/x", {
+      fetch: (async () => new Response(new Uint8Array(b), { status: 206 })) as unknown as typeof fetch,
+    }))!;
+  const base = await get(headerWith(753, 40));
+  assert.equal(sameFingerprint(base, await get(headerWith(753, 41))), false, "층 수 차이를 놓쳤다");
+  assert.equal(sameFingerprint(base, await get(headerWith(760, 40))), false, "텐서 수 차이를 놓쳤다");
 });

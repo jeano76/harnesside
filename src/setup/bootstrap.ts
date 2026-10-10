@@ -36,7 +36,7 @@ import {
 import { planPorts, tcpPortProbe, COMMON_PORTS, LLAMA_PORT, type PortProbe } from "./ports.js";
 import { acquireStockLlamaServer } from "./stockRuntime.js";
 import { chooseModel, resolveModel, pickPinnedCandidate, isKnownDenseFamily, type ModelChoice } from "./modelCatalog.js";
-import { isMoeModel, readGgufKvShape } from "./ggufMeta.js";
+import { isMoeModel, readGgufKvShape, readRemoteGgufFingerprint, type GgufFingerprint } from "./ggufMeta.js";
 import { normalizeSha256, fileMatchesSha256 } from "./checksum.js";
 import { downloadFile, formatProgress, type TransferProgress } from "./download.js";
 import { selectModelPath, hasRoom, RESERVE_BYTES } from "./disk.js";
@@ -639,7 +639,7 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
         });
         log(`이미 있는 동일 모델을 사용합니다: ${equivalent}`);
       } else if (
-        (equivalent = await findModelAnywhere(model.candidate, [target.dir, modelsDir], env, opts.listExistingModels))
+        (equivalent = await findModelAnywhere(model.candidate, [target.dir, modelsDir], env, opts.listExistingModels, { offline: opts.offline }))
       ) {
         // The same model on ANOTHER disk or directory (models are not kept in one place):
         // used where it is. No download, no copy, and the config will point at it.
@@ -1059,10 +1059,11 @@ export async function findEquivalentModel(
 /** The candidate's model if it is anywhere this machine keeps models: the target and models
  *  directories, the conventional ones, and mounted disks' `models` folders. */
 export async function findModelAnywhere(
-  candidate: { filename: string; sizeBytes: number },
+  candidate: { filename: string; sizeBytes: number; url?: string },
   dirs: string[],
   env: NodeJS.ProcessEnv,
-  listExistingModels?: (dir: string) => Promise<{ path: string; sizeBytes: number }[]>
+  listExistingModels?: (dir: string) => Promise<{ path: string; sizeBytes: number }[]>,
+  sameWeights: { candidateFingerprint?: () => Promise<GgufFingerprint | null>; offline?: boolean } = {}
 ): Promise<string | null> {
   const { candidateDirs, discoverMounts } = await import("./disk.js");
   const all = [...new Set([...dirs, ...candidateDirs(env), ...(listExistingModels ? [] : await discoverMounts().catch(() => []))])];
@@ -1074,7 +1075,12 @@ export async function findModelAnywhere(
   const exact = pickReusable(candidate, local)?.path ?? null;
   if (exact) return exact;
   // 이름·크기가 달라도 헤더가 같은 가중치면 재사용한다 (findSameWeightsModel 주석 참고).
-  return (await findSameWeightsModel(candidate, local))?.path ?? null;
+  const hit = await findSameWeightsModel(candidate, local, {
+    candidateFingerprint:
+      sameWeights.candidateFingerprint ?? (candidate.url ? () => readRemoteGgufFingerprint(candidate.url as string) : undefined),
+    allowUnverified: sameWeights.offline === true,
+  });
+  return hit?.path ?? null;
 }
 
 async function listGgufsIn(dir: string): Promise<{ path: string; sizeBytes: number }[]> {

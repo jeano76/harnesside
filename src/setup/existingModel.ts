@@ -11,7 +11,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { modelFamilyOf, pickPinnedCandidate, type ModelCandidate } from "./modelCatalog.js";
-import { readGgufFingerprint, type GgufFingerprint } from "./ggufMeta.js";
+import { readGgufFingerprint, sameFingerprint, type GgufFingerprint } from "./ggufMeta.js";
 import { baseName } from "../shared/path.js";
 
 export interface LocalGguf {
@@ -138,13 +138,18 @@ export interface SameWeightsHit {
  * hyper-parameters, different per-tensor quant mix). Exact-size matching then
  * re-downloads 21.7 GB the machine already has.
  *
- * This tier instead asks the file's own header: same quant tag, same family
- * root, size within tolerance, and an identical architecture fingerprint.
- * The fingerprint (not the name) is the verdict; the rest only decides which
- * files earn a header read, so a disk full of unrelated models costs no I/O
- * beyond the listing.
+ * This tier instead compares headers: the local file's against the candidate's
+ * own (`candidateFingerprint`, read with a Range request for the first MB of the
+ * Hub file). Same quant tag, same family root and a size within tolerance only
+ * decide which files earn a header read, so a disk full of unrelated models
+ * costs no I/O beyond the listing; the fingerprint comparison is the verdict.
  *
- * `readFingerprint` is injected for tests; defaults to reading the real file.
+ * When the candidate's header cannot be read (offline, Range refused) the
+ * comparison is impossible and the file is NOT reused — unless the caller says
+ * `allowUnverified` (it cannot download anyway), in which case the weaker
+ * evidence is stated in `reason`.
+ *
+ * `readFingerprint` and `candidateFingerprint` are injected for tests.
  */
 export async function findSameWeightsModel(
   candidate: { filename: string; sizeBytes: number },
@@ -152,6 +157,10 @@ export async function findSameWeightsModel(
   opts: {
     readFingerprint?: (path: string) => Promise<GgufFingerprint>;
     sizeTolerance?: number;
+    /** The candidate's own header fingerprint, or null when it cannot be read. Called at most once. */
+    candidateFingerprint?: () => Promise<GgufFingerprint | null>;
+    /** Reuse a plausible file even when the candidate's header could not be compared. */
+    allowUnverified?: boolean;
   } = {}
 ): Promise<SameWeightsHit | null> {
   if (!candidate.sizeBytes) return null;
@@ -160,6 +169,9 @@ export async function findSameWeightsModel(
   const wantFamily = familyRootOf(candidate.filename);
   const tolerance = opts.sizeTolerance ?? SAME_WEIGHTS_SIZE_TOLERANCE;
   const read = opts.readFingerprint ?? readGgufFingerprint;
+  let wanted: Promise<GgufFingerprint | null> | undefined;
+  const wantFingerprint = (): Promise<GgufFingerprint | null> =>
+    (wanted ??= (opts.candidateFingerprint ? opts.candidateFingerprint().catch(() => null) : Promise.resolve(null)));
   const prefetched = new Map<string, GgufFingerprint>();
   const fingerprintOf = async (path: string): Promise<GgufFingerprint> => {
     const hit = prefetched.get(path);
@@ -176,18 +188,20 @@ export async function findSameWeightsModel(
     if (Math.abs(f.sizeBytes - candidate.sizeBytes) / candidate.sizeBytes > tolerance) continue;
     const fp = await fingerprintOf(f.path);
     if (!fp.conclusive || fp.blockCount === undefined) continue;
-    // The candidate's own fingerprint is unknown (it is not downloaded yet),
-    // so the verdict is: a conclusive header with matching family + quant +
-    // close size. The residual risk (same shapes, different data) is reported
-    // in `reason`, never hidden.
+    const want = await wantFingerprint();
+    const verified = !!want && want.conclusive;
+    if (verified && !sameFingerprint(fp, want as GgufFingerprint)) continue;
+    if (!verified && !opts.allowUnverified) continue;
     const sizePct = (((f.sizeBytes - candidate.sizeBytes) / candidate.sizeBytes) * 100).toFixed(1);
+    const head = `${fp.arch}·${fp.blockCount ?? "?"}층·텐서 ${fp.tensorCount ?? "?"}개`;
     return {
       path: f.path,
       sizeBytes: f.sizeBytes,
-      reason:
-        `동일 가중치로 판단되는 기존 파일 재사용: ${name} (${(f.sizeBytes / 1024 ** 3).toFixed(1)} GiB, ` +
-        `게시 크기 대비 ${sizePct}%, 헤더 ${fp.arch}·${fp.blockCount ?? "?"}층·텐서 ${fp.tensorCount ?? "?"}개 일치). ` +
-        `이름·크기가 달라 재사용 근거를 헤더에서 확인했습니다.`,
+      reason: verified
+        ? `동일 가중치로 판단되는 기존 파일 재사용: ${name} (${(f.sizeBytes / 1024 ** 3).toFixed(1)} GiB, ` +
+          `게시 크기 대비 ${sizePct}%). 받을 파일의 헤더와 비교해 ${head} 일치를 확인했습니다.`
+        : `기존 파일 재사용(헤더 미확인): ${name} (${(f.sizeBytes / 1024 ** 3).toFixed(1)} GiB, 게시 크기 대비 ${sizePct}%). ` +
+          `받을 파일의 헤더를 읽지 못해 이름·양자화·크기와 이 파일 헤더(${head})로만 판단했습니다.`,
     };
   }
   return null;

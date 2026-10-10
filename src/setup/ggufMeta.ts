@@ -279,6 +279,22 @@ export interface GgufFingerprint {
   conclusive: boolean;
 }
 
+/** Pure: the header (magic, version, tensor count) plus every pre-tokenizer key of a file's first bytes, or null. */
+export function parseGgufHead(head: Buffer): { tensorCount: number; keys: Record<string, number | string | number[]> } | null {
+  try {
+    if (head.length < 24 || head.toString("latin1", 0, 4) !== "GGUF") return null;
+    const r = new Reader(head);
+    r.off = 4;
+    if (r.u32() < 2) return null;
+    const tensorCount = r.u64();
+    r.u64(); // kv count — parseGgufKeys re-reads it
+    const keys = parseGgufKeys(head);
+    return keys ? { tensorCount, keys } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The header (magic, version, tensor count) plus every pre-tokenizer key, or null. Never throws. */
 export async function readGgufHeader(path: string, headBytes = 4 * 1024 * 1024): Promise<{ tensorCount: number; keys: Record<string, number | string | number[]> } | null> {
   let fh;
@@ -286,15 +302,7 @@ export async function readGgufHeader(path: string, headBytes = 4 * 1024 * 1024):
     fh = await open(path, "r");
     const buf = Buffer.alloc(headBytes);
     const { bytesRead } = await fh.read(buf, 0, headBytes, 0);
-    const head = buf.subarray(0, bytesRead);
-    if (head.length < 24 || head.toString("latin1", 0, 4) !== "GGUF") return null;
-    const r = new Reader(head as Buffer);
-    r.off = 4;
-    if (r.u32() < 2) return null;
-    const tensorCount = r.u64();
-    r.u64(); // kv count — parseGgufKeys re-reads it
-    const keys = parseGgufKeys(head as Buffer);
-    return keys ? { tensorCount, keys } : null;
+    return parseGgufHead(buf.subarray(0, bytesRead) as Buffer);
   } catch {
     return null;
   } finally {
@@ -336,6 +344,38 @@ export async function readGgufFingerprint(path: string): Promise<GgufFingerprint
   const h = await readGgufHeader(path);
   if (!h) return { arch: "", conclusive: false };
   return fingerprintFromKeys(h.keys, h.tensorCount);
+}
+
+/**
+ * The fingerprint of a file that is NOT on disk yet, read from its first bytes over HTTP.
+ *
+ * A local file can only be called "the same weights" by comparing it with the candidate's own
+ * header, and the header sits at the start of the file — a Range request for the first few MB
+ * is enough. Anything but a `206` is refused: a server that ignores Range would otherwise
+ * stream the whole 20 GB to answer a question about 4 MB. Never throws; null means "could not
+ * tell", which the caller must not read as "different" or as "same".
+ */
+export async function readRemoteGgufFingerprint(
+  url: string,
+  opts: { fetch?: typeof fetch; headBytes?: number; timeoutMs?: number } = {}
+): Promise<GgufFingerprint | null> {
+  const headBytes = opts.headBytes ?? 4 * 1024 * 1024;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 15_000);
+  try {
+    const res = await (opts.fetch ?? fetch)(url, { headers: { Range: `bytes=0-${headBytes - 1}` }, signal: ctl.signal });
+    if (res.status !== 206) {
+      await res.body?.cancel().catch(() => {});
+      return null;
+    }
+    const buf = Buffer.from(await res.arrayBuffer()).subarray(0, headBytes);
+    const h = parseGgufHead(buf as Buffer);
+    return h ? fingerprintFromKeys(h.keys, h.tensorCount) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function fnumEq(a: number | undefined, b: number | undefined): boolean {
