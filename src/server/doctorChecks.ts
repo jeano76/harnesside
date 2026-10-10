@@ -662,7 +662,8 @@ export async function collectDoctorChecks(opts: CollectOptions): Promise<DoctorC
     // 이 IDE를 알 때만 있고(Q-13), 이름 cmdline 매칭은 설치 경로에 따라 틀릴 수 있다(p.ours / p.oursLabel).
     // 그래서 관측된 pid가 있으면 ourPids 에 보강한다 — 조회 실패(free 또는 lookupFailed)는 pid 가 없으니
     // 아무것도 붙지 않는다(이전과 동일).
-    if (observation.pid !== undefined) {
+    // `null` 은 "누군가 있는데 pid 를 모른다" 이다(PortObservation.pid) — 집합에 넣을 수 없다.
+    if (observation.pid !== undefined && observation.pid !== null) {
       ourPids.add(observation.pid);
     }
     checks.push(judgePort(p.label, p.port, observation, p.ours, p.oursLabel, ourPids));
