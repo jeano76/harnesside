@@ -174,6 +174,19 @@ test("포트: 출력에 붙는 이름은 근거마다 다르다 (모두 '우리 
   assert.match(cdp.value, /Chrome \(CDP\)/);
 });
 
+test("포트: **이름 cmdline이 매칭 안 돼도 OS 리스너 pid 하나면 우리 것으로 인정** (Q-13)", () => {
+  // 재현(2026-10-04): 포트를 잡은 프로세스 cmdline = `node .../.npm-global/bin/harnesside`.
+  // defaultPlan ours 정규식 `/harnesside|dist/server/index\./i` 는 여기에 매칭하지만,
+  // 설치 경로가 이걸 더 이상 안 담는 저장소에서는 "다른 프로그램이 씀"으로 보였다.
+  // fix: ourPids 에 observePort 가 반환한 OS 리스너 pid 를 보강한다(p.serverPid 가 없어도).
+  const obs = { reachable: true, pid: 63218, cmdline: "node /some/unexpected/path/ide-server.js" };
+  const byOsPid = judgePort("웹 IDE", 7317, obs, /harnesside/i, undefined, new Set([63218]));
+  assert.equal(byOsPid.state, "ok", "OS 가 이 포트의 리스너를 '우리가 켠 서버'라고 알려준다");
+  // 집합에 그 pid 가 없으면? 이전과 마찬가지로 foreign 로 간다.
+  const without = judgePort("웹 IDE", 7317, obs, /harnesside/i, undefined, new Set([1]));
+  assert.equal(without.state, "warn");
+});
+
 // ── dist 최신성 ─────────────────────────────────────────────────────────────
 
 test("dist 최신성: **dist 가 src 보다 오래면 실패** — 지금 실제로 그 상태인 축", () => {

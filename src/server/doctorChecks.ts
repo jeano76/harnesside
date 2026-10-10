@@ -652,7 +652,15 @@ export async function collectDoctorChecks(opts: CollectOptions): Promise<DoctorC
   for (const p of opts.ports ?? defaultPortPlan()) {
     const ourPids = new Set<number>();
     if (opts.serverPid !== undefined) ourPids.add(opts.serverPid);
-    checks.push(judgePort(p.label, p.port, await observePort(p.port, opts), p.ours, p.oursLabel, ourPids));
+    const observation = await observePort(p.port, opts);
+    // **OS가 알려주는 이 포트의 리스너 pid**도 "우리가 켠 서버"다. `serverPid`는 daemon이
+    // 이 IDE를 알 때만 있고(Q-13), 이름 cmdline 매칭은 설치 경로에 따라 틀릴 수 있다(p.ours / p.oursLabel).
+    // 그래서 관측된 pid가 있으면 ourPids 에 보강한다 — 조회 실패(free 또는 lookupFailed)는 pid 가 없으니
+    // 아무것도 붙지 않는다(이전과 동일).
+    if (observation.pid !== undefined) {
+      ourPids.add(observation.pid);
+    }
+    checks.push(judgePort(p.label, p.port, observation, p.ours, p.oursLabel, ourPids));
   }
 
   // 4) dist 가 src 보다 오래됐는가
