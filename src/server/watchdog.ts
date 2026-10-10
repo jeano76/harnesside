@@ -79,6 +79,8 @@ export interface WatchdogDeps {
   msSinceLastClientGone?: () => number | null;
   /** S3 만료 임계값(초). 기본 15초(§4.4 표). */
   clientIdleThresholdSec?: number;
+  /** 창(Chrome)이 살아 있는데 클라이언트만 없을 때 S3 가 기다리는 시간(초). 기본 120초. */
+  clientIdleChromeAliveSec?: number;
   /**
    * S3 를 **유예**할 사유를 돌려준다. 사유가 있으면 유예하고 로그에 남긴다.
    *
@@ -122,10 +124,16 @@ export function startWatchdog(deps: WatchdogDeps): Watchdog {
   let chromeNeverOpenedNotified = false;
   let s3Fired = false;
   let s3DeferredNotified = false;
+  let s3WaitNotified = false;
   let orphanNotified = false;
   let cdpLostNotified = false;
 
   const s3ThresholdSec = deps.clientIdleThresholdSec ?? 15;
+  // 창(Chrome)이 **살아 있는** 채로 클라이언트만 사라진 경우의 유예. 그 상태는 닫힘이 아니라
+  // 일시 정지일 수 있다(CPU 가 막힌 순간·재설치·화면 재연결 폭주) — 15초에 서버를 죽이면
+  // 실제로 그랬다. 그렇다고 영영 안 죽이면 "페이지만 죽은 창" 을 잡던 S3 의 역할이 사라지므로
+  // 길게 기다린 뒤에는 종료한다.
+  const s3ChromeAliveSec = deps.clientIdleChromeAliveSec ?? 120;
   const llamaAliveNow = () => (deps.isLlamaAlive ? deps.isLlamaAlive() : true);
   const clientPresent = () => (deps.clientConnected ? deps.clientConnected() : true);
   /** 창 상태. 판정 함수를 **한 곳**에서만 부른다 — 두 곳에서 부르면 서로 다른 답이 나올 수 있다. */
@@ -201,7 +209,19 @@ export function startWatchdog(deps: WatchdogDeps): Watchdog {
     if (goneMs !== null) {
       const idleSec = goneMs / 1000;
       const defer = deps.deferS3?.() ?? null;
-      if (idleSec >= s3ThresholdSec && !defer) {
+      const windowAlive = deps.mode === "window" && deps.expectChrome !== false && chrome === "alive";
+      const limitSec = windowAlive ? Math.max(s3ThresholdSec, s3ChromeAliveSec) : s3ThresholdSec;
+      if (windowAlive && idleSec >= s3ThresholdSec && idleSec < limitSec && !defer) {
+        if (!s3WaitNotified) {
+          s3WaitNotified = true;
+          deps.ring.info(
+            "lifecycle",
+            `웹 클라이언트가 ${Math.floor(idleSec)}초째 없지만 창(Chrome)은 살아 있습니다 — ${limitSec}초까지 기다립니다.`,
+            "server",
+            { signal: "S3", waiting: true, limitSec }
+          );
+        }
+      } else if (idleSec >= limitSec && !defer) {
         if (!s3Fired) {
           s3Fired = true;
           deps.ring.info(
@@ -228,6 +248,7 @@ export function startWatchdog(deps: WatchdogDeps): Watchdog {
     } else {
       s3Fired = false;
       s3DeferredNotified = false;
+      s3WaitNotified = false;
     }
 
     // 2.6) S4 — CDP 연결 소실(재연결 2회 실패).

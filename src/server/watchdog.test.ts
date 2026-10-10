@@ -92,7 +92,8 @@ test("daemon 모드: 창이 닫혀도 서버는 살아 있다 — 의도적 예�
 // ── S3: 웹 클라이언트 하트비트 만료(§4.4) ───────────────────────────────────
 
 test("S3: 클라이언트가 사라진 지 임계값을 넘으면 window 모드에서 종료한다", () => {
-  const s = setup("window", { intervalMs: 5, clientIdleThresholdSec: 15, msSinceLastClientGone: () => 20_000 });
+  // 창(Chrome)이 살아 있으면 더 길게 기다린다(아래 테스트) — 여기서는 유예 시간까지 지난 경우다.
+  const s = setup("window", { intervalMs: 5, clientIdleThresholdSec: 15, msSinceLastClientGone: () => 130_000 });
   return new Promise<void>((resolve) => {
     setTimeout(() => {
       assert.deepEqual(s.shutdowns, ["heartbeat-expired"], "S3 가 종료 사유를 말한다");
@@ -443,4 +444,38 @@ test("windowStateOf: 띄우지 않는 모드(--no-browser)와 살아 있는 창�
   assert.equal(windowStateOf({ noBrowser: true, pidAlive: false, wasAlive: true, launchAttempted: true }), "alive");
   assert.equal(windowStateOf({ noBrowser: false, pidAlive: true, wasAlive: true, launchAttempted: true }), "alive");
   assert.equal(windowStateOf({ noBrowser: false, pidAlive: false, wasAlive: false, launchAttempted: false }), "alive");
+});
+
+// ── S3: 창이 살아 있으면 일시 정지로 본다 ────────────────────────────────────
+
+test("S3: 창(Chrome)이 살아 있으면 임계값을 넘겨도 바로 죽이지 않고 **기다린다고 말한다**", () => {
+  // 실측: 전역 재설치로 CPU 가 막힌 동안 화면 연결이 15초 넘게 끊겨, 살아 있는 창을 두고
+  // 서버가 스스로 종료됐다.
+  const s = setup("window", { intervalMs: 5, clientIdleThresholdSec: 15, msSinceLastClientGone: () => 20_000 });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, [], "살아 있는 창을 두고 15초에 종료했다");
+      const msg = s.ring.query().map((e) => e.message).join(" ");
+      assert.match(msg, /창\(Chrome\)은 살아 있습니다/, "왜 안 죽이는지 말한다");
+      assert.match(msg, /120초까지 기다립니다/);
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
+});
+
+test("S3: 창이 살아 있어도 유예 시간까지 클라이언트가 안 돌아오면 종료한다", () => {
+  const s = setup("window", {
+    intervalMs: 5,
+    clientIdleThresholdSec: 15,
+    clientIdleChromeAliveSec: 60,
+    msSinceLastClientGone: () => 61_000,
+  });
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      assert.deepEqual(s.shutdowns, ["heartbeat-expired"], "페이지만 죽은 창을 영영 두면 안 된다");
+      s.wd.stop();
+      resolve();
+    }, 80);
+  });
 });
