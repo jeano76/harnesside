@@ -13,7 +13,7 @@
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { DEFAULT_LOCALE, I18n, LOCALES } from "./index.js";
+import { DEFAULT_LOCALE, I18n, LOCALES, translatorFor, i18n } from "./index.js";
 import { ko } from "./ko.js";
 
 const catalog = { ko };
@@ -108,4 +108,17 @@ test("문서 없이 **DOM 이 없는 환경**(스크립트·테스트)에서도 
 test("카탈로그의 키는 **모두 채워져** 있다 — 빈 문자열 항목을 만들지 않는다", () => {
   const empty = Object.entries(ko).filter(([, v]) => typeof v !== "string" || v.trim() === "");
   assert.deepEqual(empty.map(([k]) => k), [], "빈 항목이 있다 — 화면에 빈칸이 생긴다");
+});
+
+test("translatorFor 는 같은 로케일에서 같은 함수를 돌려준다 — effect 의존성에 넣어도 매 렌더 다시 돌지 않는다", () => {
+  // 실측 사고: useI18n 이 렌더마다 새 함수를 만들어, t 를 deps 에 둔 WS·폴링 effect 가
+  // 무한 재실행됐다(소켓 반복 종료 + /api 초당 수백 건).
+  for (const l of LOCALES) {
+    assert.equal(translatorFor(l), translatorFor(l), `${l}: 호출마다 다른 함수다`);
+  }
+});
+
+test("translatorFor 는 로케일별로 올바르게 번역한다", () => {
+  const l = LOCALES[0];
+  assert.equal(translatorFor(l)("status.wsClosed"), i18n.t("status.wsClosed", undefined, l));
 });

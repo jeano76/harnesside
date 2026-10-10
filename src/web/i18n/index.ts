@@ -157,9 +157,27 @@ export const i18n = new I18n();
  * 반환값이 **함수** 라는 점이 중요하다: `const t = useI18n(); t("a.b")` 이면 로케일이
  * 바뀌면 다시 그려진다(함수를 그대로 받아쓴다면 stale 이 된다).
  */
-export function useI18n(): (key: string, vars?: Record<string, string | number>) => string {
-  const locale = useLocale();
-  return (key: string, vars?: Record<string, string | number>) => i18n.t(key, vars, locale);
+export type Translate = (key: string, vars?: Record<string, string | number>) => string;
+
+const translators = new Map<Locale, Translate>();
+
+/**
+ * 로케일마다 **같은 함수**를 돌려준다. `useI18n` 이 렌더마다 새 클로저를 만들면, `t` 를
+ * effect 의존성에 넣은 곳(main.tsx 의 WS·폴링 effect)이 매 렌더 다시 돌아 소켓을 닫고
+ * /api 를 초당 수백 번 다시 부른다(실측: 8초에 요청 1만 3천 건 · 화면 WS "끊김").
+ * 함수의 정체성은 로케일이 바뀔 때만 바뀌어야 한다.
+ */
+export function translatorFor(locale: Locale): Translate {
+  let fn = translators.get(locale);
+  if (!fn) {
+    fn = (key, vars) => i18n.t(key, vars, locale);
+    translators.set(locale, fn);
+  }
+  return fn;
+}
+
+export function useI18n(): Translate {
+  return translatorFor(useLocale());
 }
 
 /** 현재 로케일 + 구독. React 가 없는 곳(스크립트·테스트)에서도 쓸 수 있다. */
