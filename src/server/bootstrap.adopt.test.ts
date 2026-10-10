@@ -43,11 +43,14 @@ function fakeHw(): Hardware {
   } as Hardware;
 }
 
-async function sandbox(): Promise<{ root: string; models: string; cleanup: () => Promise<void> }> {
+async function sandbox(): Promise<{ root: string; models: string; home: string; cleanup: () => Promise<void> }> {
   const root = await mkdtemp(join(tmpdir(), "harnesside-adopt-"));
   const models = join(root, "models");
   await mkdir(models, { recursive: true });
-  return { root, models, cleanup: () => rm(root, { recursive: true, force: true }) };
+  // 빈 홈: 이 머신의 ~/.harnesside/config.yaml 이 모델 결정에 끼어들면 "모델 없음" 시나리오가 뒤집힌다.
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  return { root, models, home, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 
 /** 포트 집합에 대해 "이 포트만 사용 중" 이라고 답하는 프로브. */
@@ -60,7 +63,7 @@ test("이미 떠 있는 서버가 있으면 채택하고 **포트를 옮기지 �
     // 이 프로브가 "in-use" 라고 답하는데도 8080 을 그대로 쓰는 것이 정답이다.
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: busyWith(LLAMA_PORT),
       detectServer: async () => ({ baseUrl: "http://127.0.0.1:8080", model: "Ornith-1.5-35B-A3B-Q3_K_M.gguf" }),
@@ -88,7 +91,7 @@ test("탐지 결과의 포트를 그대로 쓴다 — 설정된 포트가 아니
     // 이미 떠 있는 게 있으면 그걸 쓴다(§6.2 adopt, never re-spawn).
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: busyWith(11434),
       detectServer: async () => ({ baseUrl: "http://127.0.0.1:11434", model: "llama3" }),
@@ -112,7 +115,7 @@ test("탐지 순서는 **설정된 포트가 먼저**, 중복은 한 번만", as
     };
     await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: busyWith(),
       detectServer: record,
@@ -133,7 +136,7 @@ test("서버가 없으면 기존처럼 포트 계획을 쓴다 — 채택 표시
   try {
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: busyWith(LLAMA_PORT), // 다른 무언가가 붙잡고 있다
       detectServer: async () => null, // OpenAI 호환 응답은 없다
@@ -154,7 +157,7 @@ test("채택했으면 **스폰하지 않는다** — 모델도 바이너리도 �
     // 보고하면 실제로는 준비된 서버가 있는데 창에는 실패라고 뜬다.
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models, // 비어 있음
+      modelsDir: s.models, homeDir: s.home, // 비어 있음
       hardware: fakeHw(),
       probe: busyWith(LLAMA_PORT),
       detectServer: async () => ({ baseUrl: "http://127.0.0.1:8080", model: "Ornith" }),
@@ -192,7 +195,7 @@ test("IDE 포트는 채택한 llama 포트와 겹치지 않는다", async () => 
     // (firstFree 의 `reserved`) 이 실수로 빠지지 않았는지 본다.
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: busyWith(7317), // IDE 포트만 사용 중
       detectServer: async () => ({ baseUrl: "http://127.0.0.1:8080", model: "Ornith" }),
@@ -215,7 +218,7 @@ test("모델 파일이 있어도 채택이 우선한다 — 8GiB 카드에서 �
     await writeFile(join(s.models, "Ornith-1.5-35B-A3B-Q3_K_M.gguf"), "x".repeat(1024));
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       env: { ...process.env, HARNESSIDE_LLAMA_SERVER: "unused-when-adopted" },
       probe: busyWith(LLAMA_PORT),

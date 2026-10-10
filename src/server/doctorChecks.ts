@@ -597,7 +597,12 @@ async function defaultModelObs(o: { projectRoot: string; home: string }): Promis
   path: string; exists: boolean; sizeBytes?: number; arch?: string; moe?: boolean | undefined; conclusive: boolean;
 }> {
   const { projectRoot, home } = o;
-  const loaded = await loadConfig({ projectConfigPath: join(projectRoot, ".harnesside", "config.yaml") }).catch(() => null);
+  // 전역(~/.harnesside) < 프로젝트 순으로 본다. 프로젝트 설정만 보면, 폴더를 바꿔 실행했을 때 사용자가 전역
+  // 설정에 적어 둔 모델이 "설정에 기록된 모델 없음" 으로 나온다(부팅의 모델 결정과 같은 답을 내야 한다).
+  const loaded = await loadConfig({
+    globalConfigPath: join(home, ".harnesside", "config.yaml"),
+    projectConfigPath: join(projectRoot, ".harnesside", "config.yaml"),
+  }).catch(() => null);
   const cfg = (loaded?.values?.llama ?? {}) as Record<string, unknown>;
   const modelsDir = process.env.HARNESSIDE_MODELS_DIR ?? join(home, ".harnesside", "models");
   const configured = typeof cfg.modelPath === "string" ? cfg.modelPath : "";

@@ -35,11 +35,14 @@ function fakeHw(over: Partial<Hardware> = {}): Hardware {
   } as Hardware;
 }
 
-async function sandbox(): Promise<{ root: string; models: string; cleanup: () => Promise<void> }> {
+async function sandbox(): Promise<{ root: string; models: string; home: string; cleanup: () => Promise<void> }> {
   const root = await mkdtemp(join(tmpdir(), "harnesside-boot-"));
   const models = join(root, "models");
   await mkdir(models, { recursive: true });
-  return { root, models, cleanup: () => rm(root, { recursive: true, force: true }) };
+  // 빈 홈: 이 머신의 ~/.harnesside/config.yaml 이 모델 결정에 끼어들면 "모델 없음" 시나리오가 뒤집힌다.
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  return { root, models, home, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 
 const neverProbe = async () => "free" as const;
@@ -52,7 +55,7 @@ test("12단계가 §3.2 의 번호·이름과 순서로 나열된다", async () 
   try {
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       dryRun: true,
     });
     assert.equal(r.steps.length, 12);
@@ -72,7 +75,7 @@ test("12단계가 §3.2 의 번호·이름과 순서로 나열된다", async () 
 test("dry-run 은 아무 부수효과도 만들지 않는다(모델/설정 건드리지 않음)", async () => {
   const s = await sandbox();
   try {
-    const before = await bootstrap({ projectRoot: s.root, modelsDir: s.models, dryRun: true });
+    const before = await bootstrap({ projectRoot: s.root, modelsDir: s.models, homeDir: s.home, dryRun: true });
     assert.equal(before.steps.every((x) => x.detail.includes("dry-run")), true);
     assert.equal(before.llamaReady, false);
   } finally {
@@ -85,7 +88,7 @@ test("모델이 없으면 뒤 단계도 멈추지 않는다 — 창은 떠야 �
   try {
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: neverProbe,
       detectServer: noServer,
@@ -114,7 +117,7 @@ test("설정에 적힌 모델 경로가 최우선이다", async () => {
 
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: neverProbe,
       detectServer: noServer,
@@ -136,7 +139,7 @@ test("설정에 없으면 Ornith 계열이 점수와 무관하게 1순위다(§7
     await writeFile(join(s.models, "Ornith-1.5-35B-A3B-Q4_K_M.gguf"), "x");
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: neverProbe,
       detectServer: noServer,
@@ -155,7 +158,7 @@ test("카드에 여유가 없으면 브라우저 GPU 가 off 이고 예약은 0"
     await writeFile(join(s.models, "Ornith-1.5-35B-A3B-Q4_K_M.gguf"), "x".repeat(20 * 1024 * 1024));
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(), // free 285 MiB
       probe: neverProbe,
       detectServer: noServer,
@@ -182,7 +185,7 @@ test("단계 5(예약 0)는 단계 7 의 튜닝 계산에 반영된다 — 700 M
     await writeFile(fakeLlama, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: neverProbe,
       detectServer: noServer,
@@ -209,7 +212,7 @@ test("IDE 포트와 llama 포트가 겹치지 않는다(부록 A)", async () => 
     taken.add(7317);
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe,
       detectServer: noServer,
@@ -228,7 +231,7 @@ test("아직 구현되지 않은 단계는 '지났습니다'고 말하지 않는
   try {
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: neverProbe,
       detectServer: noServer,
@@ -250,7 +253,7 @@ test("모든 단계에 소요 시간이 기록된다(느린 단계를 찾는 유
   try {
     const r = await bootstrap({
       projectRoot: s.root,
-      modelsDir: s.models,
+      modelsDir: s.models, homeDir: s.home,
       hardware: fakeHw(),
       probe: neverProbe,
       detectServer: noServer,

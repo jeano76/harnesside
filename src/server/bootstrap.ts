@@ -90,6 +90,8 @@ export interface BootstrapDeps {
   env?: NodeJS.ProcessEnv;
   projectRoot: string;
   modelsDir: string;
+  /** 사용자 전역 설정(`~/.harnesside/config.yaml`)을 찾을 홈. 기본은 현재 사용자의 홈. 테스트가 이 머신의 홈을 읽지 않게 주입한다. */
+  homeDir?: string;
   /** llama.cpp 를 찾지 못했을 때 빌드를 시도할지. 기본 false — 빌드는 최대 40분이다. */
   allowBuild?: boolean;
   /** GPU 모드 사용자 지정. */
@@ -326,6 +328,8 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       const choice = await chooseModel({
         projectRoot: opts.projectRoot,
         modelsDir: opts.modelsDir,
+        // 주입된 env 의 HOME 을 따른다(다른 단계가 `env.HOME ?? homedir()` 로 읽는 것과 같은 규칙).
+        homeDir: opts.homeDir ?? opts.env?.HOME ?? opts.env?.USERPROFILE,
         prioritySeries: ["ornith-1.5-35b-a3b"],
       });
       if (choice.path) {

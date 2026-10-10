@@ -13,6 +13,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 
 export interface ModelChoice {
   /** 실제로 사용할 파일 경로. 없으면 null — 그래도 reason 은 항상 채워진다. */
@@ -34,6 +35,8 @@ export interface ChooseModelOptions {
   vramTotalBytes?: number;
   /** 설정 파일을 직접 넘겨 테스트할 때 쓴다. */
   configModelPath?: string;
+  /** 사용자 전역 설정(`~/.harnesside/config.yaml`)을 찾을 홈 디렉터리. 기본은 현재 사용자의 홈. 테스트용. */
+  homeDir?: string;
   exists?: (p: string) => Promise<boolean>;
   listDir?: (dir: string) => Promise<string[]>;
 }
@@ -67,26 +70,42 @@ async function defaultListDir(dir: string): Promise<string[]> {
   }
 }
 
-async function readConfiguredModelPath(projectRoot: string): Promise<string | undefined> {
-  // §6.4: 설정은 전역 < 프로젝트 < 환경변수 순으로 병합된다. 여기서는 프로젝트
-  // 설정 한 곳만 본다 — 병합은 loadConfig() 가 이미 한다.
-  const candidates = [
-    join(projectRoot, ".harnesside", "config.yaml"),
-    join(projectRoot, "config.yaml"),
-  ];
-  for (const file of candidates) {
-    try {
-      const raw = await readFile(file, "utf8");
-      const m = raw.match(/^\s*(?:model|modelPath)\s*:\s*(.+)$/m);
-      if (m) {
-        const v = m[1].trim().replace(/^["']|["']$/g, "");
-        if (v) return v;
-      }
-    } catch {
-      // 없으면 다음 후보
+/** 설정 파일에서 `model:`/`modelPath:` 값을 꺼낸다. 파일이 없거나 값이 없으면 undefined. */
+async function modelPathIn(file: string): Promise<string | undefined> {
+  try {
+    const raw = await readFile(file, "utf8");
+    const m = raw.match(/^\s*(?:model|modelPath)\s*:\s*(.+)$/m);
+    if (m) {
+      const v = m[1].trim().replace(/^["']|["']$/g, "");
+      if (v) return v;
     }
+  } catch {
+    // 없으면 다음 후보
   }
   return undefined;
+}
+
+/**
+ * 설정에 적힌 모델 경로 후보를 **우선순위대로** 모은다: 프로젝트 설정 → 사용자 전역 설정.
+ *
+ * 전역 설정을 보는 이유: 프로젝트 폴더를 바꿔 `harnesside` 를 띄우면 그 폴더에는 `.harnesside/config.yaml` 이
+ * 없다. 프로젝트 설정만 보면 사용자가 이미 `~/.harnesside/config.yaml` 에 적어 둔 모델을 못 찾고
+ * "모델이 없습니다" 가 된다(실측: 모델은 /media/…/models 에 멀쩡히 있었다). §6.4 의 "전역 < 프로젝트" 병합이
+ * 문서에는 있었지만 이 경로에는 없었다.
+ */
+async function readConfiguredModelPaths(projectRoot: string, home: string): Promise<{ path: string; from: "project" | "global" }[]> {
+  const out: { path: string; from: "project" | "global" }[] = [];
+  const seen = new Set<string>();
+  const add = (path: string | undefined, from: "project" | "global") => {
+    if (path && !seen.has(path)) {
+      seen.add(path);
+      out.push({ path, from });
+    }
+  };
+  add(await modelPathIn(join(projectRoot, ".harnesside", "config.yaml")), "project");
+  add(await modelPathIn(join(projectRoot, "config.yaml")), "project");
+  add(await modelPathIn(join(home, ".harnesside", "config.yaml")), "global");
+  return out;
 }
 
 export async function chooseModel(opts: ChooseModelOptions): Promise<ModelChoice> {
@@ -95,18 +114,21 @@ export async function chooseModel(opts: ChooseModelOptions): Promise<ModelChoice
   const listDir = opts.listDir ?? defaultListDir;
   const suggestions: { name: string; why: string }[] = [];
 
-  // 1) 설정에 적힌 경로가 우선이다.
-  const configured = opts.configModelPath ?? (await readConfiguredModelPath(opts.projectRoot));
-  if (configured && (await exists(configured))) {
-    return {
-      path: configured,
-      reason: `설정에 지정된 모델을 사용합니다: ${basename(configured)}`,
-      via: "config",
-      suggestions,
-    };
-  }
-  if (configured) {
-    suggestions.push({ name: basename(configured), why: "설정에 지정되어 있으나 파일이 없습니다" });
+  // 1) 설정에 적힌 경로가 우선이다. 프로젝트 설정 → 전역 설정 순으로 **실제로 있는** 첫 파일을 쓴다
+  //    (프로젝트 설정의 경로가 낡아 파일이 없어도 전역 설정이 살아 있으면 거기로 간다).
+  const candidates = opts.configModelPath
+    ? [{ path: opts.configModelPath, from: "project" as const }]
+    : await readConfiguredModelPaths(opts.projectRoot, opts.homeDir ?? homedir());
+  for (const c of candidates) {
+    if (await exists(c.path)) {
+      return {
+        path: c.path,
+        reason: `${c.from === "global" ? "전역 설정(~/.harnesside/config.yaml)" : "설정"}에 지정된 모델을 사용합니다: ${basename(c.path)}`,
+        via: "config",
+        suggestions,
+      };
+    }
+    suggestions.push({ name: basename(c.path), why: "설정에 지정되어 있으나 파일이 없습니다" });
   }
 
   // 2) 로컬 스캔 → 우선 계열 매칭을 점수보다 먼저 한다.
