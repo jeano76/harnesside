@@ -311,7 +311,9 @@ async function runOneDeveloper(devIndex: number, turnsPerDeveloper: number): Pro
 
 test(
   "many concurrent long-running developer sessions, across different languages and program types, never produce an unhandled crash",
-  { timeout: 60_000 },
+  // 24명 × 20턴을 진짜 도구(go/rustc/java 등)로 돌려 CPU 시간만 약 1분 45초가 든다(실측: 단독 실행 약 2분).
+  // 60초로는 이 머신에서 기준 커밋(b39d52a)에서도 항상 시간 초과였다 — 결함이 아니라 한도가 작았다.
+  { timeout: 240_000 },
   async () => {
     clearFailureLog();
     // Real toolchain commands (go/rustc/java/etc.) aren't necessarily

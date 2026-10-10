@@ -17,6 +17,11 @@ interface Script {
   helloAfter: number;
   /** 시도별 생존 시간(실제 ms). 0이면 스폰 즉시 죽음(부팅 중 사망 재현). */
   dieAfterMs?: number[];
+  /**
+   * 시도별로 "기동 신호(hello)를 받은 직후 죽는다". 벽시계 ms 로 죽이면 부하가 큰 머신에서 hello 확인보다
+   * 죽음이 먼저 와서 판정이 뒤집힌다(전체 테스트 중 실측 flake) — 신호에 맞춰 죽이면 결과가 시간과 무관하다.
+   */
+  dieAfterHello?: boolean[];
   /** 업데이트 위임 가짜. confirmed 는 확인할 때마다 앞에서부터 소모한다. */
   upgrade?: { confirmed: boolean[]; rollbackOk: boolean; rollbacks: string[] };
 }
@@ -26,6 +31,7 @@ function rig(script: Script, opts: { bootGraceSec?: number; nowStep?: number } =
   const spawns: number[] = [];
   const delays: number[] = [];
   let probes = 0;
+  let dieNow: (() => void) | null = null;
   let now = 1000;
   const step = opts.nowStep ?? 1;
   const confQueue = [...(script.upgrade?.confirmed ?? [])];
@@ -39,6 +45,8 @@ function rig(script: Script, opts: { bootGraceSec?: number; nowStep?: number } =
       const done = new Promise<ChildExit>((res) => {
         resolveExit = res;
       });
+      const afterHello = script.dieAfterHello?.[Math.min(attempt - 1, (script.dieAfterHello?.length ?? 1) - 1)] ?? false;
+      dieNow = afterHello ? () => setTimeout(() => resolveExit(exit), 1) : null;
       if (dieMs <= 0) resolveExit(exit);
       else timer = setTimeout(() => resolveExit(exit), dieMs);
       const child: SupervisorChild = {
@@ -53,7 +61,13 @@ function rig(script: Script, opts: { bootGraceSec?: number; nowStep?: number } =
     },
     probeHello: async () => {
       probes++;
-      return probes >= script.helloAfter;
+      const ok = probes >= script.helloAfter;
+      if (ok && dieNow) {
+        const go = dieNow;
+        dieNow = null;
+        go();
+      }
+      return ok;
     },
     bootGraceSec: opts.bootGraceSec ?? 30,
     pollMs: 1,
@@ -84,7 +98,7 @@ function rig(script: Script, opts: { bootGraceSec?: number; nowStep?: number } =
 }
 
 test("기동 신호가 오고 code 0 으로 끝나면 다시 띄우지 않는다", async () => {
-  const r = rig({ exits: [{ code: 0, signal: null }], helloAfter: 2, dieAfterMs: [15] });
+  const r = rig({ exits: [{ code: 0, signal: null }], helloAfter: 2, dieAfterMs: [60000], dieAfterHello: [true] });
   const out = await supervise(r.deps);
   assert.equal(r.spawns.length, 1, `재시작했다: ${JSON.stringify(r.spawns)}`);
   assert.ok(r.events.some((e) => e.type === "boot-healthy"), "기동 성공을 말하지 않았다");
@@ -105,7 +119,7 @@ test("hello 없이 code 0 이면 기동 성공으로 세지 않는다 — 그래
 });
 
 test("비정상 종료하면 정책대로 다시 띄운다 — 백오프 포함", async () => {
-  const r = rig({ exits: [{ code: 1, signal: null }, { code: 0, signal: null }], helloAfter: 1, dieAfterMs: [0, 15] });
+  const r = rig({ exits: [{ code: 1, signal: null }, { code: 0, signal: null }], helloAfter: 1, dieAfterMs: [0, 60000], dieAfterHello: [false, true] });
   const out = await supervise(r.deps);
   assert.deepEqual(r.spawns, [1, 2]);
   assert.ok(r.delays.includes(2000), `첫 백오프(2초)가 없다: ${JSON.stringify(r.delays)}`);
@@ -156,7 +170,8 @@ test("코드 42 는 충돌 집계 없이 바로 다시 띄운다 — 마커 확�
   const r = rig({
     exits: [{ code: 42, signal: null }, { code: 0, signal: null }],
     helloAfter: 1,
-    dieAfterMs: [20, 30],
+    dieAfterMs: [60000],
+    dieAfterHello: [true],
     upgrade: up,
   });
   const out = await supervise(r.deps);
@@ -175,7 +190,8 @@ test("마커 남으면 되돌리고 옛것을 띄운다", async () => {
   const r = rig({
     exits: [{ code: 42, signal: null }, { code: 0, signal: null }],
     helloAfter: 1,
-    dieAfterMs: [20, 30],
+    dieAfterMs: [60000],
+    dieAfterHello: [true],
     upgrade: up,
   });
   const out = await supervise(r.deps);
@@ -190,7 +206,8 @@ test("새 버전이 안 뜨면 되돌리고 옛것을 띄운다", async () => {
   const r = rig({
     exits: [{ code: 42, signal: null }, { code: 0, signal: null }],
     helloAfter: 1,
-    dieAfterMs: [20, 0, 30],
+    dieAfterMs: [60000, 0, 60000],
+    dieAfterHello: [true, false, true],
     upgrade: up,
   });
   const out = await supervise(r.deps);
@@ -206,7 +223,8 @@ test("되돌리기 실패하면 멈춘다 — 망가진 채로 돌리지 않는�
   const r = rig({
     exits: [{ code: 42, signal: null }],
     helloAfter: 1,
-    dieAfterMs: [20, 30],
+    dieAfterMs: [60000],
+    dieAfterHello: [true],
     upgrade: up,
   });
   const out = await supervise(r.deps);
