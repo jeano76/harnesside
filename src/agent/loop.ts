@@ -35,6 +35,8 @@ import {
 import { appendNote, clearNotes, readNotes, NOTES_HEADER } from "../compaction/notes.js";
 import { gitCheckpoint } from "./gitCheckpoint.js";
 import { judgeReply, incompleteReplyNudge, MAX_INCOMPLETE_REPLY_RETRIES } from "./incompleteReply.js";
+import { overBudget, effectiveBudget, reasoningExcerpt, thinkingBudgetNudge, REASONING_EXCERPT_CHARS } from "./thinkingBudget.js";
+import { estimateTextTokens } from "../shared/textTokens.js";
 
 // Sent as the `tools` field on every main-loop request (never on the
 // compaction summary request, which omits tools entirely) — computed once
@@ -258,6 +260,10 @@ export interface AgentLoopOptions {
    *  `reasoning_content` before the tool call even began). The guard
    *  (budget cap + forced tool_choice) keeps ON safe. */
   enableThinking?: boolean;
+  /** 한 라운드의 사고(reasoning)가 이 토큰 수(추정)를 넘고 아직 보이는 출력이 없으면 생성을 끊고,
+   *  다음 한 번은 thinking 을 끈 채 그때까지의 생각을 넘겨 바로 행동하게 한다 (thinkingBudget.ts).
+   *  함수로 주면 라운드마다 읽는다. 0 이하 또는 생략이면 끈다. */
+  thinkingBudgetTokens?: number | (() => number);
   /** Per-extension checks run after each file edit (see harness.ts);
    *  false turns them off. From config.yaml's verify.afterEdit. */
   verify?: VerifyConfig;
@@ -692,6 +698,10 @@ export class AgentLoop {
     // CONSECUTIVE such replies; any normal reply resets it, so a long task can recover many times
     // while a model that never recovers still surfaces as a real stop.
     let incompleteReplyRetries = 0;
+    // 사고 예산으로 끊은 다음 라운드 한 번은 thinking 을 끈다. 그 라운드의 사고는 없으므로 같은 이유로 다시 끊기지 않는다.
+    let thinkOffNextRound = false;
+    // 이 턴에서 예산으로 끊은 횟수 — 끊을 때마다 예산을 키우고, 상한이면 예산을 끈다 (effectiveBudget).
+    let budgetCuts = 0;
     // Reported live: the text nudge alone was not enough — a real retry
     // regenerated the EXACT same content and got cut off at the EXACT
     // same character column as the first attempt, twice, because nothing
@@ -773,6 +783,16 @@ export class AgentLoop {
 
       // 도구 호출 이름은 첫 조각에만 온다 — 인덱스별로 모아 둬야 뒤의 인자 조각에도 이름을 붙인다.
       const draftNames = new Map<number, string>();
+      // 사고 예산: 이번 라운드가 thinking 을 끈 라운드면 세지 않는다(서버가 --reasoning on 이라 사고를 내보내도 끊지 않는다).
+      const thinkOffThisRound = thinkOffNextRound;
+      thinkOffNextRound = false;
+      const baseBudget =
+        typeof this.opts.thinkingBudgetTokens === "function" ? this.opts.thinkingBudgetTokens() : (this.opts.thinkingBudgetTokens ?? 0);
+      const thinkingBudget = thinkOffThisRound || this.opts.enableThinking === false ? 0 : effectiveBudget(baseBudget, budgetCuts);
+      let reasoningSpent = 0;
+      let reasoningText = "";
+      let sawVisibleOutput = false;
+      let budgetCut = false;
       let res;
       try {
         res = await this.opts.backend.chat(
@@ -810,7 +830,7 @@ export class AgentLoop {
             // deltas from the identical budget. Everything else in this
             // file's truncation handling is a safety net under this.
             // Default ON (panel improvement 2026-10-01): only explicit false disables.
-            ...(this.opts.enableThinking === false ? { chat_template_kwargs: { enable_thinking: false } } : {}),
+            ...(this.opts.enableThinking === false || thinkOffThisRound ? { chat_template_kwargs: { enable_thinking: false } } : {}),
           },
           (chunk) => {
             // Defensive: `chunk.choices` isn't guaranteed non-empty/present
@@ -830,6 +850,17 @@ export class AgentLoop {
             if (delta?.content) this.opts.onAssistantDelta?.(delta.content);
             const reasoning = (delta as any)?.reasoning_content;
             if (typeof reasoning === "string" && reasoning) this.opts.onReasoningDelta?.(reasoning);
+            if (delta?.content || delta?.tool_calls?.length) sawVisibleOutput = true;
+            if (thinkingBudget > 0 && typeof reasoning === "string" && reasoning && !budgetCut) {
+              reasoningSpent += estimateTextTokens(reasoning);
+              // 끝부분만 필요하다 — 메모리가 무한히 자라지 않게 두 배까지만 쥔다.
+              reasoningText += reasoning;
+              if (reasoningText.length > REASONING_EXCERPT_CHARS * 2) reasoningText = reasoningText.slice(-REASONING_EXCERPT_CHARS * 2);
+              if (overBudget({ spent: reasoningSpent, budget: thinkingBudget, sawOutput: sawVisibleOutput })) {
+                budgetCut = true;
+                this.opts.backend.cancel?.();
+              }
+            }
             // 도구 호출 인자(파일 본문 포함)도 **생성되는 순간** 보낸다. 서버는 이걸 끝까지
             // 모아 두므로, 여기서 흘리지 않으면 파일은 다 쓰인 뒤에야 화면에 나온다.
             if (Array.isArray(delta?.tool_calls) && this.opts.onToolArgsDelta) {
@@ -845,6 +876,17 @@ export class AgentLoop {
           }
         );
       } catch (err: any) {
+        // 사고 예산으로 우리가 끊은 것이다 — 사용자 취소가 아니다. 그때까지의 생각을 넘기고 thinking 을 끈 채 다시 요청한다.
+        if (budgetCut && !this.cancelRequested) {
+          thinkOffNextRound = true;
+          budgetCuts++;
+          this.opts.onAssistantDone?.();
+          this.opts.onStatus?.(
+            `[thinking budget] reasoning passed ~${thinkingBudget.toLocaleString("en-US")} tokens with no answer — stopped it; the next step runs with thinking off.`
+          );
+          this.messages.push({ role: "user", content: thinkingBudgetNudge(reasoningExcerpt(reasoningText)) });
+          continue;
+        }
         // cancelCurrentTurn() already wrote a resumable checkpoint and
         // called backend.cancel() before this throw ever happens — this is
         // just recognizing that the resulting AbortError is the expected

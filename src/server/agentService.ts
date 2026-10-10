@@ -342,6 +342,8 @@ export class AgentService {
       thresholds: typeof this.opts.thresholds === "function" ? this.opts.thresholds : resolveThresholds(this.opts.thresholds),
       // 기본 ON(사용자 명시). 예산 폭주는 상한+강제 전환이 받는다.
       enableThinking: this.think.enabled,
+      // 상한을 넘으면 표시만 끄던 것을 **생성 자체를 끊는** 것으로 잇는다 (agent/thinkingBudget.ts). 함수로 넘겨 설정 변경을 따른다.
+      thinkingBudgetTokens: () => this.think.maxReasoningTokens,
       now,
       onTurnStart: () => {
         this.state = { ...this.state, running: true, startedAt: now(), cancelled: false, lastError: null };
