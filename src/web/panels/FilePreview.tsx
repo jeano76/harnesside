@@ -23,7 +23,7 @@
  * 상한을 넘으면 "N줄 중 M줄만 표시" 라고 **말하고** 잘라야 한다.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiClient } from "../api.js";
 import {
   colorFor,
@@ -34,6 +34,21 @@ import {
   tokenizeLine,
 } from "../editor/highlight.js";
 import { extractSymbols } from "../../shared/symbols.js";
+import { isJumpableKind, tokenColumn, isIdentifierText } from "./symbolJump.js";
+
+interface SymbolLoc {
+  path: string;
+  line: number;
+  col: number;
+  name: string;
+  kind: string;
+}
+
+type JumpState =
+  | { status: "idle" }
+  | { status: "loading"; line: number; col: number; mode: "definition" | "references" }
+  | { status: "done"; line: number; col: number; mode: "definition" | "references"; available: boolean; reason?: string; locations: SymbolLoc[] }
+  | { status: "error"; line: number; col: number; detail: string };
 // 인덴트 가이드 — 규칙은 `editor/indentRules.ts`, 렌더는 `editor/IndentGuides.tsx`.
 import { IndentGuides } from "../editor/IndentGuides.js";
 import { indentInfoFor } from "../editor/indentRules.js";
@@ -98,6 +113,31 @@ export function FilePreview({ client, path, autoOpen = false, onEdit }: FilePrev
   );
   const [jumpLine, setJumpLine] = useState<number | null>(null);
   const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const [jump, setJump] = useState<JumpState>({ status: "idle" });
+  const jumpSeq = useRef(0);
+  const askSymbol = useCallback(
+    (line: number, col: number, mode: "definition" | "references") => {
+      // TS 파일에서만 — 다른 언어는 컴파일러가 모른다. 요청을 보내지 않는다.
+      if (lang !== "typescript") return;
+      const seq = ++jumpSeq.current;
+      setJump({ status: "loading", line, col, mode });
+      const url =
+        mode === "definition"
+          ? `/api/fs/definition?path=${encodeURIComponent(path)}&line=${line}&col=${col}`
+          : `/api/fs/references?path=${encodeURIComponent(path)}&line=${line}&col=${col}`;
+      void client
+        .get<{ available: boolean; reason?: string; locations: SymbolLoc[] }>(url)
+        .then((r) => {
+          if (jumpSeq.current !== seq) return;
+          setJump({ status: "done", line, col, mode, available: r.available, reason: r.reason, locations: r.locations ?? [] });
+        })
+        .catch((e) => {
+          if (jumpSeq.current !== seq) return;
+          setJump({ status: "error", line, col, detail: e instanceof Error ? e.message : String(e) });
+        });
+    },
+    [client, lang, path]
+  );
   useEffect(() => {
     if (jumpLine === null) return;
     lineRefs.current.get(jumpLine)?.scrollIntoView({ block: "nearest" });
@@ -168,7 +208,7 @@ export function FilePreview({ client, path, autoOpen = false, onEdit }: FilePrev
               {lines.length.toLocaleString("ko-KR")}줄 중 {MAX_HIGHLIGHT_LINES.toLocaleString("ko-KR")}줄만 표시합니다 — 나머지는 **자르지 않았습니다**.
             </div>
           )}
-          {/* 기호 아웃라인 (§7.1 1단계 — 텍스트 기준, 타입 해석 없음). */}
+          {/* 기호 아웃라인 (§7.1 1단계 — 텍스트 기준) + 정의·참조(2단계 — TS 해석). */}
           {outline.symbols.length > 0 && (
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap", padding: "3px 8px", borderBottom: `1px solid ${BORDER}`, fontSize: FONT.META }}>
               <span style={{ color: DIM }}>기호</span>
@@ -189,6 +229,61 @@ export function FilePreview({ client, path, autoOpen = false, onEdit }: FilePrev
               ))}
               {outline.symbols.length > 24 && <span style={{ color: DIM }}>+{outline.symbols.length - 24}개</span>}
               {outline.truncated && <span style={{ color: COLOR.YELLOW }}>잘림</span>}
+            </div>
+          )}
+          {/* 정의·참조 결과 (§7.1 2단계). 코드 토큰을 누르면 여기 뜬다. */}
+          {jump.status !== "idle" && (
+            <div style={{ padding: "3px 8px", borderBottom: `1px solid ${BORDER}`, fontSize: FONT.META }}>
+              {jump.status === "loading" && (
+                <span style={{ color: DIM }}>
+                  {jump.mode === "definition" ? "정의" : "참조"} 찾는 중… ({jump.line}:{jump.col})
+                </span>
+              )}
+              {jump.status === "error" && <span style={{ color: COLOR.ERROR }}>찾지 못했습니다: {jump.detail}</span>}
+              {jump.status === "done" && !jump.available && <span style={{ color: COLOR.YELLOW }}>{jump.reason}</span>}
+              {jump.status === "done" && jump.available && jump.locations.length === 0 && (
+                <span style={{ color: DIM }}>
+                  {jump.mode === "definition" ? "정의" : "참조"} 없음 ({jump.line}:{jump.col}) — 추측하지 않습니다
+                </span>
+              )}
+              {jump.status === "done" && jump.available && jump.locations.length > 0 && (
+                <span>
+                  <span style={{ color: DIM }}>
+                    {jump.mode === "definition" ? "정의" : "참조"} {jump.locations.length}건 ({jump.line}:{jump.col}){" "}
+                  </span>
+                  {jump.locations.slice(0, 10).map((l, idx) => (
+                    <button
+                      key={`${l.path}:${l.line}:${l.col}:${idx}`}
+                      type="button"
+                      title={`${l.kind} ${l.name} · ${l.path}:${l.line}:${l.col}`}
+                      onClick={() => {
+                        if (l.path === path) setJumpLine(l.line);
+                        else if (onEdit) onEdit(l.path);
+                      }}
+                      style={{ background: "transparent", color: COLOR.BLUE, border: 0, cursor: "pointer", font: "inherit", padding: "0 4px", textDecoration: "underline" }}
+                    >
+                      {l.path}:{l.line}
+                    </button>
+                  ))}
+                  {jump.locations.length > 10 && <span style={{ color: DIM }}>+{jump.locations.length - 10}건</span>}
+                  {jump.mode === "definition" && (
+                    <button
+                      type="button"
+                      onClick={() => askSymbol(jump.line, jump.col, "references")}
+                      style={{ background: "transparent", color: COLOR.BLUE, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: "pointer", font: "inherit", padding: "0 6px", marginLeft: 6 }}
+                    >
+                      참조 찾기
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setJump({ status: "idle" })}
+                    style={{ background: "transparent", color: DIM, border: 0, cursor: "pointer", font: "inherit", padding: "0 4px" }}
+                  >
+                    닫기
+                  </button>
+                </span>
+              )}
             </div>
           )}
           <div style={{ maxHeight: 420, overflow: "auto", padding: "4px 0" }}>
@@ -237,11 +332,29 @@ export function FilePreview({ client, path, autoOpen = false, onEdit }: FilePrev
                       offsetCh={0}
                       color={COLOR.LINE_NUM}
                     />
-                    {tokenizeLine(line, lang).map((tok, k) => (
-                      <span key={k} style={{ color: colorFor(tok.kind) }}>
-                        {tok.text}
-                      </span>
-                    ))}
+                    {tokenizeLine(line, lang).map((tok, k, arr) => {
+                      // TS 식별자만 누른다 — 키워드·문자열·주석은 요청을 보내지 않는다.
+                      const jumpable = lang === "typescript" && isJumpableKind(tok.kind) && isIdentifierText(tok.text);
+                      if (!jumpable) {
+                        return (
+                          <span key={k} style={{ color: colorFor(tok.kind) }}>
+                            {tok.text}
+                          </span>
+                        );
+                      }
+                      const col = tokenColumn(arr, k);
+                      return (
+                        <button
+                          key={k}
+                          type="button"
+                          title={`정의로 이동 (${i + 1}:${col})`}
+                          onClick={() => askSymbol(i + 1, col, "definition")}
+                          style={{ background: "transparent", border: 0, padding: 0, font: "inherit", color: colorFor(tok.kind), cursor: "pointer", textDecoration: "underline dotted" }}
+                        >
+                          {tok.text}
+                        </button>
+                      );
+                    })}
                     {/* 빈 줄도 줄 하나다.** `\n` 을 명시하지 않으면 빈 줄이
                         사라지고 **그 뒤 모든 줄 번호가 한 칸씩 밀린다** — 가장
                         찾기 어려운 종류의 화면 버그다. */}
