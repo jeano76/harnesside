@@ -820,6 +820,10 @@ const updates: UpdateService = new UpdateService({
         // 결착은 bindApprovalEvents 헬퍼로 빼냈다(동작 무결성). 헬퍼는 게이트가
         // 루프에 배선되어 지나는 경로를 유닛으로 고정하기 위한 것이다(§5 todo · S-6).
         approvalGate = new ApprovalGate({}, bindApprovalEvents(hub, ring));
+        // **에이전트에 붙인다.** 게이트만 만들고 여기서 끝내면 승인 없이 전부 실행된다 —
+        // 2026-10-12 라이브 실측에서 `rm -rf` 가 카드 없이 실행됨을 확인(게이트 유닛은
+        // 통과했었다). `setApprovalGate` 는 루프를 무효화하므로 첫 턴 이전이면 안전하다.
+        agent.setApprovalGate(approvalGate);
         // §5.5: 계측 시작. 1Hz 로 한 번만 재고 WS 로 브로드캐스트한다.
         // 라우트는 **계측하지 않고** 마지막 샘플만 읽는다(요청당 계측 금지).
         metrics.start();

@@ -70,6 +70,17 @@ test("**인자가 남는다** — 합치면서 버리면 끝난 블록에 경로
   assert.deepEqual(b[0]!.tool?.args, { path: "src/a.ts" }, "완료된 블록에서 인자가 사라졌다");
 });
 
+test("**완료 이벤트의 결과 텍스트가 블록에 남는다** — 출력이 모델 대화에만 있으면 화면에 안 보인다", () => {
+  // 2026-10-12 라이브 실측: 100줄 셸 출력이 화면 어디에도 없었다.
+  // `onToolCallDone` 이 결과를 전달하지 않아 블록 text 가 항상 "" 였다.
+  // 서버는 이제 결과를 `agent.tool` 이벤트의 text 로 싣는다.
+  let b = call(100, "run_shell", { command: "seq 1 3" });
+  b = appendToBlock(b, "tool", "1\n2\n3\n", 200, { name: "run_shell", args: { command: "seq 1 3" }, done: true });
+  assert.equal(b.length, 1, "결과가 새 블록을 만들었다 — 호출과 결과가 한 블록이어야 한다");
+  assert.equal(b[0]!.text, "1\n2\n3\n", "결과 텍스트가 블록에 남지 않았다");
+  assert.equal(b[0]!.tool?.done, true);
+});
+
 test("**병합 창** 밖이면 새 블록이다 — 오래된 호출을 붙이면 엉뚱한 블록이 된다", () => {
   const MERGE_WINDOW_MS = 4000;
   let b = call(100, "run_shell", { command: "a" });

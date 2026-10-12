@@ -19,6 +19,14 @@
  * 붙지 않는다). adopt 경로를 시험하려면 실재하는 파일을 주어 "모델을 가진 서버" 로 보이게 한다.
  * 실제 llama-server 가 쓰던 최소 API 만 흉내 낸다: `/v1/models`, `/health`,
  * `/v1/chat/completions`(SSE 도 포함 — 스트리밍 경로를 살리려고).
+ *
+ * `FAKE_TOOL_CALLS` — 승인카드·접기 UI 실측(`scripts/verify-approval-fold.mjs`)용.
+ * JSON 배열 `[{"match":"…","name":"run_shell","arguments":{"command":"…"}}]`.
+ * 비어 있으면(이하 기본값) 기존 통짜 텍스트만 내보내고 이 분기는 타지 않는다.
+ * 규칙: 마지막 user 메시지(그 뒤에 tool 응답이 없을 때)의 본문에 `match` 가
+ * 들어 있으면 그 도구 호출을 SSE tool_calls 로 내보낸다. 모델 품질이 아니라
+ * **도구 호출 왕복**(게이트→카드→실행→출력 블록)을 시험하는 것이므로, 가짜가
+ * "똑똑한" 척하지 않는다 — 매칭 안 되면 통짜 텍스트다.
  */
 
 import { createServer } from "node:http";
@@ -30,6 +38,38 @@ const modelPathArg = args.indexOf("--model-path");
 const MODEL_PATH = modelPathArg >= 0 ? args[modelPathArg + 1] : "/fake/model.gguf";
 
 const MODELS = { object: "list", data: [{ id: "fake-model", object: "model", owned_by: "fake" }] };
+
+/** `FAKE_TOOL_CALLS` 규칙. 파싱 실패하면 빈 목록(= 통짜 텍스트) — 가짜가 죽으면 부팅 스모크까지 깨진다. */
+function toolRules() {
+  try {
+    const v = JSON.parse(process.env.FAKE_TOOL_CALLS ?? "[]");
+    if (!Array.isArray(v)) return [];
+    return v.filter((r) => typeof r?.match === "string" && typeof r?.name === "string" && r?.arguments !== undefined);
+  } catch {
+    return [];
+  }
+}
+
+/** 마지막 user 메시지 뒤에 tool 응답이 없고, 규칙 match 가 본문에 있으면 그 도구 호출을 돌려준다. */
+function pickToolCall(bodyText, rules) {
+  if (!rules.length) return null;
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  const msgs = Array.isArray(body.messages) ? body.messages : [];
+  let lastUser = -1;
+  for (let i = 0; i < msgs.length; i++) if (msgs[i]?.role === "user") lastUser = i;
+  if (lastUser < 0) return null;
+  for (let i = lastUser + 1; i < msgs.length; i++) if (msgs[i]?.role === "tool") return null;
+  const c = msgs[lastUser].content;
+  const text = typeof c === "string" ? c : JSON.stringify(c ?? "");
+  return rules.find((r) => text.includes(r.match)) ?? null;
+}
+
+let toolCallSeq = 0;
 
 const server = createServer((req, res) => {
   const url = (req.url ?? "").split("?")[0];
@@ -57,6 +97,28 @@ const server = createServer((req, res) => {
           choices: [{ index: 0, message: { role: "assistant", content: "가짜 응답입니다." }, finish_reason: "stop" }],
           usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
         });
+      }
+      const toolCall = pickToolCall(body, toolRules());
+      if (toolCall) {
+        // 도구 호출 왕복용 — 클라이언트(openaiClient.ts)가 누적하는 표준 tool_calls 델타 모양 그대로.
+        res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+        const chunk = (delta, finish) =>
+          res.write(`data: ${JSON.stringify({ id: "chatcmpl-fake", object: "chat.completion.chunk", model: "fake-model", choices: [{ index: 0, delta, finish_reason: finish ?? null }] })}\n\n`);
+        chunk({ role: "assistant", content: null });
+        chunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: `call_verify${++toolCallSeq}`,
+              type: "function",
+              function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) },
+            },
+          ],
+        });
+        chunk({}, "tool_calls");
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
       }
       // **SSE 를 진짜와 같은 모양으로** — 스트리밍 파싱 회귀를 잡으려면 형식이 같아야 한다.
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });

@@ -331,6 +331,37 @@ test("onToolResult fires with a run_shell command's real output, and only for ru
     assert.match(toolResults[0].output, /hello-from-test/);
   }));
 
+test("onToolCallDone carries the capped result text — blocks show output, not just the call label", () =>
+  withTempProject(async (dir) => {
+    // 2026-10-12 라이브 실측: 100줄 셸 출력이 화면 어디에도 없었다. 결과는 모델
+    // 대화에만 있고 블록 text 는 항상 "" 였다 — `onToolCallDone` 이 결과를
+    // 전달하지 않았기 때문이다. 다섯 번째 인자가 그 결과다.
+    const shellCall = {
+      id: "c1",
+      type: "function" as const,
+      function: { name: "run_shell", arguments: JSON.stringify({ command: "echo hello-result-text" }) },
+    };
+    const { backend } = scriptedBackend({
+      turnResponses: [assistantMessage(null, [shellCall]), assistantMessage("done")],
+      tokenCounts: [1],
+    });
+    const seen: { name: string; result?: string }[] = [];
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: { autoTriggerRatio: 0.9, contextWindowTokens: 24576 },
+      onToolCallDone: (name, _args, _diff, _callId, result) => seen.push({ name, result }),
+    });
+
+    await loop.send("run it");
+
+    assert.equal(seen.length, 1, "onToolCallDone 이 호출되지 않았다");
+    assert.equal(seen[0].name, "run_shell");
+    assert.match(seen[0].result ?? "", /hello-result-text/, "결과 텍스트가 오지 않았다 — 블록에 출력이 안 보인다");
+  }));
+
 test("a turn that ends on plain text with no tool call announces it's done, instead of just going quiet", () =>
   withTempProject(async (dir) => {
     const { backend } = scriptedBackend({

@@ -351,23 +351,28 @@ function FileBlock({ label, path, done, client }: { label: string; path: string;
  */
 function ShellBlock({ command, done, text, client }: { command: string; done: boolean; text: string; client?: ApiClient }) {
   const t = useI18n();
-  const [output, setOutput] = useState<string>("");
+  const [logTail, setLogTail] = useState<string>("");
 
   useEffect(() => {
-    if (!done || !client) return;
-    // **실행 ID** 를 알 수 없으므로, 명령 문자열로 최근 로그를 거른다. 이건 부정확하다
-    // — 그래서 결과가 없으면 없다고 말하고, 지어내지 않는다.
+    // 완성된 결과(text)가 있으면 로그를 읽지 않는다 — 정본이 있는데 부정확한
+    // 쪽(명령 문자열 매칭)을 붙이면 같은 내용이 두 번 보인다.
+    // 2026-10-12 라이브 실측: 도구 출력은 로그에 한 줄 요약(`[tool] …200자`)으로만
+    // 남으므로, 로그 꼬리만 보면 100줄 출력에 접기 UI 가 영영 안 떴다.
+    if (!done || !client || text) return;
     void client
       .get<{ entries: { line: string }[] }>(`/api/logs?limit=200`)
       .then((r) => {
         const hit = r.entries.filter((e) => e.line.includes(command.slice(0, 40)));
-        if (hit.length) setOutput(hit.map((e) => e.line).join("\n"));
+        if (hit.length) setLogTail(hit.map((e) => e.line).join("\n"));
       })
       .catch(() => {
         /* 못 읽으면 비워 둔다 — 없는 결과를 지어내지 않는다 */
       });
-  }, [done, client, command]);
+  }, [done, client, command, text]);
 
+  // 출력 정본은 완성된 도구 결과(text)다 — 12k자 상한(capToolResult) 안에서 전부 있다.
+  // 로그 꼬리는 실행 중(아직 결과 없음)에만 보는 live tail 이다.
+  const output = text || logTail;
   return (
     <div style={{ border: `1px solid ${BORDER}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1, padding: "4px 8px" }}>
       <BlockHeader
@@ -377,7 +382,6 @@ function ShellBlock({ command, done, text, client }: { command: string; done: bo
         done={done}
         copyText={output || command || undefined}
       />
-      {text && <div style={{ color: DIM, fontSize: 10, marginTop: "2px" }}>{text.slice(0, 200)}</div>}
       {output && (
         // 명령줄은 헤더(BlockHeader)에 한 번만 나온다 — CodeBlock 에 또 넣으면
         // 같은 명령이 두 번 보인다(실측). **출력은 하이라이트하지 않는다** —

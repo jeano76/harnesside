@@ -21,7 +21,8 @@ import { test, after } from "node:test";
 import { mkdtemp, rm, readFile, access } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AgentService } from "./agentService.js";
 import { ApprovalGate } from "./approval.js";
 import type { ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ModelBackend } from "../backend/types.js";
@@ -190,4 +191,15 @@ test("allow-always 는 **한 번** 승인하면 다음 요청을 묻지 않고 �
   const askedAgain = gate.request({ tool: "write_file", summary: "2" });
   assert.equal(await askedAgain, "allow-once", `allowlist 항목은 묻지 않고 allow-once 여야 한다. 실제: ${await askedAgain}`);
   assert.equal(gate.pendingCount, 0, "allow-always 가 allowlist 를 채우지 않았다");
+});
+
+test("서버 기동 배선이 게이트를 에이전트에 붙인다 — 만들기만 해서는 막지 못한다", async () => {
+  // 2026-10-12 라이브 실측: 게이트는 생성됐는데(`new ApprovalGate`) 에이전트에
+  // 붙지 않아 `rm -rf` 가 카드 없이 실행됐다. 게이트·루프 유닛은 전부 통과했었다 —
+  // 끊긴 곳은 `index.ts` 의 접착 1줄이었다. 접착이 지워지면 여기서 떨어진다.
+  // (소스 스캔 방식 — `boundary.test.ts`·`indentRules.test.ts` 와 같은 규칙:
+  // 배선은 코드가 아니라 검사로 고정한다.)
+  const here = dirname(fileURLToPath(import.meta.url));
+  const src = await readFile(join(here, "index.ts"), "utf8");
+  assert.match(src, /agent\.setApprovalGate\(\s*approvalGate\s*\)/, "index.ts 가 게이트를 에이전트에 붙이지 않는다 — 파괴적 도구가 승인 없이 실행된다");
 });

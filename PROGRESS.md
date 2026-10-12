@@ -14,12 +14,28 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-12)
 
 ```yaml
-phase: i18n 영어 기본 전환 완료 (미커밋 작업 회수·커밋)
+phase: 승인카드 60초·접기 UI 라이브 실측 완료 (결함 2건 수리)
 status: in_progress
 last_commit: "5e68cdb feat(i18n): 영어 기본 + /lang 전환·헤더 선택기"
-next_action: "브라우저 미측정 (승인카드 60초·접기 UI) 또는 기호 정의/참조 중 선택"
+next_action: "기호 정의/참조 (TS LanguageService) — 순차 2번"
 blocking: 없음
 ```
+
+## 2026-10-12 · 승인카드 60초·접기 UI 라이브 실측 + 결함 2건 (순차 1번)
+
+> `scripts/verify-approval-fold.mjs` **17/17** — 진짜 서버(가짜 채택)+진짜 창+
+> 가짜 모델(`FAKE_TOOL_CALLS`)로 턴→카드→60초→접기까지 DOM 확인. ~2.5분. 수동·야간용.
+>
+> **결함 1 (차단)**: 게이트 생성됐으나 에이전트에 미배선 — `rm -rf` 가 카드 없이
+> 실행됨을 라이브로 확인. `todo.md` 체크는 거짓(검증 없이 체크됨).
+> `index.ts`에 `agent.setApprovalGate(approvalGate)` 1줄 + 소스스캔 회귀 테스트.
+> **결함 2**: 셸 출력이 블록에 안 닿아 접기 UI 도달 불가 — `onToolCallDone` 5번째
+> 인자(결과)→`agent.tool` text 배선 + ShellBlock 정본 우선. 100줄 출력에
+> `나머지 76줄 펼치기` 실측.
+>
+> 검증: `npm test` **2489/2489** · `ci-checks` PASS · `typecheck` clean · `build` PASS.
+> 별도 발견(미해결·다음 후보): 세션 복원 블록이 인자·출력 상실
+> (`content:"run_shell"`만 남음) — 라이브 블록과 복원 블록 모양이 다름.
 
 ## 2026-10-12 · i18n 영어 기본 전환 (미커밋 회수)
 

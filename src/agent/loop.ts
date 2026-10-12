@@ -304,7 +304,7 @@ export interface AgentLoopOptions {
   onToolCall?: (name: string, args: string, callId?: string) => void;
   /** Fires once a SPECIFIC tool call has fully finished (success or
    *  failure), regardless of tool type. See its call sites' doc comment. */
-  onToolCallDone?: (name: string, args: string, diff?: string, callId?: string) => void;
+  onToolCallDone?: (name: string, args: string, diff?: string, callId?: string, result?: string) => void;
   /** ANSI-colored diff for a file-mutating tool call, UI-only. */
   onDiff?: (path: string, diff: string) => void;
   /** Fires with a run_shell command's raw output — see its call site's doc
@@ -1286,7 +1286,7 @@ export class AgentLoop {
         if (AGENT_STATE_TOOLS.has(call.function.name)) {
           const result = await this.applyStateTool(call.function.name, call.function.arguments);
           this.messages.push({ role: "tool", tool_call_id: call.id, content: result });
-          this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id);
+          this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id, result);
           continue;
         }
 
@@ -1305,7 +1305,7 @@ export class AgentLoop {
           });
           this.hasNewFailuresThisTurn = true;
           this.messages.push({ role: "tool", tool_call_id: call.id, content });
-          this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id);
+          this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id, content);
           continue;
         }
         const editPath = EDIT_TOOLS.has(call.function.name) ? pathArg(call.function.arguments) : null;
@@ -1332,7 +1332,7 @@ export class AgentLoop {
             });
             this.hasNewFailuresThisTurn = true;
             this.messages.push({ role: "tool", tool_call_id: call.id, content });
-            this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id);
+            this.opts.onToolCallDone?.(call.function.name, call.function.arguments, undefined, call.id, content);
             continue;
           }
         }
@@ -1428,7 +1428,10 @@ export class AgentLoop {
         // 명령어가 멀티 라인일 경우에는 해당 명령어가 끝나면 폴딩으로
         // 접어줘야해". Used by the TUI to auto-fold a multi-line tool-call
         // label once it's done (never while it's still running).
-        this.opts.onToolCallDone?.(call.function.name, call.function.arguments, doneDiff);
+        // The 5th arg carries the capped result text — the server turns it
+        // into the block body so long outputs stay visible (and foldable)
+        // instead of living only in the model conversation.
+        this.opts.onToolCallDone?.(call.function.name, call.function.arguments, doneDiff, undefined, content);
       }
     }
   }

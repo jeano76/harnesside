@@ -424,7 +424,8 @@ export class AgentService {
         this.toolCalls++;
         this.emit({ type: "agent.tool", tool: { name, args, done: false, callId }, at: now() });
       },
-      onToolCallDone: (name, args, diff, callId) => this.emit({ type: "agent.tool", tool: { name, args, done: true, diff, callId }, at: now() }),
+      onToolCallDone: (name, args, diff, callId, result) =>
+        this.emit({ type: "agent.tool", text: result, tool: { name, args, done: true, diff, callId }, at: now() }),
       onToolResult: (command, output) => this.opts.logger?.(`[tool] ${command}: ${output.slice(0, 200)}`),
       onDiff: (path, diff) => {
         this.opts.diff?.(path, diff);

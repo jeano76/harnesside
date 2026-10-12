@@ -140,7 +140,7 @@ n=3 · 한 모델 · 한 질문 — 이 숫자를 일반화하지 않는다.
 - [x] 검색 결과에 **"잘렸습니다"** 가 실제로 뜸 (상한을 작게 낮춰서) — 2026-10-08 CDP 실측: `test` 검색(max 50)→`잘렸습니다 — 결과가 50건에 도달…` + 사유 표시. API는 기존(`/api/fs/search` truncated), 화면 표시가 없었음
 - [x] 좁은 창(800px)에서 액티비티바 · 탭 스트립 · 상태바가 **서로를 밀지 않음** — `verify-window.mjs` PASS
 - [x] 긴 경로가 상태바에서 **말줄임 + `title`** 로 보임 — `verify-window.mjs` PASS (ellipsis 규칙 요소 2개)
-- [ ] 승인 카드가 **대화 위**에 뜨고 60초 뒤 **자동 거절**이 화면에 보임 — 서버 `timeoutSec: 60`(`approval.ts:50`)·카드 카운트다운 로직 유닛 3건(`ApprovalCard.logic.test.ts`)까지만. 실제 60초 경과 화면은 미측정
+- [x] 승인 카드가 **대화 위**에 뜨고 60초 뒤 **자동 거절**이 화면에 보임 — 2026-10-12 라이브 실측 `scripts/verify-approval-fold.mjs` **17/17** (진짜 서버+진짜 창+가짜 모델). 카드 렌더(판정문·`Auto-reject in 60s`·3버튼) → 무응답 60초 → 서버 `timeout` settle(로그 근거) → 카드 닫힘 → 턴 정상 종료 → `rm -rf` 미실행(실행 로그 없음). 유닛(`approval.ts:50`·`ApprovalCard.logic` 3건)은 그대로.
 
 **확인 방법**: `node scripts/verify-window.mjs` (기존 CDP 검사) 에 항목 추가.
 **방법 없이는 체크하지 않는다.**
@@ -168,10 +168,16 @@ n=3 · 한 모델 · 한 질문 — 이 숫자를 일반화하지 않는다.
 > `typescript` 의 `LanguageService` 를 쓰는 쪽이다. **부족하면 없는 채로 둔다** —
 > 추측으로 심볼 위치를 지어내면 사용자가 "거기로 가면 되나" 를 확인하러 눌러야 한다.
 
-### ☐ 4. **접기 UI 실측** (S-3 남은 것)
+### ✅ 4. **접기 UI 실측** (S-3 남은 것) — 2026-10-12 라이브 실측으로 해소
 
-> §15 Phase 2: "남은 것: 접기 UI 의 실측." **`output` 이 길면 접는다** 는 규칙은
-> `CodeBlock` 에 있다. **눈으로 확인하지 않았다.**
+> §15 Phase 2: "남은 것: 접기 UI 의 실측." 실측 결과 **두 건이 끊겨 있었다**
+> (유닛은 통과, 화면에는 안 보임):
+> 1. 셸 출력이 블록에 닿지 않음 — 결과는 모델 대화에만 있고 블록 text 는 `""`.
+>    `loop.ts onToolCallDone` 5번째 인자(결과) → `agentService` `agent.tool` text
+>    배선으로 수정 + `ToolBlock` ShellBlock이 정본(text) 우선·로그꼬리 fallback.
+> 2. (같은 세션) 승인 게이트 미배선 — 아래 PROGRESS 기록.
+> 검증: `scripts/verify-approval-fold.mjs` 17/17 중 접기 4건
+> (`Shell output, 101 lines` → 접기 → `나머지 76줄 펼치기`+`줄 접힘` → 펼치기 → 복귀).
 
 ### ✅ 5. **`/api/health` 의 `startedAt` 를 쓰는 시험** — 2026-10-04, `verify-window.mjs` 시작/끝 대조 (같은 서버 측정 보장)
 
