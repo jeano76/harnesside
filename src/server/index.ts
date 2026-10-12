@@ -29,6 +29,7 @@ import { teeChild } from "./logWatcher.js";
 import type { LogLevel, LogSource } from "./logRing.js";
 import { safeListDir, safeReadFile, safeWriteFile, safeResolve } from "../fs/safePath.js";
 import { searchFiles, listFiles, isSearchFailure } from "../fs/search.js";
+import { getDefinition, getReferences } from "./symbolsTs.js";
 import { gitStatus, gitShowHead } from "./gitDiff.js";
 import { planClone, clone, redactUrl, pull, push, summarize, currentBranch, commit } from "../git/sync.js";
 import { MetricsSampler } from "./metrics.js";
@@ -982,6 +983,34 @@ const updates: UpdateService = new UpdateService({
             // 곳에 있고(부록 B 6), 화면이 같은 함수를 쓴다. 여기서 다시 매기면 두 곳에
             // 규칙이 생겨 어긋난다.
             return { files: r.files, truncated: r.truncated, total: r.total, query: q };
+          })
+          // ── §7.1 기호 정의·참조 (2단계 — TS LanguageService) ───────────────
+          //
+          // **왜 GET인가**: 읽기 전용이다. 위치를 주면 위치를 돌려준다.
+          // 줄·열이 범위를 벗어나면 **400** — 빈 목록을 주면 "이 기호는 정의가
+          // 없다" 로 읽히는데 실제로는 **호출이 틀렸다**(§9.3).
+          // 컴파일러가 모르면 빈 locations — 지어내지 않는다(§7.1).
+          .route("GET", "/api/fs/definition", async (c) => {
+            const path = c.query.get("path") ?? "";
+            const line = Number(c.query.get("line"));
+            const col = Number(c.query.get("col"));
+            if (!path.trim() || !Number.isInteger(line) || !Number.isInteger(col) || line < 1 || col < 1) {
+              throw Object.assign(new Error("path·line·col 이 필요합니다 (line·col 은 1 이상 정수)"), { status: 400 });
+            }
+            const r = await getDefinition(workspace.root(), path, line, col);
+            if (!r.available) return { available: false, reason: r.reason, locations: [] };
+            return { available: true, locations: r.locations };
+          })
+          .route("GET", "/api/fs/references", async (c) => {
+            const path = c.query.get("path") ?? "";
+            const line = Number(c.query.get("line"));
+            const col = Number(c.query.get("col"));
+            if (!path.trim() || !Number.isInteger(line) || !Number.isInteger(col) || line < 1 || col < 1) {
+              throw Object.assign(new Error("path·line·col 이 필요합니다 (line·col 은 1 이상 정수)"), { status: 400 });
+            }
+            const r = await getReferences(workspace.root(), path, line, col);
+            if (!r.available) return { available: false, reason: r.reason, locations: [] };
+            return { available: true, locations: r.locations };
           })
           // §5.5 계측. **계측하지 않는다** — 마지막 샘플만 돌려준다.
           .route("GET", "/api/metrics", () => ({
