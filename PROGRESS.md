@@ -14,14 +14,25 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-12)
 
 ```yaml
-phase: 기호·복원 라이브 실측 완료 (11/11, 결함 2건 수리)
+phase: push + CI 전체 통과 (15커밋, 커버리지 80.03%)
 status: in_progress
-last_commit: "dacc00d test(verify): 기호 점프·복원 라이브 실측 스크립트"
-next_action: "남은 미측정 (Mac Cmd·headed GPU) — 이 머신에서 불가, 또는 다음 고도화 후보 중 선택"
+last_commit: "ff685e2 docs(progress): 기호·복원 라이브 11/11 기록"
+next_action: "M9 패널 i18n화 또는 S-9 나머지 중 선택"
 blocking: 없음
 ```
 
-## 2026-10-12 · 기호·복원 라이브 실측 (야간)
+## 2026-10-12 · push + CI 전체 통과
+
+> 15커밋 push (`67f7536..ff685e2`), 0 ahead. CI run 38260262025 **전체 통과**:
+> 게이트(typecheck·unit·build·정적검사) ✓ · 부팅 스모크 ✓ · 창 검증 ✓ ·
+> nightly는 push에서 skip (schedule 전용).
+>
+> 참고: 10-11 schedule은 게이트 실패 — 서버 계층 커버리지 79.85% (하한선 80%,
+> 0.15pt 부족, 최저 `index.ts` 5.58%). 이번 push는 **80.03%** (파일 163→167개) —
+> 테스트 갖춘 신규 파일(`symbolsTs`·`restore` 등)이 턱을 넘겼다.
+> 구조적 부담(`index.ts`·`supervise.ts`·`cli.ts` 저커버리지)은 그대로.
+>
+> 검증: `gh run view 38260262025` conclusion success.
 
 ## 2026-10-12 · 기호·복원 라이브 실측 (야간)
 
