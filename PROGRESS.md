@@ -489,10 +489,10 @@ verified_this_session:
 | **P8** | §5.4 자석 도킹 | ☑ | 5존 판정 · 자기 진화 · 키보드 대안 · **셸이 존을 실제로 따름** | `1629bf4` `2c2c6da` |
 | **P9** | §8.3 워크스페이스 이동 | ☑ | `workspaceService` + `/api/workspace{,/plan,/switch}` + `WorkspaceBar` + 탐색기 트리. fs·git·fsWatcher 전부 live root | `6f373cf` |
 | **P10** | §5.3 Think | ☑ | `agentService` — send 가 실제 턴 실행 · `agent.*` WS · `AgentPanel`(5스타일·경고·취소) | `ad5401d` |
-| **P10.5** | §5.10 세션 영속화 | ☑ | `session/bridge` + `blocks`(React 없음) + `/api/session/{current,list,save}` · 턴 종료·종료 시 flush | `b71ed40` |
+| **P10.5** | §5.10 세션 영속화 | ☑ | `session/bridge` + `blocks`(React 없음) + `/api/session/{current,list,save}` · 턴 종료·종료 시 flush · 2026-10-12 추가: 복원 블록 도구 호출 보존(`PersistedBlock.tool`+`packTool`+`session/restore.ts`, `restore.test.ts` 4 + 저장→복원 왕복 실측) | `b71ed40` `aeb565f` |
 | **P11** | §7 모델 관리 | ☑ | `models/hub`(검색·추천·fillSizes·pickForMachine) + `download`(이어받기) + 교체→재기동→**응답 확인→실패 시 롤백**. 크기 모르면 **점수 0**(미산정) | `69a1743` `0b685b3` |
 | **P12** | §4.4 창 종료 → llama 종료 | ☑ | **S1~S6 전부 구현** · `verify-signals.mjs` **60/60 실측** · S4 만 sudo 필요해 유닛 검증 | `509d0b7` `ad5401d` `b71ed40` `69a1743` |
-| **P13** | §9.1 업데이트 + §5.13 설정 + §5.13.2 추천 | ◐ (적용 라우트·롤백·마커·UI 완료 2026-10-04, 상위 감시기만 남음) | **진짜 GitHub API 조회**(403/429 · 확인 실패 ≠ 최신) · 슬롯 3개 · **롤백 슬롯 없으면 적용 차단**(D14) · 진행 단계 UI · **교체→재기동→부팅 확인→무응답 시 롤백**(`420e25e`, 가짜 실행 파일로 판정·파일 수준 실측). **남음: "적용" 라우트 0건 · 상위 감시기(supervisor) 없음 · M13 추천 알림 배선 0건** | `f5131e5` `420e25e` |
+| **P13** | §9.1 업데이트 + §5.13 설정 + §5.13.2 추천 | ☑ | **진짜 GitHub API 조회**(403/429 · 확인 실패 ≠ 최신) · 슬롯 3개 · **롤백 슬롯 없으면 적용 차단**(D14) · 진행 단계 UI · **교체→재기동→부팅 확인→무응답 시 롤백**(`420e25e`, 가짜 실행 파일로 판정·파일 수준 실측) · 2026-10-09 **상위 감시기 4단계**(업데이트 위임 — 서버는 교체+마커 후 코드 42 종료, 감시기가 확인·되돌리기) | `f5131e5` `420e25e` `f712929` |
 | **P14** | §9.3 GitHub 연동 | ☑ | clone → 열기 → **커밋** → pull **전부 배선**. 커밋은 선택 파일 **스테이징 후** 커밋(새 파일이 안 되는 버그 실측) · 충돌 시 자동병합 없이 중단 | `8300368` `ac663a2` |
 | **P15** | §11.1 M1~M13 | ◐ | **M1 터미널**(node-pty · 탭 여러 개 · exit code/signym 구분 · **열지 못한 셸과 종료 구분**) · **M6 자동저장** · **M3 취소·재개** · **M8 접근성**(`verify-a11y.mjs` 7/7) · **M9 i18n 배선**(`verify-i18n.mjs` 7/7, 셸·존·빈 상태). **남음: M10 웹 배선 · M13 배선 · 패널 문자열 i18n화** | `88e10f2` `8cc1c42` `f767d4f` `2125169` |
 | **P16** | §10.4 E2E + 회귀 + CI | ☑ | **CI 세 잡**(gate · boot-smoke · **window**). `verify-window.mjs` **헤드리스 CDP 로 CI 편입**(13/13) · `verify-terminal.mjs` **신규**(16/16) · 스크린샷 산출물 | `c434bdb` `578b1e3` |
@@ -503,8 +503,10 @@ verified_this_session:
 | 항목 | 내용 | 상태 | 완료 검증 | 커밋 |
 |---|---|---|---|---|
 | **최초 구동** | llama.cpp **세 가지 상태** 판정: ① 떠 있으면 endpoint·포트 찾아 재사용 ② 설치됨·미구동 → 지정 포트로 구동 ③ 없음 → 하드웨어에 맞춰 빌드 + 모델 수령 | ☑ | `inspectLlama` 가 **"떠 있음"을 먼저** 본다(아니면 실측된 20GB 재다운로드가 반복된다). doctor·`/api/llama/status`·부팅 [0] 이 **같은 판정**을 쓴다. `verify-firstrun.mjs` **19/19** (실제 HTTP 서버 + 실제 바이너리) | `ab5b4e6` `bfb309d` |
+| **기호 정의·참조** | §7.1 빈 자리 — TS LanguageService 정의·참조 (`src/server/symbolsTs.ts` 신규) + `GET /api/fs/definition`·`/api/fs/references` + `FilePreview` 토큰 클릭 점프 (`src/web/panels/symbolJump.ts` 신규) | ☑ | `symbolsTs.test.ts` 9·배선 4·`symbolJump.test.ts` 3 · 실측(실코드베이스): 교차파일 정의 `searchRank.ts:23`·참조 11건·키워드 빈 목록 · 빌드 산출물 확인. 브라우저 클릭은 **미측정** | `fa65cb5` `5da0716` |
+| **세션 복원 보존** | 복원 블록이 인자·출력을 잃음 — `PersistedBlock.tool` + `packTool` + `session/restore.ts` | ☑ | `restore.test.ts` 4 + 저장→복원 왕복 실측(이름·인자·완료·출력 유지). 브라우저 새로고침은 **미측정** | `aeb565f` |
 
-| **P18** | S-2 액티비티바 방향키 이동 · 뷰 라벨 한곳모음 (`Ide.tsx`·`AgentPanel.tsx`) · 저장소 전체 검색 `/api/fs/search`+`/api/fs/files`·상한 `clampInt`·공백 검색 거절 (`search.ts` 신규) · 되돌릴 수 없는 조작 판정 4갈림길 (`irreversible.ts` 신규) | ◐ | 전부 **유닛 통과** 그러나 **아직 커밋 안 됨**(HEAD `b9d3be3`), **브라우저 실측 없음(미측정)**. 액티비티바: `Ide.a11y.test.ts` **17/17** · 검색: `search.test.ts` **24/24**(경로·줄번호·상한·바이너리·링크·무시폴더) · 되돌릴 수 없는 조작: `irreversible.test.ts` **17/17**(`run_shell -rf` 등 irreversibles 걸러냄). 승인 게이트 배선(`loop.ts`+`agentService.ts`+index)은 코드만, 브라우저 실측 안 함(미측정) | *(미커밋)*
+| **P18** | S-2 액티비티바 방향키 이동 · 뷰 라벨 한곳모음 (`Ide.tsx`·`AgentPanel.tsx`) · 저장소 전체 검색 `/api/fs/search`+`/api/fs/files`·상한 `clampInt`·공백 검색 거절 (`search.ts` 신규) · 되돌릴 수 없는 조작 판정 4갈림길 (`irreversible.ts` 신규) · 승인 게이트 실배선+라이브 실측 | ☑ | 액티비티바: `Ide.a11y.test.ts` **17/17** · 검색: `search.test.ts` **24/24** · 되돌릴 수 없는 조작: `irreversible.test.ts` **17/17** · 게이트 배선 4 + 로직 7 · 2026-10-08 CDP(`fe9bc71`: 팔레트·검색·상한·좁은창·긴경로) · 2026-10-12 라이브 `verify-approval-fold.mjs` **17/17**(카드 60초 자동거절+접기 UI, 결함 2건 수리 `b399eac`) | `fe9bc71` `b399eac` `fed63d1` |
 
 > **◐ 의 뜻**: 로직과 테스트는 통과했지만 **아직 사용자에게 보이는 경로가 없다.**
 > 즉 "돌면 되지만 실행하지 않는다". 이 상태로 "완료"라 쓰지 않는다(부록 C).
