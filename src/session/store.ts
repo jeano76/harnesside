@@ -30,6 +30,20 @@ export interface PersistedBlock {
   updatedAt: number;
   collapsed: boolean;
   content: unknown;
+  /**
+   * 도구 호출 보존 (§7.1 2단계 다음 발견 — 2026-10-12 라이브 실측).
+   *
+   * 예전엔 `content`(결과 텍스트)만 저장해서 복원된 도구 블록이
+   * `content:"run_shell"` 모양이 됐다 — 인자·완료 표시가 없어 라이브 블록과
+   * 모양이 달랐다. `args` 는 JSON 직렬화 가능한 것만(무게는 `bridge.ts` 가 잰다).
+   */
+  tool?: {
+    name: string;
+    done?: boolean;
+    args?: unknown;
+    /** 인자가 상한을 넘어 빠졌을 때 사유 — 조용히 비우지 않는다. */
+    argsNote?: string;
+  };
 }
 
 export interface SessionDoc {

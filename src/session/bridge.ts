@@ -20,6 +20,32 @@ import type { AgentBlock } from "./blocks.js";
 /** 주기적 저장 간격(초). 스트리밍이 오래 이어질 때 마지막 상태를 잃지 않기 위한 안전망. */
 export const PERIODIC_SAVE_SEC = 30;
 
+/**
+ * 도구 인자 JSON 상한. 넘기면 **빼고 사유를 남긴다** — 잘라 붙이면 경로·명령이
+ * 깨져 엉뚱한 파일을 가리킨다(§7.1: 추측 금지). 보통 인자는 수백 바이트다.
+ */
+export const MAX_TOOL_ARGS_JSON = 8192;
+
+/** 화면 도구 호출 → 저장 형식. JSON에 못 담는 인자는 버리고 말한다. */
+export function packTool(tool: { name: string; done?: boolean; args?: unknown }): NonNullable<PersistedBlock["tool"]> {
+  const out: NonNullable<PersistedBlock["tool"]> = { name: tool.name };
+  if (typeof tool.done === "boolean") out.done = tool.done;
+  if (tool.args === undefined) return out;
+  let json = "";
+  try {
+    json = JSON.stringify(tool.args) ?? "";
+  } catch {
+    out.argsNote = "인자가 JSON으로 바꿀 수 없어 저장하지 않았습니다";
+    return out;
+  }
+  if (json.length > MAX_TOOL_ARGS_JSON) {
+    out.argsNote = `인자 ${json.length.toLocaleString("ko-KR")}자가 상한(${MAX_TOOL_ARGS_JSON.toLocaleString("ko-KR")}자)을 넘어 저장하지 않았습니다`;
+    return out;
+  }
+  out.args = tool.args;
+  return out;
+}
+
 export interface SessionBridgeOptions {
   stateDir: string;
   /** 워크스페이스별 분류용 루트(전환되면 바뀐다). */
@@ -108,6 +134,9 @@ export class SessionBridge {
       collapsed: b.kind === "reasoning",
       // 사고 전체를 저장하지 않는다 — 화면에서 접혀 있고, 예산 낭비다.
       content: b.kind === "reasoning" ? `${b.text.length.toLocaleString("ko-KR")}자` : b.text,
+      // 도구 호출을 버리지 않는다 — 인자·완료 표시가 없으면 복원 블록이
+      // 라이브 블록과 다른 모양이 된다(2026-10-12 실측: content:"run_shell"만 남음).
+      tool: b.kind === "tool" && b.tool ? packTool(b.tool) : undefined,
     }));
     if (blocks.length === 0) return;
     this.store.schedule(doc);

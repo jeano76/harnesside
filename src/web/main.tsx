@@ -17,6 +17,7 @@ import { LogPanel } from "./panels/LogPanel.js";
 import { WorkspaceBar } from "./panels/WorkspaceBar.js";
 import { AgentPanel, applyEvent, type AgentBlock } from "./panels/AgentPanel.js";
 import { openView, toggleView, collapseView, addSlash, finishSlash, toggleSlashFold, restartSlash } from "../session/blocks.js";
+import { toAgentBlocks } from "../session/restore.js";
 import { ModelPanel } from "./panels/ModelPanel.js";
 import { initialThink, finish, ingest, adoptServerThink, type ThinkState, type ThinkStyle } from "./agent/think.js";
 import { itemTopInContent, scrollTopToShow } from "./agent/slashScroll.js";
@@ -1229,16 +1230,8 @@ export default function App() {
         if (!cur.id || cur.blocks.length === 0) return;
         // **빈 화면으로 덮지 않는다.** 지금 화면에 블록이 있으면(스트리밍 중) 붙인다.
         if (blocksRef.current.length > 0) return;
-        setBlocks(
-          // `view` 블록(설정·슬래시 결과)은 저장 형식에 모양이 없어 복원할 수 없다 —
-          // 복원하면 "이 화면을 열 수 없습니다" 만 남는다.
-          cur.blocks.filter((b) => b.kind !== "view").map((b, i) => ({
-            id: b.id || `restored-${i}`,
-            kind: (b.kind as AgentBlock["kind"]) ?? "text",
-            text: typeof b.content === "string" ? b.content : (b.title ?? ""),
-            at: b.createdAt ?? Date.now(),
-          }))
-        );
+        // 매핑 규칙은 `session/restore.ts` — 인라인하면 브라우저 없이 검사할 수 없다.
+        setBlocks(toAgentBlocks(cur.blocks));
         setRestored(cur.blocks.length);
       } catch {
         // 복원 실패는 조용히 넘어간다 — 창이 뜨는 것을 막을 이유는 없다.
