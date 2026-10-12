@@ -34,6 +34,12 @@ describe("symbols definition wiring", () => {
     assert.match(src, /available/, "available:false(typescript 없음)를 처리하지 않는다 — 조용히 빈 화면이 된다");
     assert.match(src, /추측하지 않/, "빈 결과를 지어내지 않는다는 말을 화면이 하지 않는다");
   });
+  it("도구 파일 블록이 미리보기를 자동으로 읽는다 — 헤더만이면 점프 진입로가 없다", () => {
+    const src = readFileSync(join(here, "..", "web", "panels", "ToolBlock.tsx"), "utf8");
+    assert.match(src, /isFileTool\(name, args\) && path && client/, "파일 도구 미리보기 분기가 없다");
+    const seg = src.slice(src.indexOf("isFileTool(name, args) && path && client"));
+    assert.match(seg.slice(0, 600), /autoOpen/, "autoOpen 없이 헤더만 남는다 — 토큰 클릭 UI 가 코드에만 있다");
+  });
   it("FilePreview 가 키워드·문자열 클릭을 보내지 않는다", () => {
     const src = readFileSync(join(here, "..", "web", "panels", "FilePreview.tsx"), "utf8");
     assert.match(src, /isJumpableKind/, "토큰 가드 없이 전부 요청하면 빈 정의가 돌아온다");

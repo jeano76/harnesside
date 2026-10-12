@@ -203,8 +203,11 @@ export function ToolBlock({
   if (isShell(name, args)) return <ShellBlock command={command ?? ""} done={done} text={block.text} client={client} />;
   // 파일 도구 블록도 **미리보기**로 그린다 — 같은 파일을 두 모양으로 보여주면
   // 사용자는 "이거 편집기인가 미리보기인가" 를 헷갈린다.
+  // **자동으로 읽는다.** `autoOpen` 없이 두면 헤더 한 줄만 남고, 기호 점프·내용
+  // 확인의 진입로가 화면에 없다(2026-10-12: 토큰 클릭 UI 가 코드에만 있었다).
+  // 이 블록은 사용자가 시킨 턴의 결과라 "명시적 열기" 에 해당한다.
   if (isFileTool(name, args) && path && client) {
-    return <FilePreview client={client} path={path} onEdit={onEditFile} />;
+    return <FilePreview client={client} path={path} autoOpen onEdit={onEditFile} />;
   }
   if (isFileTool(name, args) && path) return <FileBlock label={labelFor(name, t)} path={path} done={done} client={client} />;
 
