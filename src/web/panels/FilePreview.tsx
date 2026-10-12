@@ -34,8 +34,7 @@ import {
   tokenizeLine,
 } from "../editor/highlight.js";
 import { extractSymbols } from "../../shared/symbols.js";
-import { isJumpableKind, tokenColumn, isIdentifierText } from "./symbolJump.js";
-
+import { isJumpableKind, identifierColumn, isIdentifierText } from "./symbolJump.js";
 interface SymbolLoc {
   path: string;
   line: number;
@@ -342,7 +341,7 @@ export function FilePreview({ client, path, autoOpen = false, onEdit }: FilePrev
                           </span>
                         );
                       }
-                      const col = tokenColumn(arr, k);
+                      const col = identifierColumn(arr, k);
                       return (
                         <button
                           key={k}

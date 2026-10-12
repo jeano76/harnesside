@@ -26,6 +26,21 @@ export function tokenColumn(tokens: Token[], index: number): number {
   return col;
 }
 
+/**
+ * 토큰 안의 식별자 시작 열(1-based).
+ *
+ * 왜 토큰 시작이 아닌가: 하이라이터는 규칙에 안 걸리는 글자(공백 등)를 앞뒤
+ * `plain` 에 뭉친다 — `" rankFiles "` 가 통째로 한 토큰이다(2026-10-12 실측).
+ * 토큰 시작 열(공백)을 컴파일러에 물으면 "정의 없음" 이 돌아오는데, 사용자는
+ * `rankFiles` 를 누른 것이다. 식별자 첫 글자로 맞춘다.
+ */
+export function identifierColumn(tokens: Token[], index: number): number {
+  const base = tokenColumn(tokens, index);
+  const text = tokens[index]?.text ?? "";
+  const m = text.match(/[A-Za-z_$]/);
+  return m?.index === undefined ? base : base + m.index;
+}
+
 /** 토큰 텍스트가 식별자처럼 보이는가 (빈 조각·공백만 제외). */
 export function isIdentifierText(text: string): boolean {
   return /[A-Za-z_$]/.test(text);
