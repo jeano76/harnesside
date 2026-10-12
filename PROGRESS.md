@@ -14,14 +14,29 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-12)
 
 ```yaml
-phase: 기호 정의·참조 풀셋 완료 (TS LanguageService + 화면 점프)
+phase: 세션 복원 도구 호출 보존 완료 (순차 3번)
 status: in_progress
-last_commit: "5da0716 feat(ui): FilePreview 토큰 클릭 정의·참조 점프"
-next_action: "문서 갱신 (todo ⑥) 또는 다음 고도화 후보 중 선택"
+last_commit: "aeb565f feat(session): 복원 블록에 도구 호출 보존"
+next_action: "문서 갱신 (todo ⑥) 또는 브라우저 클릭 실측 중 선택"
 blocking: 없음
 ```
 
-## 2026-10-12 · 기호 정의·참조 풀셋 (순차 2번)
+## 2026-10-12 · 세션 복원 도구 호출 보존 (순차 3번)
+
+## 2026-10-12 · 세션 복원 도구 호출 보존 (순차 3번)
+
+> 순차 1번 라이브 실측에서 발견: 복원 블록이 `content:"run_shell"` 모양 —
+> `capture()` 가 결과 텍스트만 저장하고 `tool(이름·인자·완료)` 을 버렸고,
+> `main.tsx` 복원 매핑도 `tool` 을 안 살렸다.
+>
+> 수정: `PersistedBlock.tool` 추가 + `packTool` (8KB 초과 인자는 빼고 사유) +
+> 복원 매핑을 `session/restore.ts` 순수 함수로 분리(`toAgentBlocks`).
+> 실측: 저장→복원 왕복(셸·파일읽기 블록 이름·인자·완료·출력 보존).
+> 겸사겸사 CJK 함정 1건 수정(`restore.test.ts` 일본어 혼입 — ci-checks FAIL).
+>
+> 검증: `npm test` **2509/2509** · `ci-checks` PASS · `typecheck` clean · `build` PASS.
+> 커밋 `aeb565f`.
+> 브라우저 새로고침 실측은 미측정(전체창 라이브는 모델 기동 필요).
 
 ## 2026-10-12 · 기호 정의·참조 풀셋 (순차 2번)
 
