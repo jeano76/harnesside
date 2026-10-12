@@ -16,7 +16,7 @@
 ```yaml
 phase: 승인카드 60초·접기 UI 라이브 실측 완료 (결함 2건 수리)
 status: in_progress
-last_commit: "5e68cdb feat(i18n): 영어 기본 + /lang 전환·헤더 선택기"
+last_commit: "b399eac feat(verify): 승인카드 60초·접기 UI 라이브 실측 + 결함 2건 수리"
 next_action: "기호 정의/참조 (TS LanguageService) — 순차 2번"
 blocking: 없음
 ```
