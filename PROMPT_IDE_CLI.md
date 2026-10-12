@@ -579,7 +579,7 @@ CLI 의 세 번째 명령. **비어 있는 자리** — 추가한다.
 - [x] 저장소 전체 검색이 한 화면에서 끝난다 — 2026-10-03, `src/fs/search.ts` 신규, **24/24 pass** · 경유·줄 번호·상한·바이너리·링크·무시폴더
 - [x] 결과에 경로와 줄 번호가 있다 — 2026-10-03, `src/fs/search.ts` 신규(위 항목과 같은 라운드)
 - [x] `Ctrl+P` / `Ctrl+Shift+F` 가 동작한다 — 2026-10-08 CDP 실측(`fe9bc71`): Ctrl+P→파일 모드→방향키·Enter로 열림(`loop.test.ts` 확인) · Ctrl+Shift+F→검색 모드→`path:line`+잘렸습니다→열림. **정정**: 2026-10-04 기록은 "동작한다"고 적혀 있었으나 실제로 `main.tsx`에 Shift+F 분기가 0건이었다(grep 실측). QuickOpen/SearchBlock 언급도 삭제됨 — 현재는 팔레트 모드다 (Mac `Cmd` 는 코드만, 미측정)
-- [x] 기호 정의로 이동한다 — 2026-10-12, `src/server/symbolsTs.ts` 신규(TS LanguageService) + `GET /api/fs/definition`·`/api/fs/references` + `FilePreview` 토큰 클릭 점프. `symbolsTs.test.ts` 9·배선 4·`symbolJump.test.ts` 3. 실측(실코드베이스): `search.ts:315:12`→`shared/searchRank.ts:23 rankFiles` · `extractSymbols` 참조 11건 · 키워드 자리 빈 목록. 브라우저 클릭은 미측정
+- [x] 기호 정의로 이동한다 — 2026-10-12, `src/server/symbolsTs.ts` 신규(TS LanguageService) + `GET /api/fs/definition`·`/api/fs/references` + `FilePreview` 토큰 클릭 점프. `symbolsTs.test.ts` 9·배선 5·`symbolJump.test.ts` 4. 실측(실코드베이스): `search.ts:315:12`→`shared/searchRank.ts:23 rankFiles` · `extractSymbols` 참조 11건 · 키워드 자리 빈 목록. **해소**: 라이브 `scripts/verify-symbols-restore.mjs` **11/11**(토큰 클릭→`searchRank.ts:23` 패널·참조 15건)
 - [x] 기호 참조를 찾는다 — 2026-10-12, 위와 같은 라운드. 모르면 빈 목록(지어내지 않음) · `typescript` 미설치본은 `available:false` 로 텍스트 아웃라인 유지
 
 ### S-6 한 손
@@ -601,7 +601,7 @@ CLI 의 세 번째 명령. **비어 있는 자리** — 추가한다.
 - [ ] 창 검사가 **자기 기동 시각**을 본다
 
 ### S-9 되돌리기
-- [ ] 창을 닫고 열면 이어진다 — 2026-10-12 현재: 도구 호출 보존은 유닛으로 고정(`session/restore.test.ts` 4 + 저장→복원 왕복 실측 — 이름·인자·완료·출력 유지). **브라우저 새로고침 실측은 미측정**이므로 체크하지 않는다
+- [x] 창을 닫고 열면 이어진다 — 2026-10-12 라이브 실측(`scripts/verify-symbols-restore.mjs`): `Page.reload` 후 복원 블록에 셸 명령(`seq 1 5`)·파일 경로(`search.ts`) 유지. 데이터 왕복은 `session/restore.test.ts` 4로 고정
 - [ ] 복원된 대화가 길면 **요약이 먼저** 나온다
 - [ ] 전체 접기/펼치기가 한 번에 된다
 
@@ -647,6 +647,8 @@ CLI 의 세 번째 명령. **비어 있는 자리** — 추가한다.
 | 10-12 | 승인 게이트 **미배선** — `rm -rf` 가 카드 없이 실행됨 (차단) | 라이브 실측(유닛은 전부 통과 상태로 끊겨 있었음) |
 | 10-12 | 셸 출력이 블록에 **닿지 않음** — 접기 UI 도달 불가 | 라이브 실측(`onToolCallDone` 5번째 인자 미배선) |
 | 10-12 | 세션 복원 블록이 **인자·출력을 잃음** (`content:"run_shell"`만 남음) | 라이브 실측(위 두 건과 같은 세션) |
+| 10-12 | 파일 미리보기가 **헤더만** — `autoOpen` 없이 점프 진입로 없음 | 라이브 실측 직전 발견(토큰 클릭 UI 가 코드에만 있었음) |
+| 10-12 | 토큰 클릭 열이 **공백을 가리킴** — `" rankFiles "` 뭉침의 시작을 물어 정의 없음 | 라이브 실측(식별자 첫 글자로 맞춤 `identifierColumn`) |
 
 ## 부록 B. 이 저장소가 배운 것 — 문장
 
@@ -674,6 +676,7 @@ CLI 의 세 번째 명령. **비어 있는 자리** — 추가한다.
 
 ## 변경 이력
 
+- **2026-10-12 (야간)** 기호·복원 라이브 실측 — `scripts/verify-symbols-restore.mjs` 신규 **11/11**(미리보기 자동로드·토큰 클릭→`searchRank.ts:23`·참조 15건·`Allow once`→새로고침 복원 모양 유지). 결함 2건 수리(`autoOpen` 누락 `31a77c4` · 토큰 열 어긋남 `85dad10`). S-9 체크.
 - **2026-10-12** 순차 1~3번 반영 — S-2 펼치기 전이 [x](접기 라이브 4건) · S-5 기호 정의·참조 [x] 2건 · S-6 60초 미측정 해소(라이브 17/17) · S-9/S-10 현행화(브라우저 실측 남음은 미측정 유지) · 부록 A 10-12 결함 3건. `symbolsTs.ts`·`symbolJump.ts`·`session/restore.ts` 신규.
 - **2026-10-03** S-2 · S-5 · S-6 · S-12 체크리스트 갱신 — ② 대시보드 항목에 검증 시각·방법 추가.
   `health.test.ts` 신규(4 pass) · 되돌릴 수 없는 조작 판정 `irreversible.ts` 신규(17/17).
