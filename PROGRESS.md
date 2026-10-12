@@ -11,15 +11,22 @@
 
 ---
 
-## ① 현재 상태 (마지막 갱신: 2026-10-08)
+## ① 현재 상태 (마지막 갱신: 2026-10-12)
 
 ```yaml
-phase: push 완료 (origin/main 동기화) — README 최신화됨
+phase: i18n 영어 기본 전환 완료 (미커밋 작업 회수·커밋)
 status: in_progress
-last_commit: "368282a docs(readme): 오래된 수치·서술 정리 + 감시기 절 추가"
+last_commit: "5e68cdb feat(i18n): 영어 기본 + /lang 전환·헤더 선택기"
 next_action: "브라우저 미측정 (승인카드 60초·접기 UI) 또는 기호 정의/참조 중 선택"
 blocking: 없음
 ```
+
+## 2026-10-12 · i18n 영어 기본 전환 (미커밋 회수)
+
+> 이전 세션 미커밋 42파일을 회수·검증·커밋. `en.ts` 신규 + `DEFAULT_LOCALE` en.
+> `ko`·`en` 510:510 parity. `/lang` 클라이언트 전환 + 헤더 select + localStorage 영속.
+> 검증: `npm test` **2486/2486** · `ci-checks` PASS · `typecheck` clean · `build` PASS.
+> 일회성 `capture-en.tmp.mjs`는 삭제(커밋 제외).
 
 ## 2026-10-08 · measure --full 실측 결과 (35B-A3B · 8GB 카드)
 
