@@ -28,6 +28,7 @@ export type LogStatus = {
 };
 
 import type { LogEntry, LogLevel } from "../../server/logRing.js";
+import { i18n, translatorFor, type Locale } from "../i18n/index.js";
 
 export const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 30, warn: 40, error: 50 };
 
@@ -36,6 +37,14 @@ export const LEVEL_KO: Record<LogLevel, string> = {
   info: "정보",
   warn: "주의",
   error: "오류",
+};
+
+/** Level names come from the catalog — pass the UI locale explicitly (tests do). */
+const LEVEL_KEY: Record<LogLevel, string> = {
+  debug: "log.levelName.debug",
+  info: "log.levelName.info",
+  warn: "log.levelName.warn",
+  error: "log.levelName.error",
 };
 
 export interface Filter {
@@ -74,13 +83,14 @@ export function filterEntries(entries: LogEntry[], f: Filter): LogEntry[] {
   return entries.filter((e) => matches(e, f));
 }
 
-/** 헤더 라벨 — "검색 중: debug 포함" 처럼 **왜** 넓어졌는지 말해야 한다(§5.12). */
-export function filterLabel(f: Filter): string {
-  const base = `${LEVEL_KO[f.level]} 이상`;
+/** Header label — must say *why* it widened, like "Searching: debug included" (§5.12). */
+export function filterLabel(f: Filter, locale: Locale = i18n.current): string {
+  const tr = translatorFor(locale);
+  const base = tr("log.filterLevel", { level: tr(LEVEL_KEY[f.level]) });
   if (f.search.trim()) {
     const eff = relaxForSearch(f);
-    if (eff.level !== f.level) return `검색 중: ${LEVEL_KO[eff.level]} 포함`;
-    return `검색 중: "${f.search.trim()}"`;
+    if (eff.level !== f.level) return tr("log.filterSearchLevel", { level: tr(LEVEL_KEY[eff.level]) });
+    return tr("log.filterSearchQuery", { q: f.search.trim() });
   }
   if (f.sources.length) return `${base} · ${f.sources.join(", ")}`;
   return base;
@@ -122,14 +132,21 @@ export function visibleTail(entries: LogEntry[], maxLines = 2000): LogEntry[] {
   return entries.length > maxLines ? entries.slice(entries.length - maxLines) : entries;
 }
 
-/** `bufferFull` 배지 문구 — 뭔가 잃었다는 사실과 방향을 말한다. */
-export function bufferFullLabel(st: LogStatus | null): { text: string; color: string } | null {
+/** The `bufferFull` badge — states the loss and its direction. */
+export function bufferFullLabel(st: LogStatus | null, locale: Locale = i18n.current): { text: string; color: string } | null {
   if (!st?.bufferFull) return null;
-  return { text: `로그 상한 도달 — ${st.droppedLines.toLocaleString()}줄이 유실되었습니다 (최신 ${Math.round((st.keptChars / Math.max(1, st.maxChars)) * 100)}% 유지)`, color: "#d29922" };
+  const tr = translatorFor(locale);
+  return {
+    text: tr("log.bufferFull", {
+      dropped: st.droppedLines.toLocaleString(),
+      pct: Math.round((st.keptChars / Math.max(1, st.maxChars)) * 100),
+    }),
+    color: "#d29922",
+  };
 }
 
 /** "새 로그 있음" 표시 — follow 를 끈 경우에만. */
-export function pendingIndicator(total: number, shown: number): string | null {
+export function pendingIndicator(total: number, shown: number, locale: Locale = i18n.current): string | null {
   if (shown >= total) return null;
-  return `${(total - shown).toLocaleString()}줄 새 로그 — 아래로 따라가기`;
+  return translatorFor(locale)("log.pending", { count: (total - shown).toLocaleString() });
 }

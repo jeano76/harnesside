@@ -61,6 +61,10 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { key: "models", label: "/models", descriptionKey: "slash.desc.models", where: "web" },
   { key: "server", label: "/server", descriptionKey: "slash.desc.server", where: "web" },
   { key: "reset", label: "/reset", descriptionKey: "slash.desc.reset", where: "web" },
+  // Interface language — client-side only (browser state). Like `/term` and
+  // `/help`, the web prompt handles it locally in `runSlash`; the daemon's
+  // `slashService` never sees it (it only knows models/server/reset).
+  { key: "lang", label: "/lang", descriptionKey: "slash.desc.lang", where: "both" },
 ];
 
 export const SLASH_BY_KEY: Record<string, SlashCommandDef> = Object.fromEntries(
@@ -123,7 +127,7 @@ const HELP_GROUPS: Array<[titleKey: string, keys: string[]]> = [
   ["slash.help.group.skills", ["skills", "rules", "improve", "improve-apply"]],
   ["slash.help.group.models", ["models", "server", "reset"]],
   ["slash.help.group.cli", ["term", "cli"]],
-  ["slash.help.group.meta", ["help", "quit"]],
+  ["slash.help.group.meta", ["help", "lang", "quit"]],
 ];
 
 /** 라벨 폭. `padEnd` 으로 이름을 맞추면 목록을 훑을 때 어느 줄에 무엇이 있는지 눈에 들어온다. */

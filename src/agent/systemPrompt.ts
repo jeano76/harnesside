@@ -78,26 +78,29 @@ export const ANSWER_FORMAT_RULES: readonly AnswerFormatRule[] = [
 ] as const;
 
 /**
- * **답변 언어** 규칙 — 형식 규칙과 **별도**다.
+ * **Answer language** rule — separate from the format rules.
  *
- * 왜 `ANSWER_FORMAT_RULES` 안에 넣지 않는가: 그 목록은 **출력 형식**이고 8줄 상한이
- * 걸려 있다("규칙이 늘면 답이 변형 규칙에 쓰인다" — 실측 패턴). 이건 형식이 아니라
- * **무엇이 말하는가** 이다. 같은 자리에 넣으려면 형식 규칙 하나를 빼야 하는데,
- * 형식을 지우고 언어를 사는 것은 **잘못된 절충**이다 — 둘 다 필요한 규칙이다.
+ * Why not inside `ANSWER_FORMAT_RULES`: that list is **output format** with an
+ * 8-line cap ("more rules warp answers into the transform rules" — measured
+ * pattern). This is not format but **what speaks**. Fitting it in would mean
+ * dropping a format rule — trading format for language is a **bad deal**; both
+ * rules are needed.
  *
- * ── 왜 이 규칙이 필요한가 (실측) ────────────────────────────────────────────
+ * ── Why this rule exists (measured) ─────────────────────────────────────────
  *
- * 한국어 질문에 **일본어로** 답한 사례가 실제로 있었다: 한국어 질문 + 일본어 + 표 +
- * 불완전 입력(`「1,2」`)이 섞여 들어갔더니 답이 한국어 첫 문장 → 일본어 나머지로
- * **한 답변 안에서 언어가 바뀌었다.** 규칙이 없으면 모델이 알아서 고르고, 35B 모델은
- * 그 선택이 안정적이지 않다.
+ * A Korean question once got a **Japanese** answer: Korean question + Japanese +
+ * table + partial input (`「1,2」`) mixed in, and the answer flipped from a Korean
+ * first sentence to Japanese for the rest — **the language changed inside one
+ * answer.** Without a rule the model picks freely, and the 35B model does not
+ * pick stably.
  *
- * 화면은 한국어(`src/web/i18n/ko.ts`)인데 모델이 일본어로 답하면 사용자는
- * "번역이 깨졌나?" 하고 멈춘다.
+ * The UI default is English (`src/web/i18n/en.ts`, switched via `/lang`), so the
+ * rule defaults to English and otherwise **follows the user** — it never names a
+ * single mandatory language.
  */
 export const LANGUAGE_RULE = {
-  id: "answer-in-korean",
-  text: "답변은 한국어로 쓴다. 사용자가 다른 언어로 물어도 한국어로 답하고, 입력에 여러 언어가 섞여 있어도 한국어를 고른다.",
+  id: "answer-in-user-language",
+  text: "Answer in English unless the user writes in another language — then match it. Never switch languages mid-answer.",
 } as const;
 
 /** 이 값들이 전부 없으면 **아무것도 아는 것이 아니다.** 그렇게 말한다. */
@@ -108,20 +111,23 @@ export interface LanguageFlag {
 }
 
 /**
- * 답변이 한국어인지 **측정**한다 — 규칙을 강제하는 게 아니라, 어겼을 때 **보이게** 한다.
+ * Measures whether an answer **stays in the user's language** — not enforcement,
+ * but **visibility** when broken.
  *
- * 왜 이것이 프롬프트 규칙의 짝인가: `readabilityFlags` 의 근거와 같다 —
- * **규칙은 요청이지 보장이 아니다.** 모델이 어길 수 있다. 그래서 요청이 깨졌을 때의
- * **증거**를 만든다(저장소 규칙 "조용히 실패하지 않는다").
+ * Why this pairs with the prompt rule: same basis as `readabilityFlags` —
+ * **a rule is a request, not a guarantee.** The model can break it. So broken
+ * requests produce **evidence** (repo rule: "never fail silently").
  *
- * 판정 방식: **한글 음절 비율**이 아니라 **다른 언어의 문자 존재**를 본다.
- * 한국어 답변에는 `Node`·`src/`·`read_file` 같은 영어 식별자가 정상적으로 섞인다 —
- * 영어가 많다고 "한국어가 아니다" 로 보면 **정상 답변이 전부 걸린다.**
- * 반면 일본어(히라가나·가타카나)와 한자(현재)는 한국어에 쓰이지 않는다.
- * 그래서 **한글이 하나도 없는데 다른 CJK 가 있으면** 확실히 한국어가 아니다.
+ * How it judges: not the **Hangul-syllable ratio** but the **presence of another
+ * language's characters**. Answers normally mix in English identifiers
+ * (`Node`·`src/`·`read_file`) — treating "lots of English" as "not the user's
+ * language" would flag **every normal answer**.
+ * Japanese (hiragana·katakana) and Han characters, though, don't belong in
+ * English *or* Korean answers. So **Hangul absent with other CJK present**
+ * is certainly off-language (even mixed with Latin identifiers).
  *
- * 단언할 수 없는 경우에도 **단언하지 않는다**: 글자가 적으면 판정 불가로 두고
- * 아무 플래그도 내지 않는다. "짧은 답" 을 "다른 언어 답" 으로 오진하는 게 나쁘다.
+ * When it cannot assert, it **does not assert**: short text stays unjudged (no
+ * basis). Misreading a short answer as "another language" is worse.
  */
 export function languageFlags(text: string): LanguageFlag[] {
   const flags: LanguageFlag[] = [];
@@ -144,7 +150,7 @@ export function languageFlags(text: string): LanguageFlag[] {
   if (other > 0 && hangul === 0) {
     flags.push({
       rule: LANGUAGE_RULE.id,
-      message: `한글이 하나도 없는데 일본어·중국어 문자 ${other}자가 보인다 — "${LANGUAGE_RULE.text.split(".")[0]}" 규칙을 어겼다`,
+      message: `No Hangul at all with ${other} Japanese/Chinese characters — broke the "${LANGUAGE_RULE.text.split(".")[0]}" rule`,
       count: other,
     });
     return flags;
@@ -152,7 +158,7 @@ export function languageFlags(text: string): LanguageFlag[] {
   if (other > 0 && hangul / total < 0.1) {
     flags.push({
       rule: LANGUAGE_RULE.id,
-      message: `한글 비율이 ${(hangul / total * 100).toFixed(0)}% 에 불과하다 — 답변이 한국어가 아닌 것으로 보인다`,
+      message: `Hangul is only ${(hangul / total * 100).toFixed(0)}% — the answer does not look like the user's language`,
       count: other,
     });
   }

@@ -23,7 +23,7 @@ import { draftView, predictEdit } from "../agent/draft.js";
 import { CodeBlock } from "./CodeBlock.js";
 import { DiffPanel } from "../editor/DiffPanel.js";
 import { languageFor } from "../editor/highlight.js";
-import { useI18n } from "../i18n/index.js";
+import { useI18n, useLocale } from "../i18n/index.js";
 import type { Toast } from "./notify.js";
 
 export const THINK_STYLES: { id: ThinkStyle; labelKey: string; hintKey: string }[] = [
@@ -448,7 +448,6 @@ export function AgentPanel({
   const pinned = stick.pinned;
   /** 접은 묶음의 인덱스. **마지막 묶음은 항상 펼친다** — 진행 중인데 접으면 안 된다. */
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
-  const turns = useMemo(() => groupTurns(blocks), [blocks]);
   const toggle = (i: number) => setCollapsed((c) => ({ ...c, [i]: c[i] !== true }));
   /**
    * **전체 접기 / 펼치기**(2026-10-01).
@@ -490,6 +489,9 @@ export function AgentPanel({
   const warnings = useMemo<string[]>(() => [], []);
   /** 패널 제목은 카탈로그에서 — 하드코딩하면 M9 누락이 조용히 남는다. */
   const t = useI18n();
+  const locale = useLocale();
+  /** 묶음 요약은 호출자의 언어로 — `t` 가 바뀌면(로케일 전환) 다시 묶는다. */
+  const turns = useMemo(() => groupTurns(blocks, t), [blocks, t]);
 
 /**
  * 뷰 라벨은 한 곳에만 둔다. 탭에 직접 적으면 뷰가 늘 때마다 여러 곳을 고쳐야 하고
@@ -694,7 +696,7 @@ export function AgentPanel({
                   </span>
                 )}
                 <span style={{ color: "#484f58", fontSize: 10, whiteSpace: "nowrap" }}>
-                  {new Date(turn.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
+                  {new Date(turn.at).toLocaleTimeString(locale === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" })}
                 </span>
                 {turn.prompt && (
                   <button

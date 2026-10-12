@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import type { ApiClient } from "../api.js";
 import { COLOR, FONT, RADIUS } from "../theme/tokens.js";
 import { ErrorState, LoadingState } from "./BlockStates.js";
+import { useI18n } from "../i18n/index.js";
 
 export interface Notice {
   id: string;
@@ -31,6 +32,7 @@ export function NoticeSection({ client }: { client: ApiClient }) {
   const [items, setItems] = useState<Notice[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const t = useI18n();
 
   const load = useCallback(async () => {
     try {
@@ -74,7 +76,7 @@ export function NoticeSection({ client }: { client: ApiClient }) {
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ color: COLOR.DIM, fontSize: FONT.META }}>추천 알림</span>
+        <span style={{ color: COLOR.DIM, fontSize: FONT.META }}>{t("settings.notices.title")}</span>
         <span style={{ flex: 1 }} />
         <button
           type="button"
@@ -85,13 +87,13 @@ export function NoticeSection({ client }: { client: ApiClient }) {
             borderRadius: RADIUS.S, font: "inherit", fontSize: FONT.META, padding: "0 8px", cursor: busy ? "default" : "pointer",
           }}
         >
-          {busy ? "확인 중…" : "지금 확인"}
+          {busy ? t("settings.notices.checking") : t("settings.notices.refresh")}
         </button>
       </div>
       {error && <ErrorState message={error} onRetry={() => void load()} />}
-      {items === null && !error && <LoadingState label="알림을 읽는 중…" />}
+      {items === null && !error && <LoadingState label={t("settings.notices.loading")} />}
       {items !== null && items.length === 0 && (
-        <div style={{ color: COLOR.DIM, fontSize: FONT.AUX }}>새 알림이 없습니다 — 모델 디렉터리에 새 GGUF 가 들어오면 여기 뜹니다.</div>
+        <div style={{ color: COLOR.DIM, fontSize: FONT.AUX }}>{t("settings.notices.empty")}</div>
       )}
       {items !== null &&
         items.map((n) => (
@@ -108,31 +110,31 @@ export function NoticeSection({ client }: { client: ApiClient }) {
               </span>
               <span style={{ fontWeight: 700 }}>{n.title}</span>
               <span style={{ flex: 1 }} />
-              <span style={{ color: COLOR.DIM, fontSize: FONT.META }}>적합도 {n.fit}</span>
+              <span style={{ color: COLOR.DIM, fontSize: FONT.META }}>{t("settings.notices.fit", { fit: n.fit })}</span>
             </div>
             <div style={{ color: COLOR.DIM, marginTop: 2 }}>{n.body}</div>
             <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
               <button
                 type="button"
                 onClick={() => void act(n.id, "dismiss")}
-                title="이번에만 숨깁니다. 서버를 재시작하면 다시 보입니다."
+                title={t("settings.notices.dismissTitle")}
                 style={{
                   background: "transparent", color: COLOR.BLUE, border: 0, cursor: "pointer",
                   font: "inherit", fontSize: FONT.AUX, padding: 0, textDecoration: "underline",
                 }}
               >
-                읽음
+                {t("settings.notices.dismiss")}
               </button>
               <button
                 type="button"
                 onClick={() => void act(n.id, "silence")}
-                title="같은 항목을 다시 알리지 않습니다."
+                title={t("settings.notices.silenceTitle")}
                 style={{
                   background: "transparent", color: COLOR.BLUE, border: 0, cursor: "pointer",
                   font: "inherit", fontSize: FONT.AUX, padding: 0, textDecoration: "underline",
                 }}
               >
-                다시 보지 않기
+                {t("settings.notices.silence")}
               </button>
             </div>
           </div>

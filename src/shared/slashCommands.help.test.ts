@@ -30,12 +30,14 @@ import {
   type SlashCommandDef,
 } from "./slashCommands.js";
 import { ko } from "../web/i18n/ko.js";
+import { en } from "../web/i18n/en.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const mainSrc = readFileSync(join(here, "..", "web", "main.tsx"), "utf8");
 
 /** 테스트용 해석기 — 화면과 같은 카탈로그로 푼다. 없는 키는 키 자체(화면과 같은 규칙). */
 const tr = (key: string): string => ko[key] ?? key;
+const trEn = (key: string): string => en[key] ?? key;
 const textOf = (all = SLASH_COMMANDS, web = webSlashCommands()): string => renderHelpText(all, web, tr);
 
 test("`/help` 는 웹에서 실행 가능하다 — 실행되는 곳이 없는 명령이면 안 된다", () => {
@@ -87,6 +89,15 @@ test("**모든 웹 명령의 이름과 설명이 도움말에 나온다** — �
   }
 });
 
+test("영어 도움말도 **모든 웹 명령**을 보인다 — 기본 화면이 영어다", () => {
+  const text = renderHelpText(SLASH_COMMANDS, webSlashCommands(), trEn);
+  assert.ok(webSlashCommands().length > 0, "웹 명령 목록이 비었다");
+  for (const c of webSlashCommands()) {
+    assert.ok(text.includes(c.label), `en help에 ${c.label} 이 없다`);
+    assert.ok(text.includes(en[c.descriptionKey] ?? ""), `en help에 ${c.label} 의 설명(${c.descriptionKey})이 없다`);
+  }
+});
+
 test("TUI 전용 명령은 **숨기지 않고 왜 안 되는지 말한다**", () => {
   // 조용히 없는 척 하지 않는다(저장소 규칙). 목록에서 빠진 명령이 있으면
   // 그 사실과 이유를 한 줄로 말한다.
@@ -115,11 +126,13 @@ test("`/keys` 는 **여전히 `tui`** — 키바인딩 정본이 없으면 지�
   assert.ok(gone, "키바인딩 정본이 사라졌다면 `/keys` 를 웹에 노출하면 안 된다");
 });
 
-test("정본의 설명 키는 **전부 사전에 있다** — 화면은 키로만 말한다", () => {
+test("정본의 설명 키는 **양쪽 사전에 전부 있다** — 화면은 키로만 말한다", () => {
   // `t(c.descriptionKey)` 는 동적 키라 배선 검사(리터럴 스캔)가 못 잡는다.
   // 그래서 여기서 직접 고정한다: 키가 없으면 화면에 키 자체가 나온다.
-  const missing = SLASH_COMMANDS.map((c) => c.descriptionKey).filter((k) => !(k in ko));
-  assert.deepEqual(missing, [], `사전에 없는 설명 키: ${missing.join(", ")}`);
+  const missingEn = SLASH_COMMANDS.map((c) => c.descriptionKey).filter((k) => !(k in en));
+  assert.deepEqual(missingEn, [], `en 사전에 없는 설명 키: ${missingEn.join(", ")}`);
+  const missingKo = SLASH_COMMANDS.map((c) => c.descriptionKey).filter((k) => !(k in ko));
+  assert.deepEqual(missingKo, [], `ko 사전에 없는 설명 키: ${missingKo.join(", ")}`);
   for (const k of [
     "slash.help.intro",
     "slash.help.group.dialog",
@@ -133,5 +146,6 @@ test("정본의 설명 키는 **전부 사전에 있다** — 화면은 키로�
     assert.ok(k in ko, `도움말 틀 키 누락: ${k}`);
   }
   // `tuiOnly` 는 카운트·라벨 자리표시자를 그대로 둔다 — 순서가 바뀌어도 풀린다.
-  assert.match(ko["slash.help.tuiOnly"] ?? "", /\{\{count\}\}.*\{\{labels\}\}/, "tuiOnly 자리표시자가 깨졌다");
+  assert.match(ko["slash.help.tuiOnly"] ?? "", /\{\{count\}\}.*\{\{labels\}\}/, "ko tuiOnly 자리표시자가 깨졌다");
+  assert.match(en["slash.help.tuiOnly"] ?? "", /\{\{count\}\}.*\{\{labels\}\}/, "en tuiOnly 자리표시자가 깨졌다");
 });

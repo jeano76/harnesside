@@ -8,6 +8,7 @@ const ROOT = process.cwd();
 const panel = readFileSync(join(ROOT, "src/web/panels/AgentPanel.tsx"), "utf8");
 const main = readFileSync(join(ROOT, "src/web/main.tsx"), "utf8");
 const ko = readFileSync(join(ROOT, "src/web/i18n/ko.ts"), "utf8");
+const en = readFileSync(join(ROOT, "src/web/i18n/en.ts"), "utf8");
 
 describe("압축 UI 배선", () => {
   it("배너가 시작·완료·실패를 구분한다", () => {
@@ -15,8 +16,10 @@ describe("압축 UI 배선", () => {
     // 2026-10-08 M9: 문구는 카탈로그로 옮겼다. 키 사용 + 카탈로그 값을 함께 본다.
     assert.match(panel, /compaction\.running/, "진행 표시 키가 없다 — 멈춘 것처럼 보인다");
     assert.match(ko, /"compaction\.running": "압축 중/, "진행 표시 문구가 카탈로그에 없다");
+    assert.match(en, /"compaction\.running": "Compacting/, "en 카탈로그에 진행 표시 문구가 없다");
     assert.match(panel, /compaction\.forgotten/, "잊혀진 목록 키가 없다");
     assert.match(ko, /"compaction\.forgotten": "잊혀진 내용/, "잊혀진 목록 문구가 카탈로그에 없다");
+    assert.match(en, /"compaction\.forgotten": "Forgotten content/, "en 카탈로그에 잊혀진 목록 문구가 없다");
   });
   it("main이 compaction 이벤트를 블록으로 쌓지 않는다", () => {
     assert.match(main, /agent\.compaction/, "이벤트 분기가 없다");

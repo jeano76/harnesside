@@ -11,6 +11,7 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { nextStick } from "./followTail.js";
 import type { LogEntry, LogLevel, LogSource } from "../../server/logRing.js";
+import { useI18n } from "../i18n/index.js";
 
 export interface LogPanelProps {
   entries: LogEntry[];
@@ -34,11 +35,11 @@ const LEVEL_COLOR: Record<LogLevel, string> = {
   error: "#f85149",
 };
 
-const SOURCE_LABEL: Record<LogSource, string> = {
-  server: "서버",
-  llama: "llama",
-  chrome: "브라우저",
-  proc: "프로세스",
+const SOURCE_KEY: Record<LogSource, string> = {
+  server: "log.source.server",
+  llama: "log.source.llama",
+  chrome: "log.source.chrome",
+  proc: "log.source.proc",
 };
 
 /** 레벨 순서 — 선택지의 "N 이상" 은 최소 레벨 필터다. */
@@ -53,7 +54,7 @@ function minLevelFor(filter: string, level: LogLevel): LogLevel {
   return filter.trim() ? "debug" : level;
 }
 
-const Row = memo(function Row({ e }: { e: LogEntry }) {
+const Row = memo(function Row({ e, srcLabel }: { e: LogEntry; srcLabel: string }) {
   const time = new Date(e.ts).toISOString().slice(11, 23);
   return (
     <div
@@ -70,7 +71,7 @@ const Row = memo(function Row({ e }: { e: LogEntry }) {
       <span style={{ color: "#484f58", flexShrink: 0 }}>{time}</span>
       <span style={{ color: LEVEL_COLOR[e.level], width: 44, flexShrink: 0 }}>{e.level.toUpperCase()}</span>
       <span style={{ color: "#58a6ff", width: 62, flexShrink: 0 }}>
-        {e.source === "server" ? "" : SOURCE_LABEL[e.source]}
+        {e.source === "server" ? "" : srcLabel}
       </span>
       <span style={{ color: "#d4d4d4", overflow: "hidden", textOverflow: "ellipsis" }}>{e.message}</span>
     </div>
@@ -78,6 +79,7 @@ const Row = memo(function Row({ e }: { e: LogEntry }) {
 });
 
 export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, level, filterLabel: filterLabelProp }: LogPanelProps) {
+  const t = useI18n();
   const [filter, setFilter] = useState<string>("");
   const [sources, setSources] = useState<Set<LogSource>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
@@ -97,11 +99,11 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
     });
   }, [entries, filter, sources, level]);
 
-  /** 검색 중인데 레벨 선택이 debug 가 아니면, 바닥이 완화됐음을 알려준다. */
+  /** While searching with a non-debug level, the floor relaxed — say so. */
   const relaxed = filter.trim().length > 0 && level !== "debug";
-  // 상위(셸)가 필터를 소유하면 그 설명을 우선한다 — 두 곳이 따로 계산하면
-  // "왜 debug 가 보이냐" 를 설명하는 문구가 서로 달라진다.
-  const shownFilterLabel = filterLabelProp ?? (relaxed ? `검색 중: 디버그 포함` : `레벨 ${level} 이상`);
+  // A parent-owned (shell) filter wins its explanation — two separate calculators
+  // would describe "why is debug visible" in diverging sentences.
+  const shownFilterLabel = filterLabelProp ?? (relaxed ? t("log.filterSearching") : t("log.filterLevel", { level }));
 
   // 새 줄이 오면 **그려진 직후** 바닥으로 옮긴다. 예전에는 50ms 디바운스였는데, 새 줄이 50ms 보다 빠르게
   // 오면 타이머가 매번 취소되어 **영영 발동하지 않았다**(스트리밍 중 자동 스크롤이 안 되던 경우). 리스트는
@@ -141,7 +143,7 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
   return (
     <div style={{ height, display: "grid", gridTemplateRows: "auto 1fr auto", minHeight: 0 }}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 6px", borderBottom: "1px solid #30363d" }}>
-        {(Object.keys(SOURCE_LABEL) as LogSource[]).map((s) => (
+        {(Object.keys(SOURCE_KEY) as LogSource[]).map((s) => (
           <button
             key={s}
             onClick={() => toggleSource(s)}
@@ -155,19 +157,19 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
               cursor: "pointer",
             }}
           >
-            {SOURCE_LABEL[s]}
+            {t(SOURCE_KEY[s])}
           </button>
         ))}
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          aria-label="서버 로그 검색"
-          placeholder="검색"
+          aria-label={t("log.search")}
+          placeholder={t("log.searchPlaceholder")}
           style={{ flex: 1, fontSize: 11, background: "#0d1117", border: "1px solid #30363d", color: "#d4d4d4", padding: "2px 6px", borderRadius: 4 }}
         />
         <label style={{ fontSize: 11, color: "#8b949e", display: "flex", alignItems: "center", gap: 4 }}>
           <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
-          자동 스크롤
+          {t("log.autoscroll")}
         </label>
         {onSetLevel && (
           <select
@@ -175,15 +177,15 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
             onChange={(e) => onSetLevel(e.target.value as LogLevel)}
             style={{ fontSize: 11, background: "#0d1117", color: "#d4d4d4", border: "1px solid #30363d", borderRadius: 4 }}
           >
-            <option value="debug">debug 이상</option>
-            <option value="info">info 이상</option>
-            <option value="warn">warn 이상</option>
-            <option value="error">error</option>
+            <option value="debug">{t("log.level.debug")}</option>
+            <option value="info">{t("log.level.info")}</option>
+            <option value="warn">{t("log.level.warn")}</option>
+            <option value="error">{t("log.level.error")}</option>
           </select>
         )}
         {onClear && (
           <button onClick={onClear} style={{ fontSize: 11, color: "#8b949e", background: "transparent", border: "1px solid #30363d", borderRadius: 4, padding: "1px 6px", cursor: "pointer" }}>
-            지우기
+            {t("agent.clear")}
           </button>
         )}
         {/* 왜 이렇게 보이는지 설명한다 — 사용자가 추측하지 않아야 한다(§11.3). */}
@@ -194,26 +196,26 @@ export function LogPanel({ entries, status, height = 260, onClear, onSetLevel, l
         {/* 앞쪽 잘린 구간을 높이로만 표현한다 — DOM 을 만들지 않는다 */}
         {start > 0 && <div style={{ height: start * ROW_H }} />}
         {slice.map((e) => (
-          <Row key={e.seq} e={e} />
+          <Row key={e.seq} e={e} srcLabel={t(SOURCE_KEY[e.source])} />
         ))}
       </div>
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "3px 6px", borderTop: "1px solid #30363d", fontSize: 11, color: "#8b949e" }}>
         <span>
-          {total.toLocaleString()}줄{status ? ` · ${status.keptChars.toLocaleString()}자` : ""}
+          {t("log.linesCount", { count: total.toLocaleString() })}{status ? ` · ${t("log.charsCount", { count: status.keptChars.toLocaleString() })}` : ""}
         </span>
         {status && (
-          <span title={`상한 ${status.maxChars.toLocaleString()}자`}>
-            상한 {status.maxChars.toLocaleString()}자
+          <span title={t("log.cap", { max: status.maxChars.toLocaleString() })}>
+            {t("log.cap", { max: status.maxChars.toLocaleString() })}
           </span>
         )}
         {truncatedNotice && status && status.droppedLines > 0 && (
           <span style={{ color: "#d29922" }}>
-            … 앞 {status.droppedLines.toLocaleString()}줄이 잘렸습니다 · 전체 보기
+            {t("log.truncated", { count: status.droppedLines.toLocaleString() })}
           </span>
         )}
-        {!autoScroll && <span style={{ color: "#58a6ff" }}>새 로그 ↓</span>}
-        {relaxed && <span style={{ color: "#d29922" }}>검색 중: debug 포함</span>}
+        {!autoScroll && <span style={{ color: "#58a6ff" }}>{t("log.newLogs")}</span>}
+        {relaxed && <span style={{ color: "#d29922" }}>{t("log.searchingDebug")}</span>}
       </div>
     </div>
   );

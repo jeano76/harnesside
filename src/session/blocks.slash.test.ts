@@ -1,10 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { addSlash, finishSlash, findSlash, groupTurns, restartSlash, toggleSlashFold } from "./blocks.js";
+import { ko } from "../web/i18n/ko.js";
+
+const trKo = (key: string): string => ko[key] ?? key;
 
 test("슬래시 명령은 사람이 보낸 말 + 결과 블록으로 한 묶음이 된다", () => {
   const b = finishSlash(addSlash([], "s1", "help", 1), "s1", "내용", true);
-  const turns = groupTurns(b);
+  const turns = groupTurns(b, trKo);
   assert.equal(turns.length, 1);
   assert.equal(turns[0].prompt, "/help");
   assert.equal(b[1].text, "내용");

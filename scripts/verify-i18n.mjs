@@ -55,7 +55,7 @@ async function connect() {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`CDP(${CDP}) 에 창이 없습니다 — 서버와 창을 먼저 띄우십시오`);
+  throw new Error(`No window on CDP (${CDP}) — start the server and window first`);
 }
 
 /** CDP 요청 1회. 응답을 기다린다. */
@@ -76,7 +76,7 @@ function makeCdp(ws) {
       const myId = ++id;
       const timer = setTimeout(() => {
         pending.delete(myId);
-        rej(new Error(`${method} 타임아웃`));
+        rej(new Error(`${method} timed out`));
       }, 10_000);
       pending.set(myId, { res, rej, timer });
       ws.send(JSON.stringify({ id: myId, method, params }));
@@ -95,7 +95,7 @@ const { call: send, evaluate } = makeCdp(ws);
 
 async function run(expr) {
   const r = await evaluate(expr);
-  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? "평가 실패");
+  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? "evaluation failed");
   return r.result.value;
 }
 
@@ -115,11 +115,11 @@ for (let n = 0; n < 40; n++) {
 }
 await new Promise((r) => setTimeout(r, 500));
 
-console.log(`i18n 실측 — ${HOST}\n`);
+console.log(`i18n live check — ${HOST}\n`);
 
 // ── 1. html[lang] ────────────────────────────────────────────────────────────
 const lang = await run("document.documentElement.lang");
-ok('html[lang] = "ko" (스크린 리더가 읽을 언어)', lang === "ko", `실제: ${JSON.stringify(lang)}`);
+ok('html[lang] = "en" (the language screen readers read)', lang === "en", `actual: ${JSON.stringify(lang)}`);
 
 // ── 2. 사전 값이 화면에 보인다 ────────────────────────────────────────────────
 // 2026-10-04 정정: 예전엔 ["에디터", "터미널"] 을 봤다. 그러나 2026-10-01 구조 개편으로
@@ -127,9 +127,9 @@ ok('html[lang] = "ko" (스크린 리더가 읽을 언어)', lang === "ko", `실�
 // 나오지 않는다. 없는 말을 요구하면 UI 가 없는 말을 지어내게 된다. 그래서 기본 화면에
 // 항상 있는 사전 값(대화 탭 · 서버 로그)을 본다 — 카탈로그를 비우면 이 검사도 깨진다.
 const bodyText = await run("document.body.innerText ?? ''");
-ok("화면 텍스트가 존재한다", bodyText.length > 0, `길이 ${bodyText.length}`);
-for (const needle of ["서버 로그", "프롬프트"]) {
-  ok(`사전 값 "${needle}" 가 화면에 보인다`, bodyText.includes(needle));
+ok("screen text exists", bodyText.length > 0, `length ${bodyText.length}`);
+for (const needle of ["Server log", "Type an instruction here"]) {
+  ok(`dictionary value "${needle}" is on screen`, bodyText.includes(needle));
 }
 
 // ── 3. 내부 키가 새지 않는다 ─────────────────────────────────────────────────
@@ -140,7 +140,7 @@ const leaked = [
     [...bodyText.matchAll(/\b(?:panel|zone|empty|action|app|file|git|error|lang)\.[a-z][A-Za-z0-9]*/gi)].map((m) => m[0]),
   ),
 ];
-ok("사전 키가 화면에 노출되지 않는다", leaked.length === 0, `노출됨: ${leaked.join(", ")}`);
+ok("no dictionary keys leak onto screen", leaked.length === 0, `leaked: ${leaked.join(", ")}`);
 
 // ── 4. 빈 화면 조각이 없다 ────────────────────────────────────────────────────
 // `t()` 는 없는 키를 **빈 문자열이 아니라 키** 로 돌려준다. 그 보장은 모듈 테스트가
@@ -165,7 +165,7 @@ const blanks = await run(`(() => {
   }
   return out;
 })()`);
-ok("빈 텍스트 조각이 없다", (blanks?.length ?? 0) === 0, `${(blanks ?? []).slice(0, 3).join(" | ")}`);
+ok("no empty text fragments", (blanks?.length ?? 0) === 0, `${(blanks ?? []).slice(0, 3).join(" | ")}`);
 
 // ── 5. 액티비티바가 발견 가능하다 ────────────────────────────────────────────
 // 2026-10-04 정정: 예전엔 존 라벨(왼쪽 도크/오른쪽 도크/중앙)을 봤다. 2026-10-01
@@ -177,12 +177,12 @@ ok("빈 텍스트 조각이 없다", (blanks?.length ?? 0) === 0, `${(blanks ?? 
 // (3회 연속 같은 실패 = flaky 가 아니라 낡은 기준). 같은 의도(첫 사용자가 무엇을 여는지 안다)를 지금 화면에서 본다:
 // 남은 진입로 두 개 — 상단 ⚙ `설정 열기` 와 프롬프트 옆 `프롬프트 대상`(모델 선택기) — 가 이름을 갖는다.
 ok(
-  "진입로가 발견 가능하다 (설정 · 모델 선택기)",
+  "entries are discoverable (settings · prompt target)",
   (await run(
-    `!!document.querySelector('button[aria-label="설정 열기"]') && !!document.querySelector('select[aria-label="프롬프트 대상"]')`
+    `!!document.querySelector('button[aria-label="Open settings"]') && !!document.querySelector('select[aria-label="Prompt target"]')`
   )) === true
 );
 
 ws.close();
-console.log(`\n${fail === 0 ? "모두 통과" : "실패 있음"} — ${pass} pass / ${fail} fail`);
+console.log(`\n${fail === 0 ? "all pass" : "failures present"} — ${pass} pass / ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);

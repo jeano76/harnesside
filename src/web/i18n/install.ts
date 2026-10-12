@@ -1,41 +1,69 @@
 /**
- * 카탈로그를 **전역 인스턴스에 넣는다** (M9 · §11.1 배선).
+ * Registers catalogs on the **global instance** (M9 · §11.1 wiring).
  *
- * 이 파일이 없으면 `i18n` 은 카탈로그가 비어 있는 인스턴스이고, `t("panel.terminal")` 은
- * "panel.terminal" 을 돌려준다. 2026-09-30 까지 실제로 그랬다 — 모듈·사전·테스트가
- * 전부 있었는데 **import 하는 곳이 0건**이어서 아무도 실행되지 않았다(§④ 첫 문장:
- * 모듈만 있고 실행되지 않는 것은 있는 기능이 아니다).
+ * Without this file, `i18n` is an instance with empty catalogs and `t("panel.terminal")`
+ * returns "panel.terminal". That was literally the state until 2026-09-30 — module,
+ * dictionary, and tests all existed but **zero importers** ran them (§④ first line:
+ * a module that never runs is not a feature).
  *
- * 그래서 등록은 **import 한 번**으로 끝낸다. 부팅 시 `installI18n()` 을 부르지만,
- * `i18n.t` 를 직접 쓰는 곳(React 밖 — 레이아웃 엔진 등)이 이 파일을 import 하면
- * 사전이 **자동으로** 들어 있다. 그게 없다면 엔진이 키 문자열을 화면에 그대로 흘린다.
+ * So registration ends with **one import**. Boot calls `installI18n()`, but any place
+ * using `i18n.t` directly (outside React — layout engines etc.) importing this file gets
+ * the dictionaries **automatically**. Without it, engines leak key strings onto screen.
  *
- * 한 가지 **의도적으로 하지 않는 것**: `navigator.language` 로 언어를 고르지 않는다.
- * 영어 카탈로그가 비어 있으므로 "영어로 시작" 은 한국어 화면을 영어로 선언하는 것뿐이다
- * (`<html lang="en">` + 한국어 문장). 언어 전환 UI 도 만들지 않는다 — "English" 를
- * 골랐는데 한국어가 나오면 그 라벨이 거짓말을 한다(§5.8).
+ * Language choice: the default is English (`DEFAULT_LOCALE`). A saved pick in
+ * `localStorage` (`harnesside.locale`) wins over the default when it names a
+ * supported locale — that is how `/lang` and the settings picker persist.
+ * `navigator.language` is **not** consulted: guessing from the browser would flip
+ * the screen language under users who never asked.
  */
 
-import { i18n, DEFAULT_LOCALE } from "./index.js";
+import { i18n, DEFAULT_LOCALE, LOCALES, type Locale } from "./index.js";
 import { ko } from "./ko.js";
+import { en } from "./en.js";
 
 let installed = false;
 
-/** 기본값은 한국어. 여러 번 불러도 등록은 한 번만 한다(사전 덮어쓰기 방지). */
+function savedLocale(): Locale | null {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    const v = localStorage.getItem("harnesside.locale");
+    if (v && (LOCALES as readonly string[]).includes(v)) return v as Locale;
+  } catch {
+    /* storage unavailable — fall through to the default */
+  }
+  return null;
+}
+
+/** Persist a locale pick. Best-effort: a failed write must not break switching. */
+export function persistLocale(locale: Locale): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem("harnesside.locale", locale);
+  } catch {
+    /* ignore — the switch itself already applied */
+  }
+}
+
+/** Default is English. Registering twice never overwrites dictionaries. */
 export function installI18n(): void {
   if (!installed) {
-    i18n.add(DEFAULT_LOCALE, ko);
+    i18n.add("en", en);
+    i18n.add("ko", ko);
+    const saved = savedLocale();
+    if (saved && saved !== DEFAULT_LOCALE) i18n.setLocale(saved);
+    else if (typeof document !== "undefined") document.documentElement.lang = i18n.effective();
     installed = true;
   }
 }
 
 /**
- * React 밖에서 쓰는 번역 함수.
+ * Translation function for outside React.
  *
- * 훅(`useI18n`)과 다른 점이 하나 있고, 그게 중요하다: 훅은 **구독**하므로 언어가
- * 바뀌면 다시 그려진다. 이 함수는 읽기만 한다. 레이아웃 엔진처럼 **위치 계산**에
- * 쓰는 라벨은 언어가 바뀌어도 배치가 같아야 하므로(라벨이 위치와 어긋나면 안 된다 —
- * `main.tsx` 의 도킹 규칙), 다시 그릴 필요가 없다.
+ * The one difference from the hook (`useI18n`) matters: the hook **subscribes** so
+ * the screen redraws on language change. This function only reads. Labels used for
+ * **position math** (like layout engines) must keep their layout when the language
+ * changes (a label drifting off its position is wrong — see the docking rules in
+ * `main.tsx`), so they must not redraw.
  */
 export const t = (key: string, vars?: Record<string, string | number>): string =>
   i18n.t(key, vars, i18n.current);

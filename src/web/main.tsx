@@ -48,12 +48,13 @@ import { DEFAULT_LAYOUT, movePanel, keyboardMove, type PanelId, type Zone } from
 import { loadDraft, saveDraft, clearDraft, searchCommands, toastView, type Command, type Toast } from "./panels/notify.js";
 import { rankFiles } from "../shared/searchRank.js";
 import { filterEntries, defaultFilter, visibleTail, bufferFullLabel, filterLabel, type Filter, type LogLevel } from "./panels/logFilter.js";
-import { useI18n } from "./i18n/index.js";
+import { i18n, useI18n, useLocale, LOCALES } from "./i18n/index.js";
 import { ApprovalCard, applyApprovalEvent } from "./panels/ApprovalCard.js";
 import type { ApprovalRequest } from "./panels/ApprovalCard.js";
-// 이 import 가 카탈로그를 **등록한다**. 훅만 쓰고 여기 안 쓰면 사전이 비어 있고,
-// `t()` 는 키 문자열을 그대로 돌려준다(2026-09-30 까지 실제로 그랬다).
+// This import registers the catalogs. Using only the hook without it leaves the
+// dictionary empty and `t()` returns key strings as-is (literally the state until 2026-09-30).
 import "./i18n/install.js";
+import { persistLocale } from "./i18n/install.js";
 import type { LogEntry } from "../server/logRing.js";
 import { createBatcher, mergeLogs } from "./logBatch.js";
 import type { Metrics } from "../shared/metrics.js";
@@ -116,12 +117,14 @@ const SLASH_TIP_KEYS: Record<string, string> = {
   models: "slash.tip.models",
   server: "slash.tip.server",
   reset: "slash.tip.reset",
+  lang: "slash.tip.lang",
 };
 
 export default function App() {
-  // M9: 문자열은 여기서 키로 바꾼다. 훅이 **함수** 를 돌려주는 이유는 로케일이
-  // 바뀌면 다시 그려야 해서다 — 함수를 그대로 받아쓰면 stale 이 된다.
+  // M9: strings go through keys here. The hook returns a **function** so the
+  // screen redraws on locale change — holding the function itself would go stale.
   const t = useI18n();
+  const locale = useLocale();
   const [steps, setSteps] = useState<BootStep[] | null>(null);
   const [bootFailHidden, setBootFailHidden] = useState(false);
   const [gpu, setGpu] = useState<GpuInfo | null>(null);
@@ -751,6 +754,24 @@ export default function App() {
           "",
           t("slash.report.termFooter"),
         ].join("\n"));
+      } else if (key === "lang") {
+        // `/lang` — interface language switch. Client-side only: the locale lives
+        // in the browser (persisted to localStorage), so no server round-trip.
+        // `i18n.t` (not the captured `t`) renders the reply: the closure's `t` is
+        // bound to the pre-switch locale and would answer in the old language.
+        const want = arg.trim().toLowerCase();
+        if (!want) {
+          return done(i18n.t("slash.report.langCurrent", { locale: i18n.current, available: LOCALES.join(", ") }));
+        }
+        if ((LOCALES as readonly string[]).includes(want)) {
+          const r = i18n.setLocale(want);
+          persistLocale(r.locale);
+          return done(i18n.t("slash.report.langSwitched", { locale: r.locale }));
+        }
+        return done(
+          i18n.t("slash.report.langUnknown", { requested: arg.trim(), available: LOCALES.join(", "), locale: i18n.current }),
+          false,
+        );
       } else {
         const path = { compact: "/api/agent/compact", "improve-apply": "/api/agent/improve/apply", "plan-clear": "/api/agent/plan/clear" }[key];
         if (!path) return done(t("slash.unsupported"), false);
@@ -1507,7 +1528,7 @@ export default function App() {
   const hits = useMemo(() => searchCommands(commands, paletteQuery, 12), [commands, paletteQuery]);
   // S-5 파일 빠른 이동 — 서버 목록을 rankFiles(공유 순수 함수)로 필터한다.
   const fileHits = useMemo(() => rankFiles(fileList, paletteQuery).slice(0, 12), [fileList, paletteQuery]);
-  const full = bufferFullLabel(logStatus);
+  const full = bufferFullLabel(logStatus, locale);
   const bootDone = steps?.filter((s) => s.ok).length ?? 0;
 
   // ── 화면 구조 (2026-10-04) ──────────────────────────────────────────────
@@ -1649,8 +1670,25 @@ export default function App() {
         {full && <span style={{ color: full.color, fontSize: 11 }} title={t("log.limit")}>{full.text}</span>}
         {error && <span style={{ color: "#f85149" }}>{error}</span>}
         <span style={{ flex: 1 }} />
-        {/* 설정 — 유일하게 남긴 패널 진입로. 대화 안에 블록으로 열린다.
-            측면 액티비티바는 두지 않는다(사용자 지정). */}
+        {/* Language — mirrors `/lang`. Persists to localStorage for the next window. */}
+        <select
+          aria-label={t("lang.label")}
+          title={t("lang.label")}
+          value={locale}
+          onChange={(e) => {
+            const r = i18n.setLocale(e.target.value);
+            persistLocale(r.locale);
+          }}
+          style={{ background: "#0d1117", color: DIM, border: `1px solid ${BORDER}`, borderRadius: 4, fontSize: 11, padding: "1px 4px" }}
+        >
+          {LOCALES.map((l) => (
+            <option key={l} value={l}>
+              {t(l === "ko" ? "lang.ko" : "lang.en")}
+            </option>
+          ))}
+        </select>
+        {/* Settings — the only remaining panel entry. Opens as a block in chat.
+            No side activity bar (user choice). */}
         <button
           type="button"
           aria-label={t("settings.open")}
@@ -1879,7 +1917,7 @@ export default function App() {
               <span style={{ marginLeft: "auto" }}>{t("action.collapse")}</span>
             </button>
             <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}>
-              <LogPanel entries={visible} status={logStatus ?? undefined} level={filter.level as LogLevel} onSetLevel={(l) => setFilter((f) => ({ ...f, level: l }))} height={layout.logHeight} filterLabel={filterLabel(filter)} />
+              <LogPanel entries={visible} status={logStatus ?? undefined} level={filter.level as LogLevel} onSetLevel={(l) => setFilter((f) => ({ ...f, level: l }))} height={layout.logHeight} filterLabel={filterLabel(filter, locale)} />
             </div>
           </>
         )}

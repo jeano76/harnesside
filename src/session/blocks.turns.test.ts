@@ -12,6 +12,20 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { applyEvent, collapseView, groupTurns, normalizeTool, openView, summarizeTurn, toggleView, toolCommand, toolPath, type AgentBlock } from "./blocks.js";
+import { ko } from "../web/i18n/ko.js";
+import { en } from "../web/i18n/en.js";
+
+/** 화면과 같은 카탈로그로 푼다 — 없는 키는 키 자체(화면과 같은 규칙). */
+const trKo = (key: string, vars?: Record<string, string | number>): string => {
+  let s: string = ko[key] ?? key;
+  if (vars) for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{{${k}}}`, String(v));
+  return s;
+};
+const trEn = (key: string, vars?: Record<string, string | number>): string => {
+  let s: string = en[key] ?? key;
+  if (vars) for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{{${k}}}`, String(v));
+  return s;
+};
 
 const b = (kind: AgentBlock["kind"], text: string, at: number, extra: Partial<AgentBlock> = {}): AgentBlock => ({
   id: `${kind}-${at}`,
@@ -31,7 +45,7 @@ test("사람이 보낸 말에서 **묶음이 나뉜다** — 그 뒤의 모든 �
     b("tool", "", 11, { tool: { name: "run_shell", done: true, args: { command: "npm test" } } }),
     b("text", "두번째 답변", 12),
   ];
-  const turns = groupTurns(blocks);
+  const turns = groupTurns(blocks, trKo);
   assert.equal(turns.length, 2, `묶음이 ${turns.length} 개 — 사람 말을 경계로 세어야 한다`);
   assert.equal(turns[0].prompt, "첫 질문");
   assert.equal(turns[1].prompt, "둘째 질문");
@@ -41,19 +55,29 @@ test("사람이 보낸 말에서 **묶음이 나뉜다** — 그 뒤의 모든 �
 });
 
 test("묶음의 요약은 **한 일의 종류**를 말한다 — 개수가 아니라 사실", () => {
-  const t = summarizeTurn([
+  const koBlocks = [
     b("user", "질문", 1),
     b("tool", "", 2, { tool: { name: "read_file", done: true, args: { path: "a.ts" } } }),
     b("tool", "", 3, { tool: { name: "read_file", done: true, args: { path: "b.ts" } } }),
     b("tool", "", 4, { tool: { name: "run_shell", done: true, args: { command: "npm test" } } }),
-  ]);
+  ];
+  const t = summarizeTurn(koBlocks, trKo);
   assert.match(t, /파일 2/, `파일을 두 개 열었는데 요약이 안 보인다: ${t}`);
   assert.match(t, /셸 1/, `셸을 돌렸는데 요약이 안 보인다: ${t}`);
+  const e = summarizeTurn(koBlocks, trEn);
+  assert.match(e, /2 files/, `EN: 파일을 두 개 열었는데 요약이 안 보인다: ${e}`);
+  assert.match(e, /1 shells/, `EN: 셸을 돌렸는데 요약이 안 보인다: ${e}`);
+});
+
+test("묶음 요약은 **호출자의 언어**를 따른다 — 정본 함수가 언어를 고르지 않는다", () => {
+  const only: AgentBlock[] = [b("user", "q", 1), b("text", "a", 2)];
+  assert.equal(summarizeTurn(only, trKo), "답변만");
+  assert.equal(summarizeTurn(only, trEn), "Replies only");
 });
 
 test("**묶음 앞의 블록**(세션 복원 잔여)을 버리지 않는다", () => {
   // 버리면 사용자는 "내 대화가 잘렸다" 고 읽는다(§5.10).
-  const turns = groupTurns([b("text", "이전 답변", 1), b("user", "새 질문", 2)]);
+  const turns = groupTurns([b("text", "이전 답변", 1), b("user", "새 질문", 2)], trKo);
   assert.equal(turns.length, 2);
   assert.equal(turns[0].prompt, "", "묶음 앞은 제목을 만들지 않는다 — 무엇에 대한 답인지 모른다");
   assert.equal(turns[0].blocks[0].text, "이전 답변", "이전 답변이 사라졌다");
@@ -61,7 +85,7 @@ test("**묶음 앞의 블록**(세션 복원 잔여)을 버리지 않는다", ()
 
 test("사람이 연 **파일도 그 묶음 안**에 들어간다 — 같은 대화 덩어리다", () => {
   const blocks = openView([b("user", "파일 봐", 1)], { what: "file", path: "src/x.ts" }, 2);
-  const turns = groupTurns(blocks);
+  const turns = groupTurns(blocks, trKo);
   assert.equal(turns.length, 1, "파일 열람이 새 묶음을 시작하게 했다");
   assert.ok(turns[0].blocks.some((x) => x.kind === "view"), "파일 블록이 묶음에 없다");
   assert.match(turns[0].summary, /파일 1/);

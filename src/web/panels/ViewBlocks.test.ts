@@ -54,6 +54,8 @@ describe("설정만 남긴 뷰 배선", () => {
     assert.match(tool, /block\.viewRemoved/, "제거 안내 키를 쓰지 않는다");
     const ko = readFileSync(join(ROOT, "src/web/i18n/ko.ts"), "utf8");
     assert.match(ko, /"block\.viewRemoved": "이 화면은 제거되었습니다\."/, "카탈로그에 제거 안내가 없다 — 옛 블록이 거짓말을 한다");
+    const en = readFileSync(join(ROOT, "src/web/i18n/en.ts"), "utf8");
+    assert.match(en, /"block\.viewRemoved": "This view was removed\."/, "en 카탈로그에 제거 안내가 없다");
     assert.doesNotMatch(tool, /extra\.dirs/, "제거된 dirs 노드를 아직 읽는다");
     assert.doesNotMatch(tool, /extra\.review/, "제거된 review 노드를 아직 읽는다");
   });

@@ -27,6 +27,8 @@ import {
   type LogEntry,
   type LogLevel,
 } from "./logFilter.js";
+// Registers the en/ko catalogs on the shared instance — label functions read them.
+import "../i18n/install.js";
 
 const e = (over: Partial<LogEntry> = {}): LogEntry => ({
   seq: 1,
@@ -100,13 +102,16 @@ test("소스 필터", () => {
 });
 
 test("라벨이 **왜 넓어졌는지** 말한다 — 사용자가 의아해하지 않게", () => {
-  assert.equal(filterLabel({ ...defaultFilter(), level: "info" }), "정보 이상");
-  const searched = filterLabel({ ...defaultFilter(), level: "error", search: "oom" });
+  assert.equal(filterLabel({ ...defaultFilter(), level: "info" }, "ko"), "레벨 정보 이상");
+  assert.equal(filterLabel({ ...defaultFilter(), level: "info" }, "en"), "Level Info+");
+  const searched = filterLabel({ ...defaultFilter(), level: "error", search: "oom" }, "ko");
   assert.match(searched, /검색 중/);
   assert.match(searched, /디버그 포함/, "완화 이유를 안 말한다");
+  assert.match(filterLabel({ ...defaultFilter(), level: "error", search: "oom" }, "en"), /Searching: Debug included/);
   // 이미 debug 면 그 사실만
-  assert.match(filterLabel({ ...defaultFilter(), level: "debug", search: "oom" }), /검색 중/);
-  assert.match(filterLabel({ ...defaultFilter(), sources: ["llama"] }), /llama/);
+  assert.match(filterLabel({ ...defaultFilter(), level: "debug", search: "oom" }, "ko"), /검색 중/);
+  assert.match(filterLabel({ ...defaultFilter(), level: "debug", search: "oom" }, "en"), /Searching/);
+  assert.match(filterLabel({ ...defaultFilter(), sources: ["llama"] }, "en"), /llama/);
 });
 
 test("긴 줄은 **앞/뒤만** 남기고 생략량을 말한다", () => {
@@ -140,23 +145,28 @@ test("화면에는 **최근** N줄 — 오류는 보통 맨 아래에 있다", (
 });
 
 test("`bufferFull` 은 **유실** 을 뜻한다 — 상한 접촉이 아니면 배지가 없다", () => {
-  assert.equal(bufferFullLabel({ keptChars: 100, droppedLines: 0, maxChars: DEFAULT_MAX_CHARS, bufferFull: false }), null, "유실이 없는데 경보를 띄웠다");
-  const l = bufferFullLabel({ keptChars: 400_000, droppedLines: 1234, maxChars: DEFAULT_MAX_CHARS, bufferFull: true });
+  assert.equal(bufferFullLabel({ keptChars: 100, droppedLines: 0, maxChars: DEFAULT_MAX_CHARS, bufferFull: false }, "ko"), null, "유실이 없는데 경보를 띄웠다");
+  const l = bufferFullLabel({ keptChars: 400_000, droppedLines: 1234, maxChars: DEFAULT_MAX_CHARS, bufferFull: true }, "ko");
   assert.ok(l, "유실을 알리지 않는다");
   assert.match(l!.text, /1,234줄/);
   assert.match(l!.text, /유실/);
+  const enL = bufferFullLabel({ keptChars: 400_000, droppedLines: 1234, maxChars: DEFAULT_MAX_CHARS, bufferFull: true }, "en");
+  assert.match(enL!.text, /1,234 lines lost/);
   assert.equal(bufferFullLabel(null), null);
 });
 
 test("`bufferFull` 이면 **최신 비율** 을 말한다 — 무엇이 남았는지", () => {
-  const l = bufferFullLabel({ keptChars: DEFAULT_MAX_CHARS, droppedLines: 1, maxChars: DEFAULT_MAX_CHARS, bufferFull: true });
+  const l = bufferFullLabel({ keptChars: DEFAULT_MAX_CHARS, droppedLines: 1, maxChars: DEFAULT_MAX_CHARS, bufferFull: true }, "ko");
   assert.match(l!.text, /100% 유지/);
+  const enL = bufferFullLabel({ keptChars: DEFAULT_MAX_CHARS, droppedLines: 1, maxChars: DEFAULT_MAX_CHARS, bufferFull: true }, "en");
+  assert.match(enL!.text, /keeping newest 100%/);
 });
 
 test("follow 를 끄면 **안 따라간** 줄 수를 말하고, 따라가면 null", () => {
   assert.equal(pendingIndicator(1000, 1000), null);
-  assert.match(pendingIndicator(1000, 900) ?? "", /100줄 새 로그/);
-  assert.match(pendingIndicator(1000, 0) ?? "", /1,000줄/);
+  assert.match(pendingIndicator(1000, 900, "ko") ?? "", /100줄 새 로그/);
+  assert.match(pendingIndicator(1000, 0, "ko") ?? "", /1,000줄/);
+  assert.match(pendingIndicator(1000, 900, "en") ?? "", /100 new logs/);
 });
 
 test("상한 상수가 §5.12 값과 일치한다", () => {

@@ -161,5 +161,5 @@ test("라벨은 사람이 이해할 수 있는 말이다 — 내부 식별자가
     assert.notEqual(l, z, `내부 식별자(${z})가 그대로 노출됐다`);
     assert.ok(l.length > 1);
   }
-  assert.equal(zoneLabel("left", true), "분리 창");
+  assert.equal(zoneLabel("left", true), "Detached window");
 });

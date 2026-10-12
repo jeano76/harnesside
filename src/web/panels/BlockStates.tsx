@@ -6,6 +6,7 @@
  */
 import React from "react";
 import { COLOR, FONT, RADIUS, SPACE } from "../theme/tokens.js";
+import { useI18n } from "../i18n/index.js";
 
 const box: React.CSSProperties = {
   border: `1px solid ${COLOR.BORDER}`,
@@ -17,6 +18,7 @@ const box: React.CSSProperties = {
 };
 
 export function LoadingState({ label, onCancel }: { label: string; onCancel?: () => void }) {
+  const t = useI18n();
   return (
     <div style={{ ...box, color: COLOR.DIM }} role="status" aria-live="polite">
       <span aria-hidden="true">○ </span>
@@ -31,23 +33,24 @@ export function LoadingState({ label, onCancel }: { label: string; onCancel?: ()
             font: "inherit", fontSize: FONT.META, padding: "0 6px", cursor: "pointer",
           }}
         >
-          취소
+          {t("state.cancel")}
         </button>
       )}
     </div>
   );
 }
 
-/** 빈 결과 — "무엇을·어디서" 찾았는지와 다음 행동 1개를 함께 말한다. */
+/** Empty result — says *what·where* was searched plus one next action. */
 export function EmptyState({ query, scope, actionLabel, onAction }: {
   query: string;
   scope: string;
   actionLabel?: string;
   onAction?: () => void;
 }) {
+  const t = useI18n();
   return (
     <div style={{ ...box, color: COLOR.DIM }} role="status">
-      결과 없음 — 검색어 ‘{query}’, 범위 {scope}
+      {t("state.emptyResult", { query, scope })}
       {actionLabel && onAction && (
         <button
           type="button"
@@ -73,10 +76,11 @@ export function ErrorState({ message, code, onRetry }: {
   code?: string;
   onRetry?: () => void;
 }) {
+  const t = useI18n();
   return (
     <div style={{ ...box, color: COLOR.ERROR }} role="alert">
       <span aria-hidden="true">✗ </span>
-      실패: {message}
+      {t("state.failed")}: {message}
       {code ? <span style={{ color: COLOR.DIM }}> · {code}</span> : null}
       {onRetry && (
         <button
@@ -88,7 +92,7 @@ export function ErrorState({ message, code, onRetry }: {
             font: "inherit", fontSize: FONT.META, padding: "0 6px", cursor: "pointer",
           }}
         >
-          재시도
+          {t("state.retry")}
         </button>
       )}
     </div>

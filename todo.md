@@ -263,4 +263,6 @@ GPU 를 실제로 얼마나 먹나(여유 VRAM 수치만 읽는다) · macOS·Wi
 (`ss`/`netstat`/`wmic` 부재 경로) · `dist`/`src` mtime 비교가 체크아웃에서 같은
 커밋 순서를 가리키는 경우.
 
+**60초 타임아웃은 doctor 배선에 없다 (2026-10-09 실측).** 압축 세션이 "원인 미확정"으로 남긴 60초는 이 실행에서 재현되지 않았다. `node harnesside doctor --json` 을 실행했더니 즉시 종료(exit 0, 몇 초 이내)였고 어떤 probe·lookup도 timeout까지 가지 않았다(검증: `harnesside doctor --json` 실제 실행·종료 코드 확인). 소스에서 일치하는 60초 인자를 뒤져보니 없다 — 포트 probe 기본 **400ms**(`ports.ts`), pidOnPort timeoutMs **5000ms**(`modelSwitch.ts:283,325`의 `run(file,args,5000)`이 `doctorChecks.ts:627`로 전달), doctor CLI 배선(`cli.ts:214`)에는 60초 인자가 없다. 60초와 가장 비슷하게 보이는 `index.ts:758` 의 "게이트가 60 초 뒤 거절"은 승인 카드 타이머라 doctor와 무관하다. 즉 **60초의 출처는 Q-13 배선에 없으며** 압축 세션의 추정은 미측정이었다(검증 안 함). (재현 조건은 미설정 — `ss`/`netstat`이 없고 방화벽 DROP가 있는 환경에서 probe/pidOn 이 5 초까지 갔을 때의 추정으로 남아있음.)
+
 미측정: 라운드 전 커버리지 수치(라운드 후 82.8% · 파일 124개만 측정) · CLI 대상 화면에서 헤더 일부가 붉게 칠해지는 현상(미조사).

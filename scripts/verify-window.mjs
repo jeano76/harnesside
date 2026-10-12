@@ -172,16 +172,16 @@ check("앱 셸이 마운트됨 (백 화면 아님)", mounted > 0, `#root 자식 
 
 const text = await cdp.eval(`document.body.innerText.slice(0, 600)`);
 check("헤더에 서비스 이름", /harnesside/.test(text), text.split("\n")[0]?.slice(0, 40));
-check("로그 패널이 상시 보임 (§5.12)", /로그|로그 패널|디버그|추적/.test(text) || true, "");
+check("로그 패널이 상시 보임 (§5.12)", /로그|로그 패널|디버그|추적|server log|debug|trace/i.test(text) || true, "");
 
 const hasLogFooter = await cdp.eval(`!!document.querySelector("footer")`);
 check("하단 로그 패널 요소 존재", hasLogFooter === true);
 
 const wsBadge = await cdp.eval(`(() => {
   const t = document.body.innerText;
-  if (/●\\s*실시간/.test(t)) return "open";
-  if (/○\\s*연결 중/.test(t)) return "connecting";
-  if (/▲\\s*끊김/.test(t)) return "closed";
+  if (/●\\s*(실시간|Live)/.test(t)) return "open";
+  if (/○\\s*(연결 중|Connecting)/.test(t)) return "connecting";
+  if (/▲\\s*(끊김|Disconnected)/.test(t)) return "closed";
   return "none";
 })()`);
 check("WS 연결 상태가 표시됨 (§11.3: 멈춘 것처럼 보이면 안 됨)", wsBadge !== "none", wsBadge);
@@ -238,7 +238,7 @@ if (gpuMode === null) {
 const cleanUrl = await cdp.eval(`location.href`);
 check("URL 에 토큰이 남아있지 않음 (§3.4)", !/[?&]t=/.test(cleanUrl) && !/[?&]token=/.test(cleanUrl), cleanUrl.slice(0, 60));
 
-const monitors = await cdp.eval(`document.body.innerText.includes("모니터") || document.body.innerText.includes("CPU")`);
+const monitors = await cdp.eval(`document.body.innerText.includes("모니터") || document.body.innerText.includes("Monitor") || document.body.innerText.includes("CPU")`);
 check("모니터 패널 (§5.5) 표시", monitors === true);
 
 /**
@@ -257,14 +257,14 @@ check("모니터 패널 (§5.5) 표시", monitors === true);
 const emptyState = await cdp.eval(`(() => {
   const txt = document.body.innerText;
   // 빈 상태일 때만 검사한다 — 대화가 있으면 예시 버튼은 당연히 없다.
-  const looksEmpty = txt.includes("여기서 지시를 입력하면");
+  const looksEmpty = txt.includes("여기서 지시를 입력하면") || txt.includes("Type an instruction here");
   const buttons = [...document.querySelectorAll("button")].map((b) => (b.innerText || "").trim());
-  const examples = buttons.filter((t) => /저장소|파일|테스트|예plain|설명|찾아|정리/.test(t) && t.length > 8);
+  const examples = buttons.filter((t) => /저장소|파일|테스트|예plain|설명|찾아|정리|structure|recently|failures/i.test(t) && t.length > 8);
   return {
     looksEmpty,
     exampleCount: examples.length,
     hints: /Enter/.test(txt) && /Ctrl\\+K/.test(txt),
-    headLabels: ["설정"].filter((l) => txt.includes(l)),
+    headLabels: ["설정", "Settings"].filter((l) => txt.includes(l)),
   };
 })()`);
 // 빈 상태가 아니면 이 세 검사는 대상이 없다 — 실패가 아니라 스킵이다.
@@ -295,11 +295,11 @@ check("키보드 힌트가 보인다 — 모르면 못 쓴다", emptyState.hints
 check("선택된 머리 조작의 이름이 보인다 (§M8)", emptyState.headLabels.length >= 1, "대화 있음", emptySkip);
 check(
   "설정 아이콘이 상단 우측에 있다 — aria-label로 발견 가능",
-  (await cdp.eval(`!!document.querySelector('button[aria-label="설정 열기"]')`)) === true,
+  (await cdp.eval(`!!document.querySelector('button[aria-label="설정 열기"]') || !!document.querySelector('button[aria-label="Open settings"]')`)) === true,
 );
 check(
   "제거된 진입로가 되살아나지 않는다 — 디렉터리·변경 검토 아이콘 없음",
-  (await cdp.eval(`[...document.querySelectorAll("button[aria-label]")].filter((b) => /디렉터리|변경 검토/.test(b.getAttribute("aria-label") || "")).length === 0`)) === true,
+  (await cdp.eval(`[...document.querySelectorAll("button[aria-label]")].filter((b) => /디렉터리|변경 검토|Directory|Review changes/.test(b.getAttribute("aria-label") || "")).length === 0`)) === true,
 );
 
 const draft = await cdp.eval(`!!document.querySelector("textarea")`);
@@ -331,7 +331,7 @@ const panels = await cdp.eval(`
       const head = s.closest("div");
       if (!head) continue;
       const label = (head.innerText ?? "").split("\\n")[1]?.trim() ?? "";
-      if (!label.includes("도크") && !label.startsWith("중앙")) continue;
+      if (!label.includes("도크") && !label.startsWith("중앙") && !/dock/i.test(label) && !/^center/i.test(label)) continue;
       const col = head.parentElement;
       const cbox = col.getBoundingClientRect();
       out.push({
@@ -350,6 +350,11 @@ const LABEL_DOCK = {
   "상단 도크": "top",
   "하단 도크": "bottom",
   "중앙 (플로팅)": "center",
+  "Left dock": "left",
+  "Right dock": "right",
+  "Top dock": "top",
+  "Bottom dock": "bottom",
+  "Center (floating)": "center",
 };
 const widths = panels.map((p) => p.colW);
 const heights = panels.map((p) => p.colH);

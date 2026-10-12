@@ -13,6 +13,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ApiClient, ApiError } from "../api.js";
 import type { WorkspaceFingerprint } from "../../server/workspace.js";
+import { useI18n } from "../i18n/index.js";
 
 const BG = "#0d1117";
 const DIM = "#6e7681";
@@ -28,14 +29,14 @@ export interface SwitchPreview {
   note: string;
 }
 
-const KIND_LABEL: Record<string, string> = {
-  node: "Node",
-  python: "Python",
-  rust: "Rust",
-  go: "Go",
-  java: "Java",
-  dotnet: ".NET",
-  unknown: "알 수 없음",
+const KIND_KEY: Record<string, string> = {
+  node: "ws.kind.node",
+  python: "ws.kind.python",
+  rust: "ws.kind.rust",
+  go: "ws.kind.go",
+  java: "ws.kind.java",
+  dotnet: "ws.kind.dotnet",
+  unknown: "ws.kind.unknown",
 };
 
 export function WorkspaceBar({
@@ -55,6 +56,7 @@ export function WorkspaceBar({
   const [path, setPath] = useState("");
   const [preview, setPreview] = useState<SwitchPreview | null>(null);
   const [busy, setBusy] = useState(false);
+  const t = useI18n();
 
   const openEditor = useCallback(() => {
     setEditing(true);
@@ -97,8 +99,8 @@ export function WorkspaceBar({
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
       {/* 지금 어디에 쓰고 있는지. **항상** 보인다. */}
       <span style={{ color: DIM, fontSize: 11 }} title={current?.root ?? ""}>
-        {current ? `${current.name}` : "워크스페이스 확인 중"}
-        {current && current.kind.length ? ` · ${current.kind.map((k) => KIND_LABEL[k] ?? k).join("/")}` : ""}
+        {current ? `${current.name}` : t("ws.checking")}
+        {current && current.kind.length ? ` · ${current.kind.map((k) => t(KIND_KEY[k] ?? "ws.kind.unknown")).join("/")}` : ""}
         {current?.git ? " · git" : ""}
       </span>
       {/* ── "폴더 바꾸기" 버튼을 **없앴다** (2026-10-01) ──────────────────────────
@@ -162,7 +164,7 @@ export function WorkspaceBar({
                   <span style={{ color: DIM }}>새 폴더</span> {preview.to.root}
                   <span style={{ color: DIM }}>
                     {" "}
-                    · {preview.to.kind.map((k) => KIND_LABEL[k] ?? k).join("/")} · 규칙 {preview.to.rules.length}개
+                    · {preview.to.kind.map((k) => t(KIND_KEY[k] ?? "ws.kind.unknown")).join("/")} · 규칙 {preview.to.rules.length}개
                   </span>
                 </div>
                 {preview.warnings.length === 0 && <div style={{ color: DIM, fontSize: 11 }}>경고 없음</div>}

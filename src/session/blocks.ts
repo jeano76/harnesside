@@ -214,8 +214,13 @@ export interface Turn {
   summary: string;
 }
 
-/** 묶음의 요약 — "무엇을 했나" 를 접었을 때 보이는 한 줄. 개수가 아니라 사실. */
-export function summarizeTurn(blocks: AgentBlock[]): string {
+/** 묶음의 요약 — "무엇을 했나" 를 접었을 때 보이는 한 줄. 개수가 아니라 사실.
+ *
+ * 말하는 언어는 호출자가 `tr` 로 준다. 이 모듈은 웹·서버 공용이라 React 훅을
+ * 쓸 수 없고(파일 머리 설명), `tr` 은 **타입만** 같은 모양이다 — 실행 의존이 없다. */
+export type SummaryTranslator = (key: string, vars?: Record<string, string | number>) => string;
+
+export function summarizeTurn(blocks: AgentBlock[], tr: SummaryTranslator): string {
   const files = new Set<string>();
   const tools = new Set<string>();
   let shell = 0;
@@ -231,10 +236,17 @@ export function summarizeTurn(blocks: AgentBlock[]): string {
     }
   }
   const parts: string[] = [];
-  if (files.size) parts.push(`파일 ${files.size}`);
-  if (tools.size) parts.push(`도구 ${[...tools].slice(0, 3).join(", ")}${tools.size > 3 ? ` 외 ${tools.size - 3}` : ""}`);
-  if (shell) parts.push(`셸 ${shell}`);
-  return parts.length ? parts.join(" · ") : "답변만";
+  if (files.size) parts.push(tr("turn.sum.files", { count: files.size }));
+  if (tools.size) {
+    const names = [...tools].slice(0, 3).join(", ");
+    parts.push(
+      tools.size > 3
+        ? tr("turn.sum.toolsMany", { names, extra: tools.size - 3 })
+        : tr("turn.sum.tools", { names }),
+    );
+  }
+  if (shell) parts.push(tr("turn.sum.shell", { count: shell }));
+  return parts.length ? parts.join(" · ") : tr("turn.sum.replyOnly");
 }
 
 /**
@@ -243,7 +255,7 @@ export function summarizeTurn(blocks: AgentBlock[]): string {
  * `user` 앞의 블록(복원된 세션의 잔여 등)은 **자기 묶음**이 된다. 버리지 않는다 —
  * 세션 복원에서 이 부분을 잃으면 사용자는 "내 대화가 잘렸다" 고 읽는다(§5.10).
  */
-export function groupTurns(blocks: AgentBlock[]): Turn[] {
+export function groupTurns(blocks: AgentBlock[], tr: SummaryTranslator): Turn[] {
   const out: Turn[] = [];
   let current: AgentBlock[] = [];
   let prompt = "";
@@ -251,7 +263,7 @@ export function groupTurns(blocks: AgentBlock[]): Turn[] {
 
   const flush = () => {
     if (!current.length) return;
-    out.push({ prompt, at, blocks: current, summary: summarizeTurn(current) });
+    out.push({ prompt, at, blocks: current, summary: summarizeTurn(current, tr) });
     current = [];
   };
 

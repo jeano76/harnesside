@@ -11,6 +11,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { ApiClient, ApiError } from "../api.js";
+import { useI18n } from "../i18n/index.js";
 
 const DIM = "#6e7681";
 const FG = "#c9d1d9";
@@ -83,6 +84,7 @@ export function UpdateSection({
   /** 적용 2단계 확인 — 첫 클릭은 확인, 둘째 클릭이 실행이다. */
   const [confirmApply, setConfirmApply] = useState<string | null>(null);
   const [verify, setVerify] = useState<{ marker: UpdateMarker | null; slots: string[] } | null>(null);
+  const t = useI18n();
 
   const load = useCallback(async () => {
     try {
@@ -122,8 +124,8 @@ export function UpdateSection({
   return (
     <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: 8, display: "grid", gap: 6 }}>
       <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-        <strong style={{ fontSize: 11 }}>업데이트</strong>
-        <span style={{ color: DIM, fontSize: 10 }}>현재 {st?.current ?? "?"}</span>
+        <strong style={{ fontSize: 11 }}>{t("settings.update.title")}</strong>
+        <span style={{ fontSize: 10, color: DIM }}>{t("settings.update.current", { v: st?.current ?? "?" })}</span>
         <span style={{ flex: 1 }} />
         <button
           type="button"
@@ -133,13 +135,13 @@ export function UpdateSection({
               try {
                 setSt(await client.post<UpdateState>("/api/update/check"));
               } catch (e) {
-                onNotice("error", "업데이트 확인 실패", e instanceof ApiError ? e.message : String(e));
+                onNotice("error", t("settings.update.checkFailed"), e instanceof ApiError ? e.message : String(e));
               }
             })
           }
           style={btn}
         >
-          확인
+          {t("settings.update.check")}
         </button>
       </div>
 
@@ -149,69 +151,69 @@ export function UpdateSection({
           "확인 안 했다" 와 "없다" 가 같아진다. */}
       {st?.local && (
         <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: 8, display: "grid", gap: 3 }}>
-          <div style={{ fontSize: 10, color: DIM }}>출처</div>
+          <div style={{ fontSize: 10, color: DIM }}>{t("settings.update.source")}</div>
           <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: DIM, minWidth: 58 }}>설치됨</span>
+            <span style={{ fontSize: 10, color: DIM, minWidth: 58 }}>{t("settings.update.installed")}</span>
             <span style={{ fontSize: 11, color: FG }}>{st.local.version}</span>
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: DIM, minWidth: 58 }}>빌드</span>
+            <span style={{ fontSize: 10, color: DIM, minWidth: 58 }}>{t("settings.update.build")}</span>
             <span style={{ fontSize: 10, color: FG, fontFamily: "monospace" }} data-testid="update-build-date">
-              {st.local.date ?? "날짜 모름"}
+              {st.local.date ?? t("settings.update.dateUnknown")}
             </span>
             <span style={{ fontSize: 10, color: FG, fontFamily: "monospace" }} data-testid="update-build-sha">
-              {st.local.commit ?? "해시 모름"}
+              {st.local.commit ?? t("settings.update.hashUnknown")}
             </span>
-            {/* dirty 는 `false` 일 때 **아무것도 안 쓴다** — 깨끗한 게 기본이고
-                이상할 때만 말한다. `null`(모름)이면 그것도 말한다. */}
+            {/* dirty prints **nothing** when `false` — clean is the default and only
+                anomalies speak. `null` (unknown) says so too. */}
             {(st.local.dirty === true || st.local.dirty === null) && (
               <span style={{ fontSize: 10, color: st.local.dirty === true ? "#d29922" : DIM }} data-testid="update-build-dirty">
-                {st.local.dirty === true ? "더티" : "트리 상태 모름"}
+                {st.local.dirty === true ? t("settings.update.dirty") : t("settings.update.treeUnknown")}
               </span>
             )}
             {!st.local.stamped && (
               <span style={{ fontSize: 10, color: "#d29922" }} data-testid="update-build-unstamped">
-                개발 실행 (빌드 신원 없음)
+                {t("settings.update.devRun")}
               </span>
             )}
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: DIM, minWidth: 58 }}>설치 해시</span>
+            <span style={{ fontSize: 10, color: DIM, minWidth: 58 }}>{t("settings.update.installHash")}</span>
             <span style={{ fontSize: 10, color: st.local.sha ? FG : "#d29922", fontFamily: "monospace" }} data-testid="update-tree-sha">
-              {st.local.sha ? `${st.local.sha.slice(0, 12)}…` : "검증 안 됨"}
+              {st.local.sha ? `${st.local.sha.slice(0, 12)}…` : t("settings.update.unverified")}
             </span>
-            {/* **검증 실패인데 해시를 보고하지 않는다.** 파일 하나의 해시를 대신
-                보여주면 "설치 확인됨" 으로 읽힌다 — 아orea 상태(절반만 갱신)를 놓친다. */}
+            {/* **A failed verify reports no hash.** Showing one file's hash instead
+                reads as "install verified" — and misses the half-updated state. */}
             {st.local.sha === null && (
-              <span style={{ fontSize: 10, color: "#d29922" }}>전체 트리를 자기 매니페스트로 대조하지 못했습니다</span>
+              <span style={{ fontSize: 10, color: "#d29922" }}>{t("settings.update.treeMismatch")}</span>
             )}
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: DIM, minWidth: 58 }}>설치 경로</span>
+            <span style={{ fontSize: 10, color: DIM, minWidth: 58 }}>{t("settings.update.installPath")}</span>
             <span style={{ fontSize: 10, color: DIM, fontFamily: "monospace" }}>{st.local.installPath}</span>
           </div>
         </div>
       )}
 
-      {/* Raiser R-1 — 의존성 게이트. 없는 걸 "문제없음" 으로 두지 않는다. */}
+      {/* Raiser R-1 — dependency gate. A missing one is never "no problem". */}
       {st?.deps && st.deps.ready !== true && (
         <div style={{ fontSize: 10, color: st.deps.ready === false ? "#f85149" : "#d29922" }} data-testid="update-deps">
-          의존성: {st.deps.detail}
-          {st.deps.ready === false && " — 지금 설치본의 의존 모듈이 빠져 있습니다. 포터블 zip 을 다시 풀어 설치하십시오."}
+          {t("settings.update.deps", { detail: st.deps.detail })}
+          {st.deps.ready === false && t("settings.update.depsMissing")}
         </div>
       )}
 
       {st?.lastError && <div style={{ color: "#f85149", fontSize: 10 }}>⚠ {st.lastError}</div>}
-      {st?.state === "available" && st.remote && <div style={{ fontSize: 11, color: "#3fb950" }}>새 버전 {st.remote.version} 있습니다</div>}
-      {st?.state === "up-to-date" && <div style={{ fontSize: 11, color: DIM }}>최신입니다</div>}
+      {st?.state === "available" && st.remote && <div style={{ fontSize: 11, color: "#3fb950" }}>{t("settings.update.newVersion", { version: st.remote.version })}</div>}
+      {st?.state === "up-to-date" && <div style={{ fontSize: 11, color: DIM }}>{t("settings.update.upToDate")}</div>}
 
       {st?.state === "available" && (
         <div style={{ display: "grid", gap: 4 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {/* 배포물은 플랫폼별 포터블 zip 이다. 이 머신이 적용할 수 있는 zip 만 버튼으로 보인다
-                (매니페스트·SHA256SUMS·다른 플랫폼 zip 은 누르면 실패할 뿐이다). */}
+            {/* Distros are per-platform portable zips. Only this machine's zip shows
+                as a button (manifests · SHA256SUMS · foreign-platform zips only fail). */}
             {!st.assets.some((a) => a.name === st.bundle) && (
-              <span style={{ color: "#d29922", fontSize: 10 }}>이 머신용 배포물({st.bundle ?? "확인 못 함"})이 릴리스에 없습니다</span>
+              <span style={{ color: "#d29922", fontSize: 10 }}>{t("settings.update.noBundle", { bundle: st.bundle ?? t("settings.update.bundleUnknown") })}</span>
             )}
             {st.assets.map((a, i) => a.name !== st.bundle ? null : (
               <button
@@ -227,7 +229,7 @@ export function UpdateSection({
                       // `/api/update/apply` 의 입력이 될 수 있다.
                       const r = await client.post<{ ok: boolean; tree: string; detail: string; manifest: unknown | null; treeSha256: string | null }>("/api/update/bundle", { index: i });
                       if (r.ok) {
-                        onNotice("info", "검증 완료", `${a.name} — ${r.detail}`);
+                        onNotice("info", t("settings.update.verified"), `${a.name} — ${r.detail}`);
                         // **매니페스트를 그대로** 들고 간다. 경로가 아니라 내용이라 임의
                         // 파일을 지정할 수 없고, 서버가 `/apply` 에서 **다시 검증**한다.
                         // 가공(발췌·재조립)하면 그 재검증에서 떨어진다 — 그래서 그대로.
@@ -235,16 +237,16 @@ export function UpdateSection({
                           setStaged((prev) =>
                             prev.some((s) => s.tree === r.tree) ? prev : [...prev, { name: a.name, tree: r.tree, detail: r.detail, manifest: r.manifest }]
                           );
-                      } else onNotice("error", "검증 실패", r.detail);
+                      } else onNotice("error", t("settings.update.verifyFailed"), r.detail);
                     } catch (e) {
-                      // **검증 실패는 교체되지 않은 상태로 남는다.** 이건 조용히 아니다.
-                      onNotice("error", "검증 실패", e instanceof ApiError ? e.message : String(e));
+                      // **A failed verify stays unswapped.** And not silently.
+                      onNotice("error", t("settings.update.verifyFailed"), e instanceof ApiError ? e.message : String(e));
                     }
                   })
                 }
                 style={btn}
               >
-                {staged.some((s) => s.name === a.name) ? `검증됨: ${a.name}` : `받기·검증: ${a.name}`}
+                {staged.some((s) => s.name === a.name) ? t("settings.update.verifiedAsset", { name: a.name }) : t("settings.update.fetchVerify", { name: a.name })}
               </button>
             ))}
           </div>
@@ -257,13 +259,13 @@ export function UpdateSection({
                     const r = await client.post<{ decision: { ok: boolean; items: string[]; blockers: string[] } }>("/api/update/plan");
                     setPlan(r.decision);
                   } catch (e) {
-                    onNotice("error", "적용 계획 실패", e instanceof ApiError ? e.message : String(e));
+                    onNotice("error", t("settings.update.planFailed"), e instanceof ApiError ? e.message : String(e));
                   }
                 })
               }
               style={btn}
             >
-              적용 계획 보기
+              {t("settings.update.planTitle")}
             </button>
             <button
               type="button"
@@ -271,21 +273,21 @@ export function UpdateSection({
                 void act(async () => {
                   try {
                     const r = await client.post<{ ok: boolean; detail: string }>("/api/update/slot");
-                    onNotice(r.ok ? "info" : "error", r.ok ? "롤백 슬롯 생성" : "슬롯 생성 실패", r.detail);
+                    onNotice(r.ok ? "info" : "error", r.ok ? t("settings.update.slotCreated") : t("settings.update.slotFailed"), r.detail);
                     void load();
                   } catch (e) {
-                    onNotice("error", "슬롯 생성 실패", e instanceof ApiError ? e.message : String(e));
+                    onNotice("error", t("settings.update.slotFailed"), e instanceof ApiError ? e.message : String(e));
                   }
                 })
               }
               style={btn}
             >
-              롤백 슬롯 만들기
+              {t("settings.update.slotCreate")}
             </button>
           </div>
           {st.slots.length === 0 && (
             <div style={{ color: "#d29922", fontSize: 10 }}>
-              되돌릴 곳이 없으므로 **적용을 막습니다**(기본 꺼짐 · D14). 슬롯을 먼저 만드십시오.
+              {t("settings.update.noSlot")}
             </div>
           )}
         </div>
@@ -304,7 +306,7 @@ export function UpdateSection({
             </div>
           ))}
           <div style={{ color: plan.ok ? "#3fb950" : "#f85149", fontSize: 10 }}>
-            {plan.ok ? "적용 가능" : "적용 불가 — 위 사유를 먼저 해결하십시오"}
+            {plan.ok ? t("settings.update.planOk") : t("settings.update.planBlocked")}
           </div>
         </div>
       )}
@@ -313,8 +315,8 @@ export function UpdateSection({
       {staged.length > 0 && (
         <div style={{ display: "grid", gap: 4 }}>
           <div style={{ color: DIM, fontSize: 10 }}>
-            {/* "슬롯에 검증됨" — 실제로 말하는 것은 **목록까지** 대조했다는 것이다(R-5). */}
-            적용 대기 중 (해시 + 파일 목록 검증 통과)
+            {/* "Verified into the slot" — what it actually says is the **list** matched too (R-5). */}
+            {t("settings.update.stagedTitle")}
           </div>
           {staged.map((s) => (
             <div key={s.tree} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -323,10 +325,11 @@ export function UpdateSection({
               <span style={{ flex: 1 }} />
               {confirmApply === s.tree ? (
                 <>
-                  {/* R-6.2 — 없는 걸 있다고 말하지 않는다. 이 서버는 자기 자신을
-                      재시작할 수 없다. 자동 롤백은 **상위 감시기** 가 해야 하고 지금 없다. */}
+                  {/* R-6.2 — never claim what isn't there. This server cannot
+                      restart itself. Auto-rollback needs a **parent supervisor**,
+                      and there is none now. */}
                   <span style={{ fontSize: 10, color: "#d29922" }}>
-                    <strong>dist/ 전체 트리</strong>를 교체합니다. 되돌릴 곳(슬롯)이 없으면 거절합니다.
+                    <strong>dist/</strong> {t("settings.update.applyWarn")}
                   </span>
                   <button
                     type="button"
@@ -338,26 +341,26 @@ export function UpdateSection({
                             manifest: s.manifest,
                             confirm: true,
                           });
-                          onNotice("info", "교체됨 — 재시작 필요", `${r.next} (트리 ${r.treeSha256?.slice(0, 7) ?? "미측정"} · 슬롯: ${r.slot})`);
+                          onNotice("info", t("settings.update.swappedRestart"), `${r.next} ${t("settings.update.swappedBody", { tree: r.treeSha256?.slice(0, 7) ?? t("settings.update.unmeasured"), slot: r.slot })}`);
                           setConfirmApply(null);
                           void load();
                         } catch (e) {
-                          onNotice("error", "적용 실패", e instanceof ApiError ? e.message : String(e));
+                          onNotice("error", t("settings.update.applyFailed"), e instanceof ApiError ? e.message : String(e));
                           setConfirmApply(null);
                         }
                       })
                     }
                     style={{ ...btn, borderColor: "#f85149", color: "#f85149" }}
                   >
-                    정말 적용
+                    {t("settings.update.applyConfirm")}
                   </button>
                   <button type="button" onClick={() => setConfirmApply(null)} style={btn}>
-                    취소
+                    {t("action.cancel")}
                   </button>
                 </>
               ) : (
                 <button type="button" onClick={() => setConfirmApply(s.tree)} style={btn}>
-                  적용
+                  {t("settings.update.apply")}
                 </button>
               )}
             </div>
@@ -366,17 +369,20 @@ export function UpdateSection({
       )}
       {((verify?.slots.length ?? 0) > 0 || verify?.marker) && (
         <div style={{ display: "grid", gap: 4 }}>
-          {/* ── R-6.1/R-7.2: 마커를 **무엇이 교체되었는지** 로 보인다 ──
-              적용 전 버전을 그대로 두면 사용자는 "적용했는데 왜 옛 버전이 떠 있지" 를 본다. */}
+          {/* ── R-6.1/R-7.2: the marker shows **what was swapped** ──
+              Leaving the pre-apply version in place shows "applied but the old
+              version is still up". */}
           {verify?.marker && (
             <div style={{ fontSize: 10, color: "#d29922" }} data-testid="update-marker">
-              적용 대기 마커 있음 — {verify.marker.target?.version ?? "버전 모름"} ·{" "}
-              {verify.marker.target?.date ?? "날짜 모름"}-{verify.marker.target?.sha ?? "해시 모름"} · 트리{" "}
-              {verify.marker.treeSha256?.slice(0, 7) ?? "미측정"} (재시작하면 이 기동이 확인합니다)
+              {t("settings.update.markerPending", {
+                version: verify.marker.target?.version ?? t("settings.update.versionUnknown"),
+                build: `${verify.marker.target?.date ?? t("settings.update.dateUnknown")}-${verify.marker.target?.sha ?? t("settings.update.hashUnknown")}`,
+                tree: verify.marker.treeSha256?.slice(0, 7) ?? t("settings.update.unmeasured"),
+              })}
             </div>
           )}
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: DIM }}>{verify?.marker ? "롤백 슬롯 있음" : `롤백 슬롯 ${verify?.slots.length ?? 0}개`}</span>
+            <span style={{ fontSize: 10, color: DIM }}>{verify?.marker ? t("settings.update.slotSome") : t("settings.update.slotCount", { count: verify?.slots.length ?? 0 })}</span>
             <span style={{ flex: 1 }} />
             <button
               type="button"
@@ -384,16 +390,16 @@ export function UpdateSection({
                 void act(async () => {
                   try {
                     const r = await client.post<{ ok: boolean; detail: string }>("/api/update/rollback", { confirm: true });
-                    onNotice("info", "되돌림", r.detail);
+                    onNotice("info", t("settings.update.rolledBack"), r.detail);
                     void load();
                   } catch (e) {
-                    onNotice("error", "되돌리기 실패", e instanceof ApiError ? e.message : String(e));
+                    onNotice("error", t("settings.update.rollbackFailed"), e instanceof ApiError ? e.message : String(e));
                   }
                 })
               }
               style={btn}
             >
-              이전 버전으로 되돌리기
+              {t("settings.update.rollback")}
             </button>
           </div>
         </div>

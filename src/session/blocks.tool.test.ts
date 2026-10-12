@@ -19,6 +19,9 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { appendToBlock, groupTurns, type AgentBlock } from "./blocks.js";
+import { ko } from "../web/i18n/ko.js";
+
+const trKo = (key: string): string => ko[key] ?? key;
 
 /** 호출/완료 이벤트 한 쌍 — 서버가 실제로 보내는 그대로. */
 const call = (at: number, name: string, args: Record<string, unknown> = {}) =>
@@ -79,7 +82,7 @@ test("도구 블록은 **사용자 발화 안**에 속한다 — 묶음 경계�
   let b: AgentBlock[] = [{ id: "u", kind: "user", text: "실행해", at: 50 }];
   b = appendToBlock(b, "tool", "", 100, { name: "run_shell", args: { command: "ls" }, done: false });
   b = appendToBlock(b, "tool", "", 150, { name: "run_shell", args: { command: "ls" }, done: true });
-  const turns = groupTurns(b);
+  const turns = groupTurns(b, trKo);
   assert.equal(turns.length, 1, `도구가 새 묶음을 열었다: ${turns.length}개`);
   // `Turn` 은 `{ prompt, at, blocks, summary }` 다. `turn.blocks` 로 본다 —
   // 배열 그 자체로 보면 `undefined` 가 나오고 **"빈 묶음" 으로 오해**된다.

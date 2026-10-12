@@ -15,6 +15,7 @@ import { ApiClient, ApiError } from "../api.js";
 import { UpdateSection } from "./UpdateSection.js";
 import { NoticeSection } from "./NoticeSection.js";
 import { COLOR } from "../theme/tokens.js";
+import { useI18n } from "../i18n/index.js";
 
 const DIM = COLOR.DIM_SUBTLE;
 const FG = COLOR.FG;
@@ -30,12 +31,17 @@ interface Scored {
   notes: string[];
 }
 
-function gib(n: number): string {
-  if (!n) return "크기 미상";
+function gib(n: number, t: (key: string, vars?: Record<string, string | number>) => string): string {
+  if (!n) return t("settings.model.sizeUnknown");
   return `${n.toFixed(1)}GiB`;
 }
 
 export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; onNotice: (kind: "info" | "warn" | "error", title: string, body: string) => void; onPhase: (p: { state: string; progress: number; message: string }) => void }) {
+  const t = useI18n();
+  /** Fresh translator for async callbacks — the `notice` ref below is stable, so a
+      captured `t` would answer in the pre-switch language after `/lang`. */
+  const tRef = useRef(t);
+  tRef.current = t;
   const [dir, setDir] = useState<string | null>(null);
   // 진행 단계는 **한 줄로** 보인다(§11.3: 무언가 happening 하고 있어야 한다).
   // `setBlocks` 도 deps 에 넣으면 동일한 무한 루프가 되므로 ref 로 거둔다.
@@ -98,7 +104,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
       setServedByAdopted(!!r.servedByAdopted);
       setLocal(r.entries);
     } catch (e) {
-      notice("error", "모델 목록을 읽지 못했습니다", e instanceof ApiError ? e.message : String(e));
+      notice("error", tRef.current("settings.model.listFailed"), e instanceof ApiError ? e.message : String(e));
     }
     // llama.cpp 상태는 **판정만** 받는다. 이 화면이 여는 일이 설치를 시작하면 안 된다 —
     // 사용자는 무엇이 일어나는지 모른다. 설치는 `harnesside doctor --install`.
@@ -119,9 +125,9 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
     try {
       const r = await client.get<typeof result>(`/api/models/search?q=${encodeURIComponent(q)}`);
       setResult(r);
-      if (r && r.ok === false) notice("warn", "검색 실패", r.detail ?? "");
+      if (r && r.ok === false) notice("warn", tRef.current("settings.model.searchFailed"), r.detail ?? "");
     } catch (e) {
-      notice("error", "검색 요청이 실패했습니다", e instanceof ApiError ? e.message : String(e));
+      notice("error", tRef.current("settings.model.searchReqFailed"), e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -135,13 +141,13 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
           file: m.model.file,
         });
         if (r.item.state === "done") {
-          notice("info", "다운로드 완료", `${m.model.file} — llama 를 재시작해야 적용됩니다.`);
+          notice("info", tRef.current("settings.model.downloadDone"), `${m.model.file} ${tRef.current("settings.model.downloadRestart")}`);
           void loadLocal();
         } else {
-          notice("error", "다운로드 실패", r.item.error ?? "알 수 없는 오류");
+          notice("error", tRef.current("settings.model.downloadFailed"), r.item.error ?? tRef.current("error.generic"));
         }
       } catch (e) {
-        notice("error", "다운로드 요청 실패", e instanceof ApiError ? e.message : String(e));
+        notice("error", tRef.current("settings.model.downloadReqFailed"), e instanceof ApiError ? e.message : String(e));
       }
     },
     [client, notice, loadLocal]
@@ -164,13 +170,13 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
         }
         setPlan(null);
         if (r.ok) {
-          notice("info", "모델 교체 완료", `${file} — 새 모델이 응답하는 것을 확인했습니다.`);
+          notice("info", tRef.current("settings.model.swapDone"), `${file} ${tRef.current("settings.model.swapVerified")}`);
           void loadLocal();
         } else {
-          notice("error", "모델 교체 실패", r.reason ?? "알 수 없는 오류");
+          notice("error", tRef.current("settings.model.swapFailed"), r.reason ?? tRef.current("error.generic"));
         }
       } catch (e) {
-        notice("error", "교체 요청 실패", e instanceof ApiError ? e.message : String(e));
+        notice("error", tRef.current("settings.model.swapReqFailed"), e instanceof ApiError ? e.message : String(e));
       }
     },
     [client, notice, loadLocal]
@@ -189,14 +195,14 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
       }}
     >
       <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-        {isPinned && <span style={{ color: "#3fb950", fontSize: 10 }}>★ 기본 추천</span>}
+        {isPinned && <span style={{ color: "#3fb950", fontSize: 10 }}>{t("settings.model.pinnedShort")}</span>}
         <span style={{ fontSize: 12 }}>{s.model.id}</span>
         <span style={{ flex: 1 }} />
-        {!isPinned && <span style={{ color: DIM, fontSize: 10 }}>적합 {s.score}</span>}
+        {!isPinned && <span style={{ color: DIM, fontSize: 10 }}>{t("settings.model.fit", { score: s.score })}</span>}
       </div>
       <div style={{ color: DIM, fontSize: 10 }}>
-        {s.model.file.split("/").pop()} · {gib(s.model.bytes)} · {s.quant ?? "양자화 미상"} · VRAM ≈ {gib(s.estimate.vramGiB)} · 다운로드{" "}
-        {s.model.downloads.toLocaleString("ko-KR")}
+        {s.model.file.split("/").pop()} · {gib(s.model.bytes, t)} · {s.quant ?? t("settings.model.quantUnknown")} · VRAM ≈ {gib(s.estimate.vramGiB, t)} · {t("settings.model.downloads")}{" "}
+        {s.model.downloads.toLocaleString()}
         {s.model.license ? ` · ${s.model.license}` : ""}
       </div>
       <div style={{ color: DIM, fontSize: 10 }}>{s.estimate.why}</div>
@@ -211,7 +217,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
           onClick={() => void download(s)}
           style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "1px 8px", cursor: "pointer", font: "inherit", fontSize: 11 }}
         >
-          다운로드
+          {t("settings.model.download")}
         </button>
       </div>
     </div>
@@ -220,23 +226,23 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
   return (
     <div style={{ padding: 8, display: "grid", gap: 8 }}>
       <div style={{ fontSize: 11 }}>
-        <strong>모델</strong>
-        <div style={{ color: DIM }}>저장 위치: {dir ?? "확인 중"}</div>
-        {/* **사용 중인 모델** — 경로가 있으면 경로, 없으면 실행 중인 서버가 말한 이름.
-            둘 다 없을 때만 "없음" 이다. 그리고 **어디서 온 건지** 를 밝힌다 —
-            다른 곳에서 띄운 서버면 그 파일은 ~/.harnesside/models 에 없을 수 있다. */}
+        <strong>{t("settings.model.title")}</strong>
+        <div style={{ color: DIM }}>{t("settings.model.storageDir")}: {dir ?? t("settings.model.checking")}</div>
+        {/* **Model in use** — path when known, else the live server's reported name.
+            "none" only when both are missing. And **where it came from** —
+            a foreign-booted server's file may not live under ~/.harnesside/models. */}
         <div style={{ color: served || active ? FG : DIM }}>
-          사용 중:{" "}
+          {t("settings.model.inUse")}:{" "}
           {active ??
             (served ? (
               <>
                 {served}
                 {servedByAdopted && (
-                  <span style={{ color: DIM }}> (외부에서 띄운 서버가 서빙 중 — 이 디렉터리에 없을 수 있습니다)</span>
+                  <span style={{ color: DIM }}> {t("settings.model.adopted")}</span>
                 )}
               </>
             ) : (
-              "없음"
+              t("settings.model.none")
             ))}
         </div>
       </div>
@@ -249,10 +255,10 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
           <div style={{ color: DIM }}>
             llama.cpp:{" "}
             {llama.situation === "running"
-              ? `실행 중${llama.running ? ` — ${llama.running.baseUrl} (${llama.running.model})` : ""}`
+              ? `${t("settings.model.llamaRunning")}${llama.running ? ` — ${llama.running.baseUrl} (${llama.running.model})` : ""}`
               : llama.situation === "installed"
-                ? "설치됨 · 미구동"
-                : "설치되어 있지 않음"}
+                ? t("settings.model.llamaInstalled")
+                : t("settings.model.llamaMissing")}
           </div>
           <div style={{ color: DIM }}>{llama.remedy}</div>
         </div>
@@ -264,7 +270,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
             <div key={m.path} style={{ display: "flex", gap: 6, alignItems: "baseline", fontSize: 11 }}>
               <span style={{ color: m.path === active ? FG : DIM, flex: 1 }}>
                 {m.path === active ? "● " : "· "}
-                {m.file} · {gib(m.bytes / 1024 ** 3)}
+                {m.file} · {gib(m.bytes / 1024 ** 3, t)}
               </span>
               {m.path !== active && (
                 <button
@@ -272,7 +278,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
                   onClick={() => void activate(m.path, m.file)}
                   style={{ background: "none", border: 0, color: "#3fb950", cursor: "pointer", font: "inherit", fontSize: 10 }}
                 >
-                  이 모델로 교체
+                  {t("settings.model.swapTo")}
                 </button>
               )}
             </div>
@@ -282,23 +288,23 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
 
       {plan && (
         <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: 8, display: "grid", gap: 6 }}>
-          <div style={{ fontSize: 11 }}>교체 전 확인 — {plan.path.split("/").pop()}</div>
+          <div style={{ fontSize: 11 }}>{t("settings.model.confirmSwap", { file: plan.path.split("/").pop() ?? "" })}</div>
           {plan.warnings.map((w, i) => (
             <div key={i} style={{ color: "#d29922", fontSize: 10 }}>
               · {w}
             </div>
           ))}
-          <div style={{ color: DIM, fontSize: 10 }}>순서: {plan.steps.join(" → ")}</div>
+          <div style={{ color: DIM, fontSize: 10 }}>{t("settings.model.order", { steps: plan.steps.join(" → ") })}</div>
           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
             <button type="button" onClick={() => setPlan(null)} style={{ background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit" }}>
-              취소
+              {t("action.cancel")}
             </button>
             <button
               type="button"
               onClick={() => void activate(plan.path, plan.path.split("/").pop() ?? "", true)}
               style={{ background: "#238636", color: "#fff", border: 0, borderRadius: 4, padding: "2px 10px", cursor: "pointer", font: "inherit", fontSize: 11 }}
             >
-              교체하기
+              {t("settings.model.apply")}
             </button>
           </div>
         </div>
@@ -309,8 +315,8 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void search()}
-          aria-label="HuggingFace 모델 검색"
-            placeholder="HuggingFace 검색 (예: Ornith)"
+          aria-label={t("settings.model.searchLabel")}
+            placeholder={t("settings.model.searchPlaceholder")}
           style={{ flex: 1, background: "#0d1117", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "3px 6px", font: "inherit", fontSize: 11, outline: "none" }}
         />
         <button
@@ -319,14 +325,14 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
           disabled={busy}
           style={{ background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 10px", cursor: busy ? "default" : "pointer", font: "inherit", fontSize: 11 }}
         >
-          {busy ? "검색 중" : "검색"}
+          {busy ? t("settings.model.searching") : t("settings.model.search")}
         </button>
       </div>
 
       {result && result.ok === false && (
         <div style={{ color: "#f85149", fontSize: 11 }}>
           {result.detail}
-          {result.local && result.local.length > 0 && <div style={{ color: DIM }}>로컬 모델 {result.local.length}개를 그대로 쓸 수 있습니다.</div>}
+          {result.local && result.local.length > 0 && <div style={{ color: DIM }}>{t("settings.model.localReusable", { count: result.local.length })}</div>}
         </div>
       )}
 
@@ -336,7 +342,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
 
       {result?.pinned && (
         <div style={{ display: "grid", gap: 4 }}>
-          <div style={{ color: "#3fb950", fontSize: 10 }}>기본 추천 (§7.2 — 점수와 무관하게 고정)</div>
+          <div style={{ color: "#3fb950", fontSize: 10 }}>{t("settings.model.pinnedDefault")}</div>
           {result.pinnedNote && <div style={{ color: DIM, fontSize: 10 }}>{result.pinnedNote}</div>}
           {row(result.pinned, true)}
         </div>
@@ -344,14 +350,14 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
 
       {result?.top && result.top.length > 0 && (
         <div style={{ display: "grid", gap: 4 }}>
-          <div style={{ color: DIM, fontSize: 10 }}>그 밖의 후보 (적합도 순 · 상위 5개)</div>
+          <div style={{ color: DIM, fontSize: 10 }}>{t("settings.model.moreCandidates")}</div>
           {result.top.map((s) => row(s, false))}
         </div>
       )}
 
       {downloads.length > 0 && (
         <div style={{ display: "grid", gap: 4 }}>
-          <div style={{ color: DIM, fontSize: 10 }}>다운로드</div>
+          <div style={{ color: DIM, fontSize: 10 }}>{t("settings.model.downloads")}</div>
           {downloads.map((d) => (
             <div key={d.id} style={{ fontSize: 11, color: d.state === "failed" ? "#f85149" : FG }}>
               {d.state === "failed" ? "✗" : d.state === "done" ? "✓" : "▸"} {d.file.split("/").pop()} · {d.progress}%
@@ -362,7 +368,7 @@ export function ModelPanel({ client, onNotice, onPhase }: { client: ApiClient; o
       )}
 
       <div style={{ color: DIM, fontSize: 10 }}>
-        순차 다운로드입니다(중단 후 이어받기 지원). 병렬 조각 다운로드는 넣지 않았습니다 — 대역폭을 더 먹고 정확도는 같습니다.
+        {t("settings.model.sequential")}
       </div>
       {/* `notice` 는 deps 가 안정적이다 — `onNotice` 를 그대로 넘기면 그쪽에서 같은
           순환이 다시 시작된다. */}

@@ -76,14 +76,14 @@ test("한글이 **조금** 섞여 있어도 대부분 일본어면 잡는다", (
 \u73b0\u72b6（netproxy \u30d7\u30ed\u30b8\u30a7\u30af\u30c8）\u30ed\u30fc\u30ab\u30eb\u306e Git \u72b6\u6cc1\u3067\u3059\u3002\u30d6\u30e9\u30f3\u30c1\u306f main \u3067\u3001origin/main \u3088\u308a 1 \u30b3\u30df\u30c3\u30c8\u5148\u3067\u3059\u3002\u672a\u30b3\u30df\u30c3\u30c8\u5909\u66f4\u306f README.md \u3068 proxy.js \u3067\u3059\u3002`;
   const flags = languageFlags(mixed);
   assert.equal(flags.length, 1, "한 문장만 한국어인 답을 못 잡았다");
-  assert.match(flags[0].message, /한글 비율|한글/, `사유가 뭔지 말하지 않는다: ${flags[0].message}`);
+  assert.match(flags[0].message, /Hangul/, `does not say what is wrong: ${flags[0].message}`);
 });
 
 test("**사람이 읽을 수 있는** 사유가 있다 — 무엇을 해야 하는지", () => {
   const flags = languageFlags("\u3053\u308c\u306f\u65e5\u672c\u8a9e\u306e\u56de\u7b54\u3067\u3059\u3002\u30dd\u30fc\u30c8\u8a08\u753b\u306f llama 8080 \u3068 IDE 7317 \u3067\u3042\u308a\u3001\u78ba\u8a8d\u304c\u5fc5\u8981\u3067\u3059\u3002\u8a2d\u5b9a\u30d5\u30a1\u30a4\u30eb\u3092\u76f4\u63a5\u7de8\u96c6\u3057\u3066\u304f\u3060\u3055\u3044\u3002");
   assert.equal(flags.length, 1);
   assert.ok(flags[0].message.length > 10, "사유가 짧다");
-  assert.match(flags[0].message, /한국어/, "어떻게 해야 하는지가 없다");
+  assert.match(flags[0].message, /user's language|English/, "missing what to do");
 });
 
 test("**빈 입력**은 조용히 아무것도 안 낸다 — 조용한 실패를 만들지 않는다", () => {
