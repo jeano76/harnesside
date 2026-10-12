@@ -14,12 +14,33 @@
 ## ① 현재 상태 (마지막 갱신: 2026-10-12)
 
 ```yaml
-phase: 승인카드 60초·접기 UI 라이브 실측 완료 (결함 2건 수리)
+phase: 기호 정의·참조 풀셋 완료 (TS LanguageService + 화면 점프)
 status: in_progress
-last_commit: "b399eac feat(verify): 승인카드 60초·접기 UI 라이브 실측 + 결함 2건 수리"
-next_action: "기호 정의/참조 (TS LanguageService) — 순차 2번"
+last_commit: "5da0716 feat(ui): FilePreview 토큰 클릭 정의·참조 점프"
+next_action: "문서 갱신 (todo ⑥) 또는 다음 고도화 후보 중 선택"
 blocking: 없음
 ```
+
+## 2026-10-12 · 기호 정의·참조 풀셋 (순차 2번)
+
+## 2026-10-12 · 기호 정의·참조 풀셋 (순차 2번)
+
+> 백엔드 `src/server/symbolsTs.ts` (요청마다 LanguageService 생성 — 클릭 때만
+> 일어나므로 캐시 없음) + `GET /api/fs/definition`·`/api/fs/references`.
+> 줄·열 범위 밖 400·루트 밖 403·컴파일러 모르면 빈 locations.
+> `typescript` 미설치본은 `available:false` 로 텍스트 아웃라인 유지.
+>
+> 화면 `FilePreview`: TS 식별자 토큰 클릭 → 정의 패널(같은 파일 점프·다른 파일
+> 편집기 열기) → "참조 찾기". 키워드·문자열·주석은 요청 안 보냄.
+>
+> 실측(실코드베이스): `search.ts:315:12` → `shared/searchRank.ts:23 rankFiles`.
+> `symbols.ts extractSymbols` 참조 11건(테스트 포함). 키워드 자리 정의 빈 목록.
+> 빌드 산출물에 `정의로 이동`·엔드포인트 포함 확인.
+> 브라우저 클릭 실측은 미측정(전체창 라이브는 모델 기동 필요) — 다음 라운드 후보.
+>
+> 검증: `npm test` **2505/2505** · `ci-checks` PASS · `typecheck` clean · `build` PASS.
+> 커밋 `fa65cb5` (백엔드+라우트) · `5da0716` (화면).
+> 별도 발견(미해결): 세션 복원 블록이 인자·출력 상실(순차 1번에서 기록, 그대로).
 
 ## 2026-10-12 · 승인카드 60초·접기 UI 라이브 실측 + 결함 2건 (순차 1번)
 
