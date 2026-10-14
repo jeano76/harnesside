@@ -55,3 +55,25 @@ test("short outputs and disabled masking are left alone; errors keep a longer he
   const plain = String(r.messages[3].content);
   assert.ok(errOut.length > plain.length, "error output keeps 3x head");
 });
+
+test("needTokens masks only as many as needed, oldest first; the rest stay verbatim", () => {
+  const input = convo(10);
+  const all = maskObservations(input, { keepRecentToolResults: 2 });
+  assert.equal(all.maskedCount, 8);
+  const some = maskObservations(input, { keepRecentToolResults: 2, needTokens: 1 });
+  assert.equal(some.maskedCount, 1, "one is enough to cover a 1-token need");
+  const tools = some.messages.filter((m) => m.role === "tool");
+  assert.ok(String(tools[0].content).startsWith(MASK_MARKER), "the OLDEST output is the one masked");
+  assert.ok(tools.slice(1).every((m) => !String(m.content).startsWith(MASK_MARKER)), "everything newer is kept verbatim");
+  const half = maskObservations(input, { keepRecentToolResults: 2, needTokens: Math.floor(all.savedTokens / 2) });
+  assert.ok(half.maskedCount > 1 && half.maskedCount < 8, `got ${half.maskedCount}`);
+});
+
+test("archivePath is named in the placeholder and the original is returned for archiving", () => {
+  const r = maskObservations(convo(6), { keepRecentToolResults: 2, archivePath: "/p/archive/x.txt" });
+  const first = r.messages.find((m) => m.role === "tool")!;
+  assert.match(String(first.content), /read_file \/p\/archive\/x\.txt and look for "entry c0"/);
+  assert.equal(r.archived.length, 4);
+  assert.ok(r.archived[0].text.startsWith("line0 "), "the archived text is the untouched original");
+  assert.ok(!String(maskObservations(convo(6)).messages.find((m) => m.role === "tool")!.content).includes("FULL text is saved"), "no path claimed when none given");
+});

@@ -2,6 +2,7 @@ import type { ChatMessage, ToolDef } from "../backend/types.js";
 import type { ModelBackend } from "../backend/types.js";
 import { Checkpoint, readCheckpoint, writeCheckpoint } from "./checkpoint.js";
 import { readNotes } from "./notes.js";
+import { messagesToEntries, newArchivePath, writeArchive } from "./archive.js";
 
 export interface CompactionThresholds {
   /** Fraction of the model's context window (0-1) that triggers auto-compaction. */
@@ -66,6 +67,11 @@ export interface CompactionDetail {
   droppedPreview: string[];
   keptCount: number;
   keptTokens: number;
+  /** 요약 요청에 실제로 들어간 입력 토큰(추정). 컴팩션이 느릴 때 prefill 비용(입력 토큰에 비례)을
+   *  가늠하는 근거 — 상태 줄에 같이 표시한다. 빠른 경로(LLM 호출 없음)에서는 0. */
+  summaryInputTokens?: number;
+  /** 요약으로 대체된 구간의 전문을 보관한 파일(쓰지 못했으면 없음). */
+  archivePath?: string;
   /** What replaced the dropped messages — the same text written to the
    *  checkpoint and the system prompt. */
   summary: string;
@@ -228,6 +234,35 @@ export async function shouldCompact(
   return used >= thresholds.contextWindowTokens * thresholds.autoTriggerRatio;
 }
 
+/** 요약 입력의 메시지 하나가 차지할 수 있는 토큰 상한.
+ *
+ *  실측(2026-10-14, 사용자 세션의 컴팩션 58.3초): 요약 요청이 8,103토큰을 **전부 다시 처리**했다
+ *  (prefill 36.6초 + 생성 15.8초). 캐시를 재사용하지 못했다 — 요약 지시를 마지막 user 메시지로 붙이면
+ *  채팅 템플릿이 앞의 assistant 메시지를 다르게 렌더링하고, tools 를 빼면 시스템 영역부터 달라진다
+ *  (원문 그대로 + tools 포함으로 보내도 1,081토큰만 재사용). 그러니 prefill 은 공짜가 아니고 입력
+ *  토큰에 비례한다(약 221 tok/s). 요약에 큰 도구 출력 전체는 필요 없다 — 머리와 꼬리면 충분하다. */
+export const SUMMARY_MESSAGE_MAX_TOKENS = 300;
+
+/** 길면 가운데를 잘라낸다(머리 60% + 꼬리 40%). 토큰은 estimateTextTokens 기준. */
+export function shrinkMiddle(text: string, maxTokens: number): string {
+  if (!Number.isFinite(maxTokens) || estimateTextTokens(text) <= maxTokens) return text;
+  const fit = (from: "head" | "tail", budget: number): string => {
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      const part = from === "head" ? text.slice(0, mid) : text.slice(text.length - mid);
+      if (estimateTextTokens(part) <= budget) lo = mid;
+      else hi = mid - 1;
+    }
+    return from === "head" ? text.slice(0, lo) : text.slice(text.length - lo);
+  };
+  const head = fit("head", Math.floor(maxTokens * 0.6));
+  const tail = fit("tail", Math.floor(maxTokens * 0.4));
+  const omitted = text.length - head.length - tail.length;
+  return `${head.trimEnd()}\n[… ${omitted} chars omitted …]\n${tail.trimStart()}`;
+}
+
 /**
  * The summary request is a plain (non-tool) completion call, but
  * `toSummarize` is an arbitrary slice of the real conversation and can end
@@ -240,18 +275,21 @@ export async function shouldCompact(
  * every tool_calls/tool-role message down to plain describable text so the
  * summary request never contains anything tool-related to validate.
  */
-function sanitizeForSummary(messages: ChatMessage[]): ChatMessage[] {
+function sanitizeForSummary(messages: ChatMessage[], perMessageTokens = Infinity): ChatMessage[] {
+  const cap = (text: string, tokens = perMessageTokens): string => shrinkMiddle(text, tokens);
   const converted = messages.map((m): ChatMessage => {
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
       const calls = m.tool_calls
-        .map((tc) => `[called tool ${tc.function.name} with ${tc.function.arguments}]`)
+        .map((tc) => `[called tool ${tc.function.name} with ${cap(tc.function.arguments, Math.ceil(perMessageTokens / 2))}]`)
         .join(" ");
-      return { role: "assistant", content: [m.content, calls].filter(Boolean).join(" ") };
+      return { role: "assistant", content: cap([m.content, calls].filter(Boolean).join(" ")) };
     }
     if (m.role === "tool") {
-      return { role: "assistant", content: `[tool result] ${m.content ?? ""}` };
+      return { role: "assistant", content: `[tool result] ${cap(m.content ?? "")}` };
     }
-    return m;
+    // 사용자 발화는 요약의 핵심 재료라 다른 메시지보다 두 배까지 허용한다.
+    if (m.role === "user" && typeof m.content === "string") return { ...m, content: cap(m.content, perMessageTokens * 2) };
+    return typeof m.content === "string" ? { ...m, content: cap(m.content) } : m;
   });
 
   // Converting tool_calls/tool messages to role:"assistant" can leave
@@ -452,7 +490,9 @@ export async function runCompaction(
   summaryMaxTokensCap?: number,
   // 이 토큰 수 미만의 삭제 구간은 LLM 요약을 건너뛴다(0 = 끔). 운영 경로(loop.ts)만
   // FAST_PATH_INPUT_TOKENS 를 넘긴다 — 기본을 끔으로 둬서 호출자 계약을 안 바꾼다.
-  fastPathInputTokens = 0
+  fastPathInputTokens = 0,
+  // 같은 컴팩션에서 앞서(규칙 단계) 만든 보관 파일 — 요약의 보관 목록에 함께 올린다.
+  extraArchiveRefs: string[] = []
 ): Promise<CompactionResult> {
   const checkpoint: Checkpoint = {
     version: 1,
@@ -462,6 +502,11 @@ export async function runCompaction(
   await writeCheckpoint(projectRoot, checkpoint);
 
   const { keepTail, toSummarize } = selectKeptTail(messages, contextWindowTokens, tailBudgetFraction);
+
+  // 무손실 보관: 요약으로 대체될 구간의 **전문** 을 먼저 파일로 남긴다(요약 요청보다 앞 — 요약이
+  // 실패해도 원문은 남는다). 실패해도 컴팩션은 계속한다.
+  const archivePath = newArchivePath(projectRoot, "compaction");
+  const archived = toSummarize.length > 0 && (await writeArchive(projectRoot, archivePath, messagesToEntries(toSummarize)));
 
   // No caller currently populates mustPreserve (loop.ts always passes []) —
   // rather than silently referencing an always-empty list ("...and the
@@ -479,7 +524,7 @@ export async function runCompaction(
   // message below is kept verbatim — see the cache-prefix note below.
   const originalSystem = messages.find((m) => m.role === "system");
   const originalSystemText = typeof originalSystem?.content === "string" ? originalSystem.content : "";
-  const summaryInput = sanitizeForSummary(toSummarize);
+  const summaryInput = sanitizeForSummary(toSummarize, SUMMARY_MESSAGE_MAX_TOKENS);
 
   // Reported directly: "컴팩션의 시간이 오래걸리는데" — compaction is slow.
   //
@@ -629,7 +674,8 @@ export async function runCompaction(
   // 문맥 유실 방지: 사용자 요청 원문은 LLM 이 요약하며 변형·누락하는 1순위 항목이다.
   // 코드가 직접 이어 붙이고(생성 비용 0), 컴팩션을 거듭해도 최초 요청과 최근 요청을 유지한다.
   const anchorItems = mergeAnchor(prevParts.items, extractUserRequests(toSummarize));
-  const summaryText = [body, renderAnchor(anchorItems)].filter(Boolean).join("\n\n") || "(summary unavailable)";
+  const archiveRefs = mergeArchiveRefs(prevParts.archives, [...extraArchiveRefs, ...(archived ? [archivePath] : [])]);
+  const summaryText = [body, renderAnchor(anchorItems), renderArchiveRefs(archiveRefs)].filter(Boolean).join("\n\n") || "(summary unavailable)";
 
   // Preserve the ORIGINAL system prompt (base prompt + injected .harnesside/rules),
   // not just the compaction summary. selectKeptTail() keeps only the size-budgeted
@@ -698,6 +744,8 @@ export async function runCompaction(
     droppedPreview: toSummarize.slice(0, DETAIL_PREVIEW_CAP).map(previewLine),
     keptCount: tail.length,
     keptTokens: tail.reduce((n, m) => n + estimateTextTokens(messageText(m)), 0),
+    ...(archived ? { archivePath } : {}),
+    summaryInputTokens: skipLlm ? 0 : summaryRequest.reduce((n, m) => n + estimateTextTokens(messageText(m)), 0),
     summary: summaryText,
   };
   if (toSummarize.length > DETAIL_PREVIEW_CAP) {
@@ -757,16 +805,37 @@ export function renderAnchor(items: string[]): string {
   return items.length ? `${ANCHOR_HEADER}\n${items.map((t, i) => `${i + 1}. ${t}`).join("\n")}` : "";
 }
 
-/** 요약 본문과 앵커 항목을 분리한다. 앵커는 항상 요약 끝에 붙는다. */
-export function splitAnchor(summary: string): { body: string; items: string[] } {
-  const idx = summary.indexOf(ANCHOR_HEADER);
-  if (idx === -1) return { body: summary.trim(), items: [] };
-  const items = summary
-    .slice(idx + ANCHOR_HEADER.length)
-    .split("\n")
-    .map((l) => l.replace(/^\d+\.\s+/, "").trim())
-    .filter(Boolean);
-  return { body: summary.slice(0, idx).trim(), items };
+const ARCHIVE_HEADER =
+  "## Archived transcripts (the FULL text of what was compacted is saved in these files. If the user asks about anything not visible in this conversation, " +
+  "grep -rn <keyword> or read_file these files BEFORE saying you do not know)";
+/** 요약에 남기는 보관 파일 경로 수(최신 우선). 오래된 것은 디스크에는 남아 있지만 더는 가리키지 않는다. */
+const MAX_ARCHIVE_REFS = 5;
+
+export function renderArchiveRefs(paths: string[]): string {
+  return paths.length ? `${ARCHIVE_HEADER}\n${paths.map((p) => `- ${p}`).join("\n")}` : "";
+}
+
+export function mergeArchiveRefs(prev: string[], added: string[]): string[] {
+  const all = [...prev, ...added].filter((p, i, a) => a.indexOf(p) === i);
+  return all.slice(Math.max(0, all.length - MAX_ARCHIVE_REFS));
+}
+
+/** 요약을 본문 / 사용자 요청 앵커 / 보관 경로로 분리한다. 앵커와 보관 블록은 항상 요약 끝에 이 순서로 붙는다. */
+export function splitAnchor(summary: string): { body: string; items: string[]; archives: string[] } {
+  const a = summary.indexOf(ANCHOR_HEADER);
+  const z = summary.indexOf(ARCHIVE_HEADER);
+  const starts = [a, z].filter((i) => i !== -1);
+  if (starts.length === 0) return { body: summary.trim(), items: [], archives: [] };
+  const bodyEnd = Math.min(...starts);
+  const lines = (from: number, to: number, header: string) =>
+    summary
+      .slice(from + header.length, to)
+      .split("\n")
+      .map((l) => l.replace(/^(\d+\.|-)\s+/, "").trim())
+      .filter(Boolean);
+  const items = a === -1 ? [] : lines(a, z !== -1 && z > a ? z : summary.length, ANCHOR_HEADER);
+  const archives = z === -1 ? [] : lines(z, a !== -1 && a > z ? a : summary.length, ARCHIVE_HEADER);
+  return { body: summary.slice(0, bodyEnd).trim(), items, archives };
 }
 
 /** 빠른 경로용: LLM 없이 최근 도구 호출을 결정적으로 나열. */
@@ -799,13 +868,16 @@ export function buildSummaryInstruction(mustPreserveClause: string, hasPreviousS
     mustPreserveClause +
     "\n\n" +
     update +
-    "Use exactly these sections (omit one only if truly empty):\n" +
-    "## Goal — what the user asked for, in their own words where they gave requirements\n" +
-    "## Constraints & decisions — rules, preferences, choices made and WHY\n" +
-    "## Progress — what is done, what is in progress\n" +
-    "## State — exact file paths, commands, identifiers, error messages that matter next\n" +
-    "## Dead ends — approaches that failed, so they are not retried\n" +
-    "## Next — the immediate next step\n\n" +
+    "Use exactly these section headings, in this order (omit a section only if truly empty). " +
+    "Write ONLY the heading text, never the explanation after the colon:\n" +
+    "## Goal: what the user asked for, in their own words where they gave requirements\n" +
+    "## Constraints & decisions: rules, preferences, choices made and WHY\n" +
+    "## Next: the immediate next step\n" +
+    "## State: exact file paths, commands, identifiers, error messages that matter next\n" +
+    "## Dead ends: approaches that failed, so they are not retried\n" +
+    "## Progress: what is done, what is in progress\n\n" +
+    // 순서가 중요하다: 상한(max_tokens)에서 잘리면 뒤쪽이 사라진다. 길어지기 쉬운 Progress 를
+    // 맨 뒤에 두어, 잘려도 다음 행동에 필요한 Goal/Constraints/Next/State 는 남게 한다.
     `Be dense and concrete; stay under about ${maxTokens} tokens.\n\nNow write the summary of the conversation above. Output only the summary.`
   );
 }

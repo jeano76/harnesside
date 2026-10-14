@@ -21,6 +21,11 @@ export interface MaskingOptions {
   minChars?: number;
   /** 마스킹 후에도 남기는 앞부분 길이(기본 200자). 오류처럼 보이면 3배. */
   keepChars?: number;
+  /** 원문을 보관한 파일. 있으면 자리표시자가 그 경로와 항목 id 를 알려준다(호출자가 쓰기를 보장한다). */
+  archivePath?: string;
+  /** 이만큼 줄이면 멈춘다 — **오래된 것부터** 필요한 만큼만 마스킹하고 나머지는 원문 그대로 둔다.
+   *  없으면 보호 대상을 뺀 전부를 마스킹한다. */
+  needTokens?: number;
 }
 
 export const DEFAULT_MASKING = {
@@ -35,6 +40,8 @@ export const MASK_MARKER = "[tool output omitted by compaction";
 const ERROR_RE = /\b(error|fail(ed|ure)?|exception|traceback|panic|denied|ENOENT|ECONN\w*)\b|✗|FAIL/i;
 
 export interface MaskResult {
+  /** 마스킹된 도구 출력의 원문 — 보관 파일에 쓸 항목. */
+  archived: { id: string; label: string; text: string }[];
   messages: ChatMessage[];
   maskedCount: number;
   /** 추정 절감 토큰. */
@@ -45,7 +52,7 @@ export interface MaskResult {
 
 export function maskObservations(messages: ChatMessage[], opts: MaskingOptions = {}): MaskResult {
   const o = { ...DEFAULT_MASKING, ...opts };
-  const none: MaskResult = { messages, maskedCount: 0, savedTokens: 0, preview: [] };
+  const none: MaskResult = { archived: [], messages, maskedCount: 0, savedTokens: 0, preview: [] };
   if (!o.enabled) return none;
 
   // tool_call_id → "name(args…)" 라벨. 나중에 모델이 "무엇의 출력이었나"를 알 수 있게 한다.
@@ -65,22 +72,30 @@ export function maskObservations(messages: ChatMessage[], opts: MaskingOptions =
   let maskedCount = 0;
   let savedTokens = 0;
   const preview: string[] = [];
+  const archived: MaskResult["archived"] = [];
   const out = messages.map((m, i): ChatMessage => {
     if (m.role !== "tool" || protect.has(i) || typeof m.content !== "string") return m;
+    if (o.needTokens !== undefined && savedTokens >= o.needTokens) return m; // 필요한 만큼 줄였다 — 나머지는 원문 유지
     const text = m.content;
     if (text.length < o.minChars || text.startsWith(MASK_MARKER)) return m;
 
     const keep = ERROR_RE.test(text) ? o.keepChars * 3 : o.keepChars;
     const head = text.slice(0, keep).trimEnd();
     const label = (m.tool_call_id && labels.get(m.tool_call_id)) || "tool";
+    const id = m.tool_call_id || `m${i}`;
+    // 명령형으로 쓴다: "보관돼 있다" 는 서술만으로는 모델이 읽으러 가지 않고 "그 정보는 없다" 고 답했다(실측).
+    const where = o.archivePath
+      ? `the FULL text is saved — to see it, read_file ${o.archivePath} and look for "entry ${id}"; or re-run the tool`
+      : "re-run the tool if you need it again";
     const replaced =
-      `${MASK_MARKER}: ${label} — ${text.length} chars; re-run the tool if you need it again]\n${head}` +
+      `${MASK_MARKER}: ${label} — ${text.length} chars; ${where}]\n${head}` +
       (head.length < text.length ? " …" : "");
     if (replaced.length >= text.length) return m;
     maskedCount++;
     savedTokens += Math.max(0, estimateTextTokens(text) - estimateTextTokens(replaced));
+    archived.push({ id, label, text });
     if (preview.length < 8) preview.push(`[tool] ${label.slice(0, 70)} — ${text.length}자`);
     return { ...m, content: replaced };
   });
-  return maskedCount === 0 ? none : { messages: out, maskedCount, savedTokens, preview };
+  return maskedCount === 0 ? none : { archived, messages: out, maskedCount, savedTokens, preview };
 }

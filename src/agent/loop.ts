@@ -23,6 +23,7 @@ import {
 import { clearCheckpoint, writeCheckpoint, readCheckpoint } from "../compaction/checkpoint.js";
 import type { Checkpoint } from "../compaction/checkpoint.js";
 import { maskObservations } from "../compaction/masking.js";
+import { ensureArchiveWritable, newArchivePath, writeArchive } from "../compaction/archive.js";
 import { stripToolCallTemplateLeak } from "./textSanitize.js";
 import { salvagePartialFileWrite } from "./toolCallSalvage.js";
 import { existsSync } from "node:fs";
@@ -368,6 +369,8 @@ export interface AgentLoopOptions {
 /** 규칙 기반만으로 끝내려면 압축 후 목표(트리거×targetRatio)의 이 배수 이하여야 한다 —
  *  요약 경로보다 덜 줄이므로 다음 압축까지 여유를 확보하려는 완충. */
 const RULE_ONLY_TARGET_SLACK = 1.5;
+/** 추정 오차 여유: 필요한 절감량보다 이만큼 더 마스킹해 한 번에 목표에 닿게 한다. */
+const MASK_NEED_MARGIN = 1.15;
 
 export class AgentLoop {
   private messages: ChatMessage[];
@@ -1788,6 +1791,100 @@ export class AgentLoop {
     return { tailBudgetFraction, summaryMaxTokens };
   }
 
+  /**
+   * 규칙 기반 1단계. 끝났으면(요약 불필요) true.
+   *
+   * 문맥을 최대한 남기는 것이 목적이라 세 가지를 지킨다:
+   * 1. **필요한 만큼만** — 목표 토큰에 닿을 때까지 **오래된 것부터** 마스킹하고 나머지는 원문 그대로 둔다
+   *    (예전에는 보호 대상 밖의 전부를 지웠다).
+   * 2. **원문은 보관** — 줄어든 도구 출력의 전문을 `.harnesside/state/archive/` 에 쓰고 자리표시자에 경로를
+   *    적는다. 모델이 정확한 세부가 필요하면 `read_file` 로 되찾는다.
+   * 3. 수동 `/compact` 는 요약을 기대하므로 규칙만으로 끝내지 않는다(마스킹은 하되 요약 경로로 넘어간다).
+   */
+  /** 규칙 단계가 원문을 보관했는데 요약 경로로 넘어간 경우, 그 파일을 요약의 보관 목록에 싣기 위한 임시 값. */
+  private maskedArchiveForSummary: string | undefined;
+
+  private async ruleBasedCompaction(reason: Checkpoint["reason"], partial: Omit<Checkpoint, "version" | "timestamp">): Promise<boolean> {
+    const root = this.opts.projectRoot;
+    const startedAt = Date.now();
+    const targetRatio = this.thresholds.postCompactionTargetRatio ?? DEFAULT_POST_COMPACTION_TARGET_RATIO;
+    const ruleOnlyTarget = Math.floor(
+      this.thresholds.contextWindowTokens * this.thresholds.autoTriggerRatio * targetRatio * RULE_ONLY_TARGET_SLACK
+    );
+    const estimate = async (): Promise<number | null> => {
+      try {
+        const n = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
+        this.estimateCallsExact++;
+        return n;
+      } catch {
+        return null;
+      }
+    };
+
+    // 마스킹할 것이 있는지부터 값싸게(순수 계산) 본다 — 없으면 토큰 추정(HTTP)도 보관 경로 확인도 하지 않는다.
+    if (maskObservations(this.messages, this.thresholds.masking).maskedCount === 0) return false;
+
+    const before = await estimate();
+    // 보관할 수 있을 때만 자리표시자에 경로를 적는다 — 없는 파일을 가리키면 거짓말이다.
+    const archivePath = (await ensureArchiveWritable(root)) ? newArchivePath(root, "masked") : undefined;
+    const opts = { ...this.thresholds.masking, ...(archivePath ? { archivePath } : {}) };
+    // 마스킹 절감량은 글자수 기반 근사(estimateTextTokens)로 재는데, 코드·로그는 실제 토큰 수가 그보다 많다
+    // (실측: 정확한 추정이 근사의 1.3~2배). 정확한 값과의 비율로 필요량을 근사 단위로 바꿔야 1차에 목표에 닿는다.
+    const approx = estimateTokensFast(this.messages, toolDefsJson());
+    const scale = before !== null && approx > 0 ? Math.min(3, Math.max(0.5, before / approx)) : 1;
+    const need =
+      reason !== "manual" && before !== null ? Math.max(1, Math.ceil(((before - ruleOnlyTarget) / scale) * MASK_NEED_MARGIN)) : undefined;
+
+    const first = maskObservations(this.messages, { ...opts, ...(need !== undefined ? { needTokens: need } : {}) });
+    if (first.maskedCount === 0) return false;
+    this.messages = first.messages;
+    const archived = [...first.archived];
+    let maskedCount = first.maskedCount;
+    let savedTokens = first.savedTokens;
+
+    let used = await estimate();
+    // 필요한 만큼만 줄였는데 추정 오차로 모자랐다 — 남은 것을 마저 마스킹한다.
+    if (need !== undefined && used !== null && used > ruleOnlyTarget) {
+      const rest = maskObservations(this.messages, opts);
+      if (rest.maskedCount > 0) {
+        this.messages = rest.messages;
+        archived.push(...rest.archived);
+        maskedCount += rest.maskedCount;
+        savedTokens += rest.savedTokens;
+        used = await estimate();
+      }
+    }
+
+    const wrote = archivePath ? await writeArchive(root, archivePath, archived) : false;
+    if (wrote) this.maskedArchiveForSummary = archivePath;
+    if (archivePath && !wrote) {
+      this.opts.onStatus?.("[compaction] warning: could not write the archive — the omitted tool outputs were not saved to disk.");
+    }
+    if (reason === "manual" || used === null || used > ruleOnlyTarget) return false;
+
+    const timestamp = new Date().toISOString();
+    await writeCheckpoint(root, { version: 1, timestamp, ...partial });
+    this.progress.onCompaction();
+    this.lastCompactionUsed = used;
+    this.opts.onStatus?.(
+      `[compaction] rule-based ${((Date.now() - startedAt) / 1000).toFixed(1)}s — ` +
+        `omitted ${maskedCount} old tool outputs (~${savedTokens} tokens saved), everything else kept verbatim, no summary generated` +
+        (wrote ? `; originals archived in ${archivePath}` : "")
+    );
+    this.opts.onStatus?.(`[compaction complete] ${timestamp}`);
+    this.opts.onCompactionStatus?.("complete", timestamp);
+    this.opts.onCompactionDetail?.({
+      droppedCount: maskedCount,
+      droppedTokens: savedTokens,
+      droppedPreview: first.preview,
+      keptCount: this.messages.length,
+      keptTokens: used,
+      ...(wrote ? { archivePath } : {}),
+      summary: "(rule-based: only old tool outputs were replaced with placeholders — the conversation itself is unchanged)",
+    });
+    return true;
+  }
+
   private async compact(
     reason: Checkpoint["reason"],
     pendingToolCall: Checkpoint["pendingToolCall"],
@@ -1803,7 +1900,7 @@ export class AgentLoop {
     // compaction starts, not just the terser "[compaction complete]" line
     // that only ever appeared after the fact.
     this.opts.onStatus?.(
-      "[compaction] 지금 대화내용의 중요한 요점을 다시 정리하여 메모리 공간을 확보합니다. 잠시후 결과를 알려드리겠습니다."
+      "[compaction] Compacting the conversation to free up context space. The result will be reported shortly."
     );
     const partial: Omit<Checkpoint, "version" | "timestamp"> = {
       reason,
@@ -1814,47 +1911,9 @@ export class AgentLoop {
       pendingToolCall,
       mustPreserve: [],
     };
-    // 1단계(규칙, 0초): 오래된 도구 출력을 자리표시자로 바꾼다. LLM 요약의 비용은
-    // 생성 시간(38 tok/s)이 전부인데, 컨텍스트 대부분은 다시 실행하면 복원되는 도구
-    // 출력이라 이것만으로 충분히 줄어드는 경우가 많다. 충분하면 요약을 아예 생략하고,
-    // 부족하면 마스킹된(=더 작은) 대화를 아래 요약 경로에 넘긴다. 수동 /compact 는
-    // 사용자가 요약을 기대하므로 건너뛰지 않는다.
-    const masked = maskObservations(this.messages, this.thresholds.masking);
-    if (masked.maskedCount > 0) {
-      const maskStartedAt = Date.now();
-      this.messages = masked.messages;
-      try {
-        const used = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
-        this.estimateCallsExact++;
-        const targetRatio = this.thresholds.postCompactionTargetRatio ?? DEFAULT_POST_COMPACTION_TARGET_RATIO;
-        const ruleOnlyTarget = Math.floor(
-          this.thresholds.contextWindowTokens * this.thresholds.autoTriggerRatio * targetRatio * RULE_ONLY_TARGET_SLACK
-        );
-        if (reason !== "manual" && used <= ruleOnlyTarget) {
-          const timestamp = new Date().toISOString();
-          await writeCheckpoint(this.opts.projectRoot, { version: 1, timestamp, ...partial });
-          this.progress.onCompaction();
-          this.lastCompactionUsed = used;
-          this.opts.onStatus?.(
-            `[compaction] rule-based ${((Date.now() - maskStartedAt) / 1000).toFixed(1)}s — ` +
-              `omitted ${masked.maskedCount} old tool outputs (~${masked.savedTokens} tokens saved), no summary generated`
-          );
-          this.opts.onStatus?.(`[compaction complete] ${timestamp}`);
-          this.opts.onCompactionStatus?.("complete", timestamp);
-          this.opts.onCompactionDetail?.({
-            droppedCount: masked.maskedCount,
-            droppedTokens: masked.savedTokens,
-            droppedPreview: masked.preview,
-            keptCount: this.messages.length,
-            keptTokens: used,
-            summary: "(rule-based: only old tool outputs were replaced with placeholders — the conversation itself is unchanged)",
-          });
-          return;
-        }
-      } catch {
-        // 추정 실패 — 마스킹은 이미 적용됐으니 그대로 LLM 경로로 진행한다.
-      }
-    }
+    // 1단계(규칙, 0초): 오래된 도구 출력을 자리표시자로 바꾼다 — 필요한 만큼만, 원문은 보관하고.
+    // 충분하면 요약을 아예 생략하고, 부족하면 마스킹된(=더 작은) 대화를 아래 요약 경로에 넘긴다.
+    if (await this.ruleBasedCompaction(reason, partial)) return;
     // The compaction summary request is a chat() call like any other, so it
     // can hit the exact same two transient, non-deterministic backend
     // failures the main turn loop already retries once (connection timeout
@@ -1893,8 +1952,10 @@ export class AgentLoop {
           this.thresholds.contextWindowTokens,
           budget.tailBudgetFraction,
           budget.summaryMaxTokens,
-          this.thresholds.fastPathInputTokens ?? FAST_PATH_INPUT_TOKENS
+          this.thresholds.fastPathInputTokens ?? FAST_PATH_INPUT_TOKENS,
+          this.maskedArchiveForSummary ? [this.maskedArchiveForSummary] : []
         );
+        this.maskedArchiveForSummary = undefined;
         this.messages = messages;
         this.progress.onCompaction();
         // Baseline for maybeCompact()'s minimum-growth guard. A failed
@@ -1910,7 +1971,7 @@ export class AgentLoop {
         }
         this.opts.onStatus?.(
           `[compaction] ${((Date.now() - startedAt) / 1000).toFixed(1)}s ` +
-          `(요약 ${detail.summary.length}자, 요약 예산 ${budget.summaryMaxTokens} 토큰)`
+          `(요약 ${detail.summary.length}자, 요약 예산 ${budget.summaryMaxTokens} 토큰, 입력 ~${detail.summaryInputTokens ?? "?"} 토큰)`
         );
         // Working notes go back in with the summary, so what the model had
         // established survives the compaction verbatim.

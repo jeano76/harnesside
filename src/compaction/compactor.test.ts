@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { estimateTokens, shouldCompact, shouldEarlyCompact, buildResumePrompt, runCompaction, recommendThresholds, DEFAULT_TAIL_BUDGET_FRACTION, composeSystemMessage, selectKeptTail, splitSystemMessage, stripResumePrefix, estimateTextTokens, CONTINUE_AFTER_COMPACTION, buildSummaryInstruction, splitAnchor, FAST_PATH_INPUT_TOKENS } from "./compactor.js";
+import { estimateTokens, shouldCompact, shouldEarlyCompact, buildResumePrompt, runCompaction, recommendThresholds, DEFAULT_TAIL_BUDGET_FRACTION, composeSystemMessage, selectKeptTail, splitSystemMessage, stripResumePrefix, estimateTextTokens, CONTINUE_AFTER_COMPACTION, buildSummaryInstruction, shrinkMiddle, splitAnchor, FAST_PATH_INPUT_TOKENS } from "./compactor.js";
 import { writeCheckpoint, Checkpoint } from "./checkpoint.js";
 import type { ChatCompletionRequest, ChatMessage, ChatCompletionResponse, ModelBackend } from "../backend/types.js";
 
@@ -313,6 +313,12 @@ test("runCompaction returns a detail report naming what was dropped and what rep
 // whole as the tail — which would make toSummarize empty and collapse
 // summaryMaxTokens straight to the 128 floor for the wrong reason.
 const LONG_FILLER_TEXT = "The quick brown fox jumps over the lazy dog. ".repeat(6000);
+// 긴 대화: 요약 입력은 메시지당 상한이 있어(SUMMARY_MESSAGE_MAX_TOKENS) 거대한 메시지 하나로는
+// 입력이 커지지 않는다. 같은 분량을 작은 메시지 여러 개로 만든다.
+const LONG_HISTORY: ChatMessage[] = Array.from({ length: 1000 }, (_, i) => ({
+  role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+  content: "The quick brown fox jumps over the lazy dog. ".repeat(20),
+}));
 
 test("runCompaction sets max_tokens on the summary request, scaled to the real context window", () =>
   (async () => {
@@ -321,7 +327,7 @@ test("runCompaction sets max_tokens on the summary request, scaled to the real c
       const { backend, lastRequest } = strictNoToolsBackend();
       const messages: ChatMessage[] = [
         { role: "system", content: "sys" },
-        { role: "user", content: LONG_FILLER_TEXT },
+        ...LONG_HISTORY,
         { role: "assistant", content: "hi" },
       ];
       const partial = {
@@ -365,7 +371,7 @@ test("the summary budget defaults to 768 and the retry cap can only tighten it",
       const { backend, lastRequest } = strictNoToolsBackend();
       const messages: ChatMessage[] = [
         { role: "system", content: "sys" },
-        { role: "user", content: LONG_FILLER_TEXT },
+        ...LONG_HISTORY,
         { role: "assistant", content: "hi" },
       ];
       const partial = { reason: "manual" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
@@ -411,7 +417,7 @@ test("runCompaction's summary max_tokens has a floor for a small context window,
       // wrong reason — not the window-based math this test targets.
       const messages: ChatMessage[] = [
         { role: "system", content: "sys" },
-        { role: "user", content: LONG_FILLER_TEXT },
+        ...LONG_HISTORY,
         { role: "assistant", content: "hi" },
       ];
       const partial = { reason: "manual" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
@@ -1210,6 +1216,7 @@ test("P3 shouldEarlyCompact: 실패 2연속+0.5 초과면 조기 압축", () => 
 test("summary instruction is structured and asks to UPDATE only when a previous summary exists", () => {
   const fresh = buildSummaryInstruction(".", false, 512);
   assert.ok(fresh.includes("## Dead ends") && fresh.includes("## Next"));
+  assert.ok(fresh.indexOf("## Next") < fresh.indexOf("## Progress"), "Progress goes last so truncation drops it first");
   assert.ok(!fresh.includes("UPDATE it"));
   assert.ok(fresh.includes("512 tokens"));
   assert.ok(buildSummaryInstruction(".", true, 512).includes("UPDATE it"));
@@ -1306,6 +1313,111 @@ test("fast path: a tiny dropped slice skips the LLM entirely but still anchors u
       // 기본값(0)은 기존 계약 그대로 — 항상 모델을 부른다.
       await runCompaction(dir, msgs, backend, "m", partial, 30);
       assert.equal(calls, 1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  })());
+
+test("shrinkMiddle keeps the head and tail of an oversized message and says how much it dropped", () => {
+  const text = "HEAD-MARK " + "filler ".repeat(2000) + " TAIL-MARK";
+  const out = shrinkMiddle(text, 100);
+  assert.ok(out.startsWith("HEAD-MARK"));
+  assert.ok(out.endsWith("TAIL-MARK"));
+  assert.match(out, /\[… \d+ chars omitted …\]/);
+  assert.ok(estimateTextTokens(out) <= 130, `got ${estimateTextTokens(out)}`);
+  assert.equal(shrinkMiddle("short", 100), "short", "small text is untouched");
+  assert.equal(shrinkMiddle(text, Infinity), text);
+});
+
+test("the summary request shrinks oversized tool output but the conversation itself is unchanged", () =>
+  (async () => {
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
+    try {
+      const { backend, lastRequest } = strictNoToolsBackend();
+      const big = "OUTPUT-START " + "line of tool output\n".repeat(3000) + " OUTPUT-END";
+      const messages: ChatMessage[] = [{ role: "system", content: "sys" }];
+      for (let i = 0; i < 8; i++) {
+        messages.push({ role: "assistant", content: null, tool_calls: [{ id: `c${i}`, type: "function", function: { name: "read_file", arguments: "{}" } }] });
+        messages.push({ role: "tool", tool_call_id: `c${i}`, content: big });
+        messages.push({ role: "user", content: `next ${i}` });
+      }
+      const original = JSON.stringify(messages);
+      const partial = { reason: "auto-threshold" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
+      await runCompaction(dir, messages, backend, "m", partial, 32768);
+      const sent = lastRequest()!;
+      const sentTokens = sent.messages.reduce((n, m) => n + estimateTextTokens(String(m.content ?? "")), 0);
+      assert.ok(sentTokens < 8 * 450, `summary input should be bounded, got ${sentTokens} tokens`);
+      assert.ok(sent.messages.some((m) => String(m.content).includes("chars omitted")));
+      assert.equal(JSON.stringify(messages), original, "the caller's messages must not be mutated");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  })());
+
+test("the summarized part is archived in full, the summary points at it, and repeated compactions keep a bounded list", () =>
+  (async () => {
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
+    try {
+      const backend: ModelBackend = {
+        async chat() {
+          return { choices: [{ message: { role: "assistant", content: "## Goal:\nsome model summary text here" }, finish_reason: "stop" }] };
+        },
+        async listModels() {
+          return [];
+        },
+      };
+      const partial = { reason: "auto-threshold" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
+      const convo = (tag: string): ChatMessage[] =>
+        Array.from({ length: 20 }, (_, i) => ({
+          role: (i % 2 ? "assistant" : "user") as "user" | "assistant",
+          content: i === 3 ? `DETAIL-${tag} ` + "y".repeat(400) : "x".repeat(400),
+        }));
+      let msgs: ChatMessage[] = [{ role: "system", content: "BASE" }, ...convo("A")];
+      const paths = new Set<string>();
+      let sys = "";
+      let lastDetail: { archivePath?: string } = {};
+      for (const tag of ["A", "B", "C", "D", "E", "F", "G"]) {
+        if (tag !== "A") msgs = [...msgs, ...convo(tag)];
+        const r = await runCompaction(dir, msgs, backend, "m", partial, 4096);
+        msgs = r.messages;
+        sys = String(msgs[0].content);
+        lastDetail = r.detail;
+        if (r.detail.archivePath) paths.add(r.detail.archivePath);
+      }
+      assert.equal(paths.size, 7, "every compaction wrote its own archive");
+      const first = [...paths][0];
+      assert.ok((await readFile(first, "utf8")).includes("DETAIL-A"), "the first archive holds the full dropped text");
+      const refs = splitAnchor(sys.slice(sys.indexOf("[Compacted"))).archives;
+      assert.ok(refs.length >= 1 && refs.length <= 5, `bounded reference list, got ${refs.length}`);
+      assert.equal(refs[refs.length - 1], lastDetail.archivePath, "the newest archive is always referenced");
+      assert.equal((sys.match(/Archived transcripts/g) ?? []).length, 1, "exactly one archive block, never stacked");
+      assert.ok(sys.includes("User requests (verbatim"), "the user-request anchor is still there");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  })());
+
+test("archives made earlier in the same compaction (the rule stage) are listed in the summary too", () =>
+  (async () => {
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
+    try {
+      const backend: ModelBackend = {
+        async chat() {
+          return { choices: [{ message: { role: "assistant", content: "## Goal:\nsome model summary text here" }, finish_reason: "stop" }] };
+        },
+        async listModels() {
+          return [];
+        },
+      };
+      const partial = { reason: "auto-threshold" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
+      const msgs: ChatMessage[] = [
+        { role: "system", content: "BASE" },
+        ...Array.from({ length: 20 }, (_, i) => ({ role: (i % 2 ? "assistant" : "user") as "user" | "assistant", content: "x".repeat(400) })),
+      ];
+      const r = await runCompaction(dir, msgs, backend, "m", partial, 4096, 0.4, undefined, 0, ["/p/.harnesside/state/archive/rule-stage-masked.txt"]);
+      const refs = splitAnchor(String(r.messages[0].content).slice(String(r.messages[0].content).indexOf("[Compacted"))).archives;
+      assert.ok(refs.includes("/p/.harnesside/state/archive/rule-stage-masked.txt"));
+      assert.equal(refs[refs.length - 1], r.detail.archivePath);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

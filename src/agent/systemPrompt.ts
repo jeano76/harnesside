@@ -288,6 +288,13 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   } else {
     parts.push(`규칙 파일 ${rules.length}개가 적용 중입니다: ${rules.join(", ")}`);
   }
+  // 컨텍스트 압축은 도구 출력·오래된 대화를 대화에서 빼지만 원문은 파일에 보관한다. 모델이 그 사실을
+  // 모르면 "그 정보는 없다" 고 답한다(실측: 보관 파일이 있는데도 도구를 한 번도 부르지 않았다).
+  parts.push(
+    "대화에서 `[tool output omitted by compaction …]` 자리표시자나 요약의 'Archived transcripts' 목록을 보면, " +
+      "그 원문은 파일에 보관돼 있다는 뜻입니다. 이전에 읽거나 실행한 내용을 물었는데 지금 대화에서 보이지 않으면, " +
+      "\"모른다/읽은 적 없다\"고 답하기 전에 먼저 보관 파일을 grep 또는 read_file 로 확인하세요."
+  );
   parts.push(LANGUAGE_RULE.text);
   parts.push(answerFormatSection());
   if (input.extra) parts.push(input.extra);

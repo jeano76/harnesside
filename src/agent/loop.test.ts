@@ -141,7 +141,7 @@ test("AgentLoop captures pendingToolCall when compaction fires mid-batch, and ab
     // A plain-language heads-up the moment compaction STARTS — requested
     // directly: "컴팩션을 수행하는 경우 출력창에 친절하게 ... 안내가
     // 되면 좋겠어" — must come before the "complete" line, not after.
-    const startIdx = statusMessages.findIndex((s) => s.includes("메모리 공간을 확보합니다"));
+    const startIdx = statusMessages.findIndex((s) => s.includes("Compacting the conversation to free up context space"));
     const completeIdx = statusMessages.findIndex((s) => s.includes("compaction complete"));
     assert.ok(startIdx !== -1, "expected the friendly compaction-starting message");
     assert.ok(startIdx < completeIdx, "the starting message must come before the completion message");
@@ -3017,7 +3017,20 @@ test("rule-based compaction (tool-output masking) alone satisfies the target —
     assert.equal(summaryCalls, 0, "masking was enough, so no LLM summary");
     assert.ok(statuses.some((s) => s.includes("rule-based")));
     const after = (loop as any).messages as ChatMessage[];
-    assert.equal(after.filter((m) => String(m.content).startsWith("[tool output omitted")).length, 4);
+    // 필요한 만큼만(오래된 것부터) 마스킹한다 — 보호 대상 밖의 4개를 전부 지우지 않는다.
+    const maskedMsgs = after.filter((m) => String(m.content).startsWith("[tool output omitted"));
+    assert.ok(maskedMsgs.length >= 1 && maskedMsgs.length < 4, `expected only as many as needed, got ${maskedMsgs.length}`);
+    assert.deepEqual(
+      after.map((m, i) => (String(m.content).startsWith("[tool output omitted") ? i : -1)).filter((i) => i >= 0),
+      after.map((m, i) => (String(m.content).startsWith("[tool output omitted") ? i : -1)).filter((i) => i >= 0).sort((a, b) => a - b)
+    );
+    // 마스킹된 원문은 파일로 보관되고, 자리표시자가 그 경로를 가리킨다.
+    const ph = String(maskedMsgs[0].content);
+    const archiveFile = ph.match(/read_file (\S+) and look for/)?.[1];
+    assert.ok(archiveFile, `placeholder should name the archive file: ${ph.slice(0, 200)}`);
+    const archivedText = await (await import("node:fs/promises")).readFile(archiveFile!, "utf8");
+    assert.ok(archivedText.includes("z".repeat(3000)), "the full original output is in the archive");
+    assert.ok(statuses.some((s) => s.includes("originals archived in")));
     assert.equal(after[1].content, "fix the bug", "the conversation itself is intact");
 
     // 수동 /compact 는 규칙만으로 끝내지 않고 요약을 만든다.
