@@ -44,6 +44,11 @@ const KIND_KEY: Record<string, string> = {
   unknown: "ws.kind.unknown",
 };
 
+/** 종류 라벨. 알 수 없는 종류("unknown")는 정보가 아니라 빈칸이라 보여주지 않는다. */
+export function kindLabels(kinds: string[], t: (k: string) => string): string {
+  return kinds.filter((k) => k !== "unknown").map((k) => t(KIND_KEY[k] ?? "ws.kind.unknown")).join("/");
+}
+
 /** `/a/b/c` → [{name:"/",path:"/"},{name:"a",path:"/a"},…] — 경로 막대의 각 칸. */
 export function breadcrumbs(path: string): { name: string; path: string }[] {
   const parts = path.split("/").filter(Boolean);
@@ -173,7 +178,7 @@ export function WorkspaceBar({
         style={{ background: "none", border: 0, color: DIM, fontSize: 11, cursor: "pointer", font: "inherit", padding: 0 }}
       >
         📁 {current ? `${current.name}` : t("ws.checking")}
-        {current && current.kind.length ? ` · ${current.kind.map((k) => t(KIND_KEY[k] ?? "ws.kind.unknown")).join("/")}` : ""}
+        {current && kindLabels(current.kind, t) ? ` · ${kindLabels(current.kind, t)}` : ""}
         {current?.git ? " · git" : ""} ▾
       </button>
 
@@ -200,10 +205,17 @@ export function WorkspaceBar({
               boxShadow: "0 8px 24px rgba(1,4,9,0.6)",
             }}
           >
-            <div style={{ color: DIM, fontSize: 11 }}>{t("ws.explorer.desc")}</div>
+            <div style={{ color: DIM, fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={t("ws.explorer.desc")}>
+              {t("ws.explorer.desc")}
+            </div>
 
             {/* 경로 막대: 각 칸을 눌러 그 폴더로 */}
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2, fontSize: 11 }}>
+            <div
+              ref={(el) => {
+                if (el) el.scrollLeft = el.scrollWidth; // 길어도 현재 폴더(끝)가 보이게
+              }}
+              style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 2, fontSize: 11, overflowX: "auto", whiteSpace: "nowrap", scrollbarWidth: "none" }}
+            >
               {listing &&
                 breadcrumbs(listing.path).map((b, i, arr) => (
                   <React.Fragment key={b.path}>
@@ -295,7 +307,7 @@ export function WorkspaceBar({
                   <span style={{ color: DIM }}>{t("ws.explorer.newFolder")}</span> {preview.to.root}
                   <span style={{ color: DIM }}>
                     {" "}
-                    · {preview.to.kind.map((k) => t(KIND_KEY[k] ?? "ws.kind.unknown")).join("/")} · {t("ws.explorer.rules", { n: preview.to.rules.length })}
+                    {kindLabels(preview.to.kind, t) ? ` · ${kindLabels(preview.to.kind, t)}` : ""} · {t("ws.explorer.rules", { n: preview.to.rules.length })}
                   </span>
                 </div>
                 {preview.warnings.length === 0 && <div style={{ color: DIM, fontSize: 11 }}>{t("ws.explorer.noWarnings")}</div>}

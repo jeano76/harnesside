@@ -548,14 +548,14 @@ export class AgentService {
    */
   async send(text: string): Promise<{ ok: boolean; detail: string; queued?: boolean }> {
     const body = text.trim();
-    if (!body) return { ok: false, detail: "보낼 문장이 없습니다" };
+    if (!body) return { ok: false, detail: "Nothing to send" };
     if (this.state.running) {
       if (this.queue.length >= MAX_QUEUE) {
-        return { ok: false, detail: `대기열이 찼습니다(${MAX_QUEUE}개) — 끝난 뒤 보내십시오` };
+        return { ok: false, detail: `The queue is full (${MAX_QUEUE}) — send after the current turn finishes` };
       }
       this.queue.push(body);
       this.emitQueue();
-      return { ok: true, detail: `대기열 ${this.queue.length}번째에 넣었습니다 — 지금 턴이 끝나면 돕니다`, queued: true };
+      return { ok: true, detail: `Queued as #${this.queue.length} — it runs when the current turn ends`, queued: true };
     }
     const r = await this.runOne(body);
     // 대기열 비우기 — 항목 사이 await 없음 (직렬 보장, 위 주석).
@@ -584,7 +584,7 @@ export class AgentService {
         queue: this.queue.length,
         at: (this.opts.now ?? Date.now)(),
       });
-      return { ok: true, detail: cancelled ? "취소됨" : "완료" };
+      return { ok: true, detail: cancelled ? "Cancelled" : "Done" };
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       this.state = { ...this.state, lastError: detail };
@@ -598,7 +598,7 @@ export class AgentService {
 
   /** M3 — 현재 턴을 취소한다. 상태를 **명시적으로** 남긴다(무음 종료 금지). */
   async cancel(): Promise<{ ok: boolean; detail: string }> {
-    if (!this.state.running) return { ok: false, detail: "진행 중인 턴이 없습니다" };
+    if (!this.state.running) return { ok: false, detail: "No turn is in progress" };
     this.state = { ...this.state, cancelled: true };
     // 취소는 전부 멈춤이다 — 대기열까지 비운다. "다음 것만" 이어가려면
     // 취소 대신 끝까지 두면 된다. 비운 개수를 말하지 않으면 조용히 사라진다.
@@ -607,7 +607,7 @@ export class AgentService {
     if (dropped > 0) this.emitQueue();
     await this.loop?.cancelCurrentTurn();
     this.emit({ type: "agent.status", text: "취소 요청됨", at: (this.opts.now ?? Date.now)() });
-    return { ok: true, detail: dropped > 0 ? `취소했습니다 (대기열 ${dropped}개도 비웠습니다)` : "취소했습니다" };
+    return { ok: true, detail: dropped > 0 ? `Cancelled (also cleared ${dropped} queued)` : "Cancelled" };
   }
 
   /** `clear` — 진행 중인 턴을 멈추고 대화(블록·루프·대기열·툴 호출 카운터)를 초기화한다.
@@ -633,7 +633,7 @@ export class AgentService {
     this.reasoningTokens = 0;
     this.loop = null;
     this.emit({ type: "agent.status", text: "대화를 시작합니다", at: (this.opts.now ?? Date.now)() });
-    return { ok: true, detail: "대화를 초기화했습니다" };
+    return { ok: true, detail: "Conversation reset" };
   }
 
   // ── 슬래시 명령용 경로 (사용자 요구: 웹 프롬프트에서도 콘솔의 쉘 기능) ────────
@@ -647,9 +647,9 @@ export class AgentService {
   /** `/compact` — 지금 컨텍스트를 압축한다. 루프가 없으면 왜 못 했는지 말한다. */
   async forceCompact(): Promise<{ ok: boolean; detail: string }> {
     const loop = this.loop;
-    if (!loop) return { ok: false, detail: "아직 대화가 없어 압축할 것이 없습니다" };
+    if (!loop) return { ok: false, detail: "No conversation yet, nothing to compact" };
     await loop.forceCompact();
-    return { ok: true, detail: "압축을 실행했습니다" };
+    return { ok: true, detail: "Compaction ran" };
   }
 
   /**
@@ -658,29 +658,29 @@ export class AgentService {
    */
   async proposeImprovement(): Promise<{ ok: boolean; detail: string; proposal: { summary: string; ruleMarkdown: string } | null }> {
     const loop = this.loop;
-    if (!loop) return { ok: false, detail: "아직 대화가 없어 분석할 실패 기록이 없습니다", proposal: null };
+    if (!loop) return { ok: false, detail: "No conversation yet, so no failure log to analyze", proposal: null };
     const proposal = await loop.proposeSelfImprovement();
     return proposal
       ? { ok: true, detail: proposal.summary, proposal: { summary: proposal.summary, ruleMarkdown: proposal.ruleMarkdown } }
-      : { ok: true, detail: "반복된 실패 패턴이 없습니다. 제안할 것이 없습니다", proposal: null };
+      : { ok: true, detail: "No repeated failure pattern, nothing to propose", proposal: null };
   }
 
   /** `/improve-apply` — 마지막 제안을 룰 파일로 저장한다. 경로를 돌려준다. */
   async applyImprovement(): Promise<{ ok: boolean; detail: string; path: string | null }> {
     const loop = this.loop;
-    if (!loop) return { ok: false, detail: "저장할 제안이 없습니다. 먼저 /improve 를 실행하십시오", path: null };
+    if (!loop) return { ok: false, detail: "No proposal to save. Run /improve first", path: null };
     const path = await loop.applyPendingImprovement();
     return path
-      ? { ok: true, detail: `${path} 에 저장했습니다 (다음 세션부터 시스템 프롬프트에 반영)`, path }
-      : { ok: false, detail: "저장할 제안이 없습니다. 먼저 /improve 를 실행하십시오", path: null };
+      ? { ok: true, detail: `Saved to ${path} (applied to the system prompt from the next session)`, path }
+      : { ok: false, detail: "No proposal to save. Run /improve first", path: null };
   }
 
   /** `/plan-clear` — 멈춘 계획 표시와 체크포인트를 지운다. */
   async clearPlan(): Promise<{ ok: boolean; detail: string }> {
     const loop = this.loop;
-    if (!loop) return { ok: false, detail: "대화가 없어 지울 계획도 없습니다" };
+    if (!loop) return { ok: false, detail: "No conversation, so no plan to clear" };
     await loop.clearPlan();
-    return { ok: true, detail: "계획 표시를 초기화했습니다" };
+    return { ok: true, detail: "Plan display cleared" };
   }
 
   /** 현재 루프를 **만들지 않고** 본다 — 위 진입점들이 "없다" 고 말할 근거. */

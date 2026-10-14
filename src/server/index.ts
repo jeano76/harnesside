@@ -807,7 +807,7 @@ const updates: UpdateService = new UpdateService({
           // 사실이다. 이 줄이 없으면 S3 는 언제 시작됐는지 로그에서 알 수 없다.
           onConnect: () => {
             if (hub && hub.clientCount === 1) {
-              ring.info("lifecycle", "창이 서버에 연결되었습니다.", "server");
+              ring.info("lifecycle", "A window connected to the server.", "server");
               emit("[ws] 창 연결됨 (1)");
             }
           },
@@ -1331,7 +1331,7 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/agent/resume", async () => {
             // 진행 중일 때는 재개하지 않는다 — **동시에 두 턴** 이 되면 대화가 어긋난다.
             if (agent.turn.running) {
-              throw Object.assign(new Error("진행 중인 턴이 있습니다 — 먼저 끝내거나 취소하십시오"), { status: 409 });
+              throw Object.assign(new Error("A turn is in progress — finish or cancel it first"), { status: 409 });
             }
             // 재개는 "사용자가 계속해 라고 말한 것" 으로 기록한다. 메시지를 조용히
             // 주입하면 대화에 사용자가 한 말이 아닌 줄이 들어간다(§5.10).

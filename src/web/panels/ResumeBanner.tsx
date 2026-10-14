@@ -11,6 +11,7 @@
 
 import React from "react";
 import { ApiClient, ApiError } from "../api.js";
+import { useI18n } from "../i18n/index.js";
 
 export interface ResumeState {
   present: boolean;
@@ -23,10 +24,10 @@ export interface ResumeState {
   pendingToolCall: { name: string; argumentsJson: string; reason: string } | null;
 }
 
-const REASON_LABEL: Record<string, string> = {
-  "auto-threshold": "대화 압축으로 저장됨",
-  manual: "수동 저장",
-  "plan-progress": "진행 상황이 저장됨",
+const REASON_KEY: Record<string, string> = {
+  "auto-threshold": "resume.reason.compaction",
+  manual: "resume.reason.manual",
+  "plan-progress": "resume.reason.progress",
 };
 
 export function ResumeBanner({
@@ -68,10 +69,11 @@ export function ResumeBanner({
   }, [load]);
 
   const [open, setOpen] = React.useState(false);
+  const t = useI18n();
 
   if (!st?.present) return null;
 
-  const progress = st.stepsTotal > 0 ? `단계 ${st.stepsDone}/${st.stepsTotal}` : null;
+  const progress = st.stepsTotal > 0 ? t("resume.step", { done: st.stepsDone, total: st.stepsTotal }) : null;
   const remaining = (st.steps ?? []).filter((s) => s.status !== "done");
   const remainingText = remaining.map((s, i) => `${i + 1}. ${s.description}`).join("\n");
   // 마우스 오버 + 펼침으로 남은 작업을 미리 본다 — 개수만 보이면 "뭐가 남았지" 가 된다.
@@ -89,7 +91,7 @@ export function ResumeBanner({
         fontSize: 10,
       }}
     >
-      <span style={{ color: "#3fb950", flex: "0 0 auto" }}>이어서 할 작업이 남아 있습니다</span>
+      <span style={{ color: "#3fb950", flex: "0 0 auto" }}>{t("agent.resumeTitle")}</span>
       {/* **목표 원문을 그대로** 보여준다. 요약하면 "뭘 재개한다는 말인가" 를 되묻게 된다. */}
       {st.goal && (
         <span style={{ color: "#6e7681", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={st.goal}>
@@ -107,12 +109,12 @@ export function ResumeBanner({
           {progress} {remaining.length > 0 ? (open ? "▾" : "▸") : null}
         </button>
       )}
-      {st.reason && <span style={{ color: "#6e7681", flex: "0 0 auto" }}>{REASON_LABEL[st.reason] ?? st.reason}</span>}
+      {st.reason && <span style={{ color: "#6e7681", flex: "0 0 auto" }}>{REASON_KEY[st.reason] ? t(REASON_KEY[st.reason]) : st.reason}</span>}
       <span style={{ flex: 1 }} />
       <button
         type="button"
         disabled={busy || running}
-        title={running ? "진행 중인 턴이 끝난 뒤에 재개할 수 있습니다" : "저장된 작업을 이어서 진행합니다"}
+        title={running ? t("resume.waitTurn") : t("resume.hint")}
         onClick={async () => {
           setBusy(true);
           try {
@@ -121,10 +123,10 @@ export function ResumeBanner({
               onResumed();
               void load();
             } else {
-              onNotice("warn", "재개하지 못했습니다", r.detail);
+              onNotice("warn", t("resume.failed"), r.detail);
             }
           } catch (e) {
-            onNotice("error", "재개 요청 실패", e instanceof ApiError ? e.message : String(e));
+            onNotice("error", t("resume.requestFailed"), e instanceof ApiError ? e.message : String(e));
           } finally {
             setBusy(false);
           }
@@ -141,7 +143,7 @@ export function ResumeBanner({
           flex: "0 0 auto",
         }}
       >
-        {busy ? "재개 중" : "이어서 진행"}
+        {busy ? t("resume.busy") : t("resume.button")}
       </button>
     </div>
       {open && remaining.length > 0 && (
@@ -152,7 +154,7 @@ export function ResumeBanner({
             </div>
           ))}
           {st.pendingToolCall && (
-            <div style={{ color: "#6e7681" }}>다음: {st.pendingToolCall.name} — {st.pendingToolCall.reason}</div>
+            <div style={{ color: "#6e7681" }}>{t("resume.next")} {st.pendingToolCall.name} — {st.pendingToolCall.reason}</div>
           )}
         </div>
       )}

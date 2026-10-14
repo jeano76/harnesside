@@ -129,7 +129,7 @@ export class WorkspaceService {
     if (!check.ok) return { ok: false, reason: check.reason, detail: check.detail };
     const to = await fingerprint(check.root);
     if (to.root === this.currentFingerprint.root) {
-      return { ok: false, reason: "same-root", detail: "이미 그 폴더입니다" };
+      return { ok: false, reason: "same-root", detail: "Already in that folder" };
     }
     const sw = planSwitch(this.currentFingerprint, to, openTabs);
     const tabs = await rebaseTabs(openTabs, this.currentFingerprint.root, to.root);
@@ -157,13 +157,13 @@ export class WorkspaceService {
     opts: { openTabs?: string[]; confirm?: boolean } = {}
   ): Promise<SwitchResult> {
     if (!opts.confirm) {
-      return { ok: false, reason: "needs-confirm", detail: "전환 전 확인이 필요합니다(확인 다이얼로그를 먼저 거치십시오)" };
+      return { ok: false, reason: "needs-confirm", detail: "Confirmation is required before switching (go through the confirm dialog first)" };
     }
     const check = await this.checkTarget(path);
     if (!check.ok) return check;
     const to = await fingerprint(check.root);
     if (to.root === this.currentFingerprint.root) {
-      return { ok: false, reason: "same-root", detail: "이미 그 폴더입니다" };
+      return { ok: false, reason: "same-root", detail: "Already in that folder" };
     }
     const from = this.currentFingerprint;
     const openTabs = opts.openTabs ?? [];
@@ -183,11 +183,11 @@ export class WorkspaceService {
   }
 
   private async checkTarget(path: string): Promise<{ ok: true; root: string } | { ok: false; reason: "not-a-directory" | "not-found"; detail: string }> {
-    if (!path || !path.trim()) return { ok: false, reason: "not-found", detail: "경로가 비어 있습니다" };
+    if (!path || !path.trim()) return { ok: false, reason: "not-found", detail: "The path is empty" };
     const abs = resolve(path);
     const st = await stat(abs).catch(() => null);
-    if (!st) return { ok: false, reason: "not-found", detail: `폴더가 없습니다: ${abs}` };
-    if (!st.isDirectory()) return { ok: false, reason: "not-a-directory", detail: `디렉터리가 아닙니다: ${abs}` };
+    if (!st) return { ok: false, reason: "not-found", detail: `Folder not found: ${abs}` };
+    if (!st.isDirectory()) return { ok: false, reason: "not-a-directory", detail: `Not a directory: ${abs}` };
     return { ok: true, root: abs };
   }
 }
@@ -196,7 +196,7 @@ export class WorkspaceService {
 function missingTabWarning(tabs: { path: string; ok: boolean }[]): string[] {
   const missing = tabs.filter((t) => !t.ok).map((t) => t.path);
   if (!missing.length) return [];
-  return [`${missing.length}개 탭은 새 폴더에 없습니다: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? " 외" : ""}. 닫힙니다.`];
+  return [`${missing.length} open tab(s) are not in the new folder: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? " and more" : ""}. They will be closed.`];
 }
 
 /**

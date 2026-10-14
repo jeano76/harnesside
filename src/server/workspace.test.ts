@@ -93,7 +93,7 @@ test("전환 계획: 열린 탭이 새 루트 밖에 있으면 **말해준다**"
     const sw = planSwitch(await fingerprint(a), await fingerprint(b), [join(a, "src", "x.ts"), join(b, "y.rs")]);
     assert.equal(sw.orphanedTabs.length, 1);
     assert.equal(sw.orphanedTabs[0].endsWith("x.ts"), true);
-    assert.ok(sw.warnings.some((w) => w.includes("탭")), `탭 경고를 하지 않았다: ${sw.warnings}`);
+    assert.ok(sw.warnings.some((w) => w.includes("tab")), `탭 경고를 하지 않았다: ${sw.warnings}`);
   } finally {
     await s.cleanup();
   }
@@ -136,7 +136,7 @@ test("규칙이 없는 새 폴더도 경고한다 — 규칙이 안 읽힌 걸 �
   try {
     const a = await fingerprint(s.dir);
     const sw = planSwitch(a, a, []);
-    assert.ok(sw.warnings.some((w) => w.includes("규칙")), `규칙 경고 없음: ${sw.warnings}`);
+    assert.ok(sw.warnings.some((w) => w.includes("rule files")), `규칙 경고 없음: ${sw.warnings}`);
   } finally {
     await s.cleanup();
   }
@@ -217,7 +217,7 @@ test("컨텍스트 경계 문장이 **이전 경로를 명시**한다", () => {
   const note = contextBoundaryNote(from, to);
   assert.match(note, /\/old\/proj/);
   assert.match(note, /\/new\/proj/);
-  assert.match(note, /상대경로/, "모델이 이전 절대경로를 계속 쓸 수 있다");
+  assert.match(note, /relative path/, "모델이 이전 절대경로를 계속 쓸 수 있다");
 });
 
 test("루트는 정규화된다 — 같은 폴더를 두 형태로 비교하면 불일치한다", async () => {

@@ -149,27 +149,27 @@ export function planSwitch(from: WorkspaceFingerprint, to: WorkspaceFingerprint,
 
   if (orphanedTabs.length) {
     warnings.push(
-      `열린 탭 ${orphanedTabs.length}개가 새 작업 폴더 밖에 있습니다: ${orphanedTabs.slice(0, 3).join(", ")}${orphanedTabs.length > 3 ? " 외" : ""}. 탭은 닫히고 새 루트 기준으로 다시 열립니다.`,
+      `${orphanedTabs.length} open tab(s) are outside the new workspace: ${orphanedTabs.slice(0, 3).join(", ")}${orphanedTabs.length > 3 ? " and more" : ""}. They will be closed and reopened relative to the new root.`,
     );
   }
   const fromKinds = from.kind.filter((k) => k !== "unknown");
   const toKinds = to.kind.filter((k) => k !== "unknown");
   if (fromKinds.length && toKinds.length && !fromKinds.some((k) => toKinds.includes(k))) {
     warnings.push(
-      `프로젝트 종류가 ${fromKinds.join("/")} 에서 ${toKinds.join("/")} 로 달라집니다. 도구의 실행 명령이 바뀝니다.`,
+      `The project type changes from ${fromKinds.join("/")} to ${toKinds.join("/")}. The commands tools run will change.`,
     );
   }
   if (from.git && !to.git) {
-    warnings.push("이전 폴더는 Git 저장소였지만 새 폴더는 아닙니다. 커밋·diff 기능이 꺼집니다.");
+    warnings.push("The previous folder was a Git repository but the new one is not. Commit and diff features will be turned off.");
   }
   if (!from.git && to.git) {
-    warnings.push("새 폴더는 Git 저장소입니다. 변경 파일 목록이 보입니다.");
+    warnings.push("The new folder is a Git repository. The changed-files list will be shown.");
   }
   if (to.kind.includes("unknown")) {
-    warnings.push("알 수 없는 프로젝트 종류입니다. 테스트 실행 액션이 비활성화됩니다.");
+    warnings.push("Unknown project type. The run-tests action will be disabled.");
   }
   if (to.rules.length === 0) {
-    warnings.push("새 폴더에 규칙 파일(CLAUDE.md 등)이 없습니다.");
+    warnings.push("The new folder has no rule files (CLAUDE.md etc.).");
   }
 
   return {
@@ -207,5 +207,5 @@ export function rebasePath(path: string, fromRoot: string, toRoot: string): { pa
 
 /** §8.3: 새 루트에서 온 결과를 기존 세션에 남길 때 붙이는 문장. */
 export function contextBoundaryNote(from: WorkspaceFingerprint, to: WorkspaceFingerprint): string {
-  return `[워크스페이스 변경] 작업 루트가 ${from.root} 에서 ${to.root} 로 바뀌었습니다. 이후 도구 결과는 ${to.root} 기준입니다. 이전 경로(${from.root} 아래)는 더 이상 유효하지 않으므로 상대경로로만 새 파일을 가리키십시오.`;
+  return `[workspace changed] The working root changed from ${from.root} to ${to.root}. Tool results from now on are relative to ${to.root}. Paths under the old root (${from.root}) are no longer valid, so refer to new files by relative path only.`;
 }

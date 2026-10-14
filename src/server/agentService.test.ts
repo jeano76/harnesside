@@ -97,7 +97,7 @@ test("빈 문장은 보내지 않는다 — 무음 실패 대신 이유를 말�
     const svc = service(fakeBackend(), events, s.dir);
     const r = await svc.send("   ");
     assert.equal(r.ok, false);
-    assert.match(r.detail, /문장/);
+    assert.match(r.detail, /Nothing to send/);
   } finally {
     await s.cleanup();
   }
@@ -217,7 +217,7 @@ test("진행 중인 턴이 없으면 취소는 **거절**한다 — 조용히 �
     const svc = service(fakeBackend(), events, s.dir);
     const r = await svc.cancel();
     assert.equal(r.ok, false);
-    assert.match(r.detail, /진행 중/);
+    assert.match(r.detail, /No turn is in progress/);
   } finally {
     await s.cleanup();
   }
@@ -303,7 +303,7 @@ test("실행 중 입력은 거절하지 않고 대기열에 넣는다 (O4)", asy
     const r2 = await svc.send("둘째");
     assert.equal(r2.ok, true, "대기열 수락이 거절됐다");
     assert.equal(r2.queued, true);
-    assert.match(r2.detail, /대기열/);
+    assert.match(r2.detail, /Queued/);
     assert.deepEqual(svc.queueView(), ["둘째"]);
     release();
     const r1 = await p1;
@@ -355,7 +355,7 @@ test("취소는 대기열까지 비우고 개수를 말한다", async () => {
     await new Promise((r) => setTimeout(r, 50));
     await svc.send("둘째");
     const c = await svc.cancel();
-    assert.match(c.detail, /대기열 1개도 비웠습니다/);
+    assert.match(c.detail, /also cleared 1 queued/);
     assert.deepEqual(svc.queueView(), []);
     release();
     await p1;
