@@ -1836,8 +1836,8 @@ export class AgentLoop {
           this.progress.onCompaction();
           this.lastCompactionUsed = used;
           this.opts.onStatus?.(
-            `[compaction] 규칙 기반 압축 ${((Date.now() - maskStartedAt) / 1000).toFixed(1)}s — ` +
-              `오래된 도구 출력 ${masked.maskedCount}개 생략(약 ${masked.savedTokens} 토큰 절감), 요약 생성 없음`
+            `[compaction] rule-based ${((Date.now() - maskStartedAt) / 1000).toFixed(1)}s — ` +
+              `omitted ${masked.maskedCount} old tool outputs (~${masked.savedTokens} tokens saved), no summary generated`
           );
           this.opts.onStatus?.(`[compaction complete] ${timestamp}`);
           this.opts.onCompactionStatus?.("complete", timestamp);
@@ -1847,7 +1847,7 @@ export class AgentLoop {
             droppedPreview: masked.preview,
             keptCount: this.messages.length,
             keptTokens: used,
-            summary: "(규칙 기반: 오래된 도구 출력만 자리표시자로 대체 — 대화 본문은 그대로)",
+            summary: "(rule-based: only old tool outputs were replaced with placeholders — the conversation itself is unchanged)",
           });
           return;
         }

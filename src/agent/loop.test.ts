@@ -3015,7 +3015,7 @@ test("rule-based compaction (tool-output masking) alone satisfies the target —
     await (loop as any).compact("auto-threshold", null);
 
     assert.equal(summaryCalls, 0, "masking was enough, so no LLM summary");
-    assert.ok(statuses.some((s) => s.includes("규칙 기반 압축")));
+    assert.ok(statuses.some((s) => s.includes("rule-based")));
     const after = (loop as any).messages as ChatMessage[];
     assert.equal(after.filter((m) => String(m.content).startsWith("[tool output omitted")).length, 4);
     assert.equal(after[1].content, "fix the bug", "the conversation itself is intact");

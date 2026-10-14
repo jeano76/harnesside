@@ -36,6 +36,7 @@ import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { liveModelPath, applyModelSwitch, loadThinkBudget } from "./modelIdentity.js";
 import { WorkspaceService } from "./workspaceService.js";
+import { listDirs } from "./dirBrowser.js";
 import { formatCrashReport, writeCrashLogSync, readCrashTail, acknowledgeCrashLog, archiveHarmlessCrashLog } from "../crashHandler.js";
 import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
 import { recommendThresholds, type CompactionThresholds } from "../compaction/compactor.js";
@@ -135,15 +136,14 @@ async function collectGitBrief(root: string): Promise<GitBrief | null> {
 async function main(): Promise<number> {
   const home = homedir();
   // **어느 폴더에서 시작할지**를 가장 먼저 정한다. 프로젝트로 쓴 적 없는 폴더(홈 등)에서 띄웠으면 마지막
-  // 작업 폴더로 돌아간다 — 그 폴더에서 설정·모델·세션이 모두 시작되므로 이후 단계는 이 루트만 본다.
+  // 작업 폴더로 돌아간다(`--here` 가 아니면 항상) — 그 폴더에서 설정·모델·세션이 모두 시작되므로 이후 단계는 이 루트만 본다.
   const cwd0 = process.cwd();
   const lastWs = await readLastWorkspace(home);
   const startRoot = decideStartRoot({
     cwd: cwd0,
     last: lastWs?.path ?? null,
     here: flag("--here"),
-    forceLast: flag("--last"),
-    ...(await inspectStart(cwd0, lastWs?.path ?? null)),
+    ...(await inspectStart(lastWs?.path ?? null)),
   });
   if (startRoot.moved) {
     try {
@@ -1216,6 +1216,16 @@ const updates: UpdateService = new UpdateService({
           // "무엇을 하는 화면인지" 를 헤더 한 줄로 말할 수 있어야 하기 때문이다.
           .route("GET", "/api/workspace", () => ({ current: workspace.current, pendingNotes: workspace.pendingNotes() }))
           // 미리보기는 **부수효과 0** 이어야 한다. 보러 가는 것만으로 루트가 바뀌면 안 된다.
+          // 상단 폴더 탐색기용 — 하위 **폴더 이름만**. 읽기 전용이고 전환은 아래 plan/switch 를 거친다.
+          .route("GET", "/api/workspace/dirs", async (c) => {
+            const r = await listDirs(c.query.get("path") ?? "", {
+              fallback: workspace.root(),
+              home,
+              showHidden: c.query.get("hidden") === "1",
+            });
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "denied" ? 403 : 400, reason: r.reason });
+            return r.value;
+          })
           .route("POST", "/api/workspace/plan", async (c) => {
             const body = (await readBody(c.req)) as { path?: string; openTabs?: string[] };
             const p = await workspace.preview(String(body.path ?? ""), body.openTabs ?? []);
