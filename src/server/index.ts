@@ -752,6 +752,19 @@ const updates: UpdateService = new UpdateService({
         if (p !== undefined && p > 0 && p < 1) pick.postCompactionTargetRatio = p;
         const m = num((c as Record<string, unknown>).minGrowthFraction);
         if (m !== undefined && m >= 0 && m < 1) pick.minGrowthFraction = m;
+        const mk = (c as Record<string, unknown>).masking;
+        if (mk && typeof mk === "object") {
+          const o = mk as Record<string, unknown>;
+          const mp: NonNullable<CompactionThresholds["masking"]> = {};
+          if (typeof o.enabled === "boolean") mp.enabled = o.enabled;
+          const k = num(o.keepRecentToolResults);
+          if (k !== undefined && k >= 1) mp.keepRecentToolResults = Math.floor(k);
+          const mc = num(o.minChars);
+          if (mc !== undefined && mc >= 0) mp.minChars = Math.floor(mc);
+          const kc = num(o.keepChars);
+          if (kc !== undefined && kc >= 0) mp.keepChars = Math.floor(kc);
+          pick.masking = mp;
+        }
         compactionOverrides = pick;
       }
     }

@@ -24,6 +24,10 @@ export interface CompactionThresholds {
    *  (절반~2/3)부터 지시 무시·환각이 시작한다는 보고가 있어, 실패 턴이
    *  연속되면 0.7을 기다리지 않고 일찍 압축하는 옵션. 무조건 창 확대는
    *  금지(KV가 가중치 잠식)라 임계 자체는 건드리지 않는다. */
+  /** 삭제될 구간이 이 토큰 수 미만이면 LLM 요약을 건너뛴다(기본 FAST_PATH_INPUT_TOKENS, 0 = 끔). */
+  fastPathInputTokens?: number;
+  /** 규칙 기반 1단계(오래된 도구 출력 마스킹). 기본 켜짐 — masking.ts 참고. */
+  masking?: import("./masking.js").MaskingOptions;
   earlyCompaction?: {
     enabled: boolean;
     /** 이 비율(기본 0.5)을 넘고 실패 턴이 연속되면 조기 압축. */
@@ -298,7 +302,7 @@ export const DEFAULT_TAIL_BUDGET_FRACTION = 0.4;
  *
  *  Override with `compaction.summaryMaxTokens` in config.yaml. Raise it if a
  *  summary is dropping detail you need; lower it for a faster, terser summary. */
-export const DEFAULT_SUMMARY_MAX_TOKENS = 1024;
+export const DEFAULT_SUMMARY_MAX_TOKENS = 768;
 /** Default trigger and post-compaction target, used when the window is large
  *  enough that fixed overhead is noise. See recommendThresholds(). */
 export const DEFAULT_AUTO_TRIGGER_RATIO = 0.6;
@@ -445,7 +449,10 @@ export async function runCompaction(
   // Lets the caller shrink the summary below its default cap so that
   // base prompt + summary + kept tail lands under the auto-trigger
   // threshold — see loop.ts compact().
-  summaryMaxTokensCap?: number
+  summaryMaxTokensCap?: number,
+  // 이 토큰 수 미만의 삭제 구간은 LLM 요약을 건너뛴다(0 = 끔). 운영 경로(loop.ts)만
+  // FAST_PATH_INPUT_TOKENS 를 넘긴다 — 기본을 끔으로 둬서 호출자 계약을 안 바꾼다.
+  fastPathInputTokens = 0
 ): Promise<CompactionResult> {
   const checkpoint: Checkpoint = {
     version: 1,
@@ -525,7 +532,7 @@ export async function runCompaction(
   // to it via the outer Math.min), so the existing large-history behavior
   // is unchanged.
   const summaryInputTokens = summaryInput.reduce((n, m) => n + estimateTextTokens(messageText(m)), 0);
-  const SUMMARY_COMPRESSION_RATIO = 0.35;
+  const SUMMARY_COMPRESSION_RATIO = 0.25;
   const summaryMaxTokens = Math.max(128, Math.min(windowBasedCap, Math.ceil(summaryInputTokens * SUMMARY_COMPRESSION_RATIO)));
 
   // The summary request is itself a request against the same window. On the
@@ -569,10 +576,8 @@ export async function runCompaction(
   // message returned an echo of the tool-call text; ending on a user
   // request returned an actual summary. Live, one compaction's summary
   // request generated a single token, so everything it replaced was lost.
-  const SUMMARY_INSTRUCTION =
-    "Summarize the conversation above for context compaction. Preserve verbatim any user-stated constraints, decisions" +
-    mustPreserveClause +
-    "\n\nNow write the summary of the conversation above. Output only the summary.";
+  const previousSummary = splitSystemMessage(originalSystemText).summary;
+  const SUMMARY_INSTRUCTION = buildSummaryInstruction(mustPreserveClause, previousSummary !== null, summaryMaxTokens);
   summaryRequest.push({ role: "user", content: SUMMARY_INSTRUCTION });
 
   // Never leave this unset — same reasoning, and the exact same failure
@@ -594,14 +599,37 @@ export async function runCompaction(
   // reasoning before any summary text is produced — and a compaction that
   // returns no usable summary is worse than useless, since the history it
   // replaced is already gone.
-  const res = await backend.chat({
-    model,
-    messages: summaryRequest,
-    stream: false,
-    max_tokens: summaryMaxTokens,
-    chat_template_kwargs: { enable_thinking: false },
-  });
-  const summaryText = res.choices[0]?.message.content ?? "(summary unavailable)";
+  // 빠른 경로: 삭제될 분량이 작으면 생성(38 tok/s = 컴팩션 시간 전부)을 아예 건너뛴다.
+  // 요약할 게 거의 없는데 모델을 부르면 수십 초를 써서 입력보다 긴 요약을 쓰기 쉽다.
+  // 사용자 요청 원문 앵커 + 최근 행동 목록이 코드로 만들어지므로 정보 손실은 작다.
+  const skipLlm = summaryInputTokens < fastPathInputTokens;
+  let rawSummary = "";
+  if (!skipLlm) {
+    const res = await backend.chat({
+      model,
+      messages: summaryRequest,
+      stream: false,
+      max_tokens: summaryMaxTokens,
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    rawSummary = res.choices[0]?.message.content?.trim() ?? "";
+  }
+  // 요약이 없거나 사실상 비어 있으면(실측: 한 토큰짜리 요약이 나온 적 있다) 그걸로
+  // 시스템 메시지의 기존 요약을 덮어쓰면 그 요약이 담고 있던 이전 작업까지 같이
+  // 사라진다. 이전 요약이 있으면 그걸 유지한다 — 새 요약을 못 만든 것이지, 이전 것이
+  // 틀린 건 아니다.
+  const prevParts = splitAnchor(previousSummary ?? "");
+  const modelPart = splitAnchor(rawSummary).body; // 모델이 앵커를 베껴 써도 중복되지 않게
+  const summaryUsable = !skipLlm && modelPart.length >= MIN_USABLE_SUMMARY_CHARS;
+  const body = summaryUsable
+    ? modelPart
+    : skipLlm
+      ? [prevParts.body, recentActionsDigest(toSummarize)].filter(Boolean).join("\n\n")
+      : prevParts.body || modelPart || "(summary unavailable)";
+  // 문맥 유실 방지: 사용자 요청 원문은 LLM 이 요약하며 변형·누락하는 1순위 항목이다.
+  // 코드가 직접 이어 붙이고(생성 비용 0), 컴팩션을 거듭해도 최초 요청과 최근 요청을 유지한다.
+  const anchorItems = mergeAnchor(prevParts.items, extractUserRequests(toSummarize));
+  const summaryText = [body, renderAnchor(anchorItems)].filter(Boolean).join("\n\n") || "(summary unavailable)";
 
   // Preserve the ORIGINAL system prompt (base prompt + injected .harnesside/rules),
   // not just the compaction summary. selectKeptTail() keeps only the size-budgeted
@@ -618,7 +646,7 @@ export async function runCompaction(
   // (after /quit, a crash, a restart) has none of this conversation, and
   // without it the resumed model had only a goal line and a file list —
   // live, it answered "No response requested." and stopped.
-  const finalCheckpoint: Checkpoint = res.choices[0]?.message.content ? { ...checkpoint, summary: summaryText } : checkpoint;
+  const finalCheckpoint: Checkpoint = summaryUsable || skipLlm ? { ...checkpoint, summary: summaryText } : checkpoint;
   if (finalCheckpoint !== checkpoint) await writeCheckpoint(projectRoot, finalCheckpoint);
 
   // keepTail's cut point is purely size-based and can land between a
@@ -677,6 +705,109 @@ export async function runCompaction(
   }
 
   return { messages: compactedMessages, checkpoint: finalCheckpoint, detail };
+}
+
+/** 요약 입력이 이 토큰 수 미만이면 LLM 호출을 건너뛴다(빠른 경로). */
+export const FAST_PATH_INPUT_TOKENS = 300;
+
+const ANCHOR_HEADER = "## User requests (verbatim, oldest first)";
+/** 앵커 전체와 항목 하나의 토큰 상한 — 한글은 글자당 ~1.5토큰이라 글자 수가 아니라 토큰으로 자른다. */
+const ANCHOR_TOTAL_TOKENS = 450;
+const ANCHOR_ITEM_TOKENS = 120;
+const ANCHOR_MAX_ITEMS = 8;
+
+function clipToTokens(text: string, maxTokens: number): string {
+  if (estimateTextTokens(text) <= maxTokens) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (estimateTextTokens(text.slice(0, mid)) <= maxTokens) lo = mid;
+    else hi = mid - 1;
+  }
+  return `${text.slice(0, lo).trimEnd()} …`;
+}
+
+/** 삭제될 구간의 진짜 사용자 발화(자동 주입된 재개/계속 안내 제외). */
+export function extractUserRequests(dropped: ChatMessage[]): string[] {
+  return dropped
+    .filter((m) => m.role === "user" && typeof m.content === "string")
+    .map((m) => (m.content as string).trim())
+    .filter((t) => t && t !== CONTINUE_AFTER_COMPACTION && !t.startsWith("[resuming") && !t.startsWith("[Earlier conversation was compacted"))
+    .map((t) => clipToTokens(t.replace(/\s+/g, " "), ANCHOR_ITEM_TOKENS));
+}
+
+/** 이전 앵커 + 새 발화를 합치되, 최초 요청(목표)은 항상 남기고 나머지는 최신 우선으로 예산 내에서 유지. */
+export function mergeAnchor(prev: string[], added: string[]): string[] {
+  const all = [...prev, ...added].filter((t, i, a) => a.indexOf(t) === i);
+  if (all.length === 0) return [];
+  const [first, ...rest] = all;
+  const kept: string[] = [];
+  let used = estimateTextTokens(first);
+  for (let i = rest.length - 1; i >= 0 && kept.length < ANCHOR_MAX_ITEMS - 1; i--) {
+    const t = estimateTextTokens(rest[i]);
+    if (used + t > ANCHOR_TOTAL_TOKENS) break;
+    used += t;
+    kept.unshift(rest[i]);
+  }
+  return [first, ...kept];
+}
+
+export function renderAnchor(items: string[]): string {
+  return items.length ? `${ANCHOR_HEADER}\n${items.map((t, i) => `${i + 1}. ${t}`).join("\n")}` : "";
+}
+
+/** 요약 본문과 앵커 항목을 분리한다. 앵커는 항상 요약 끝에 붙는다. */
+export function splitAnchor(summary: string): { body: string; items: string[] } {
+  const idx = summary.indexOf(ANCHOR_HEADER);
+  if (idx === -1) return { body: summary.trim(), items: [] };
+  const items = summary
+    .slice(idx + ANCHOR_HEADER.length)
+    .split("\n")
+    .map((l) => l.replace(/^\d+\.\s+/, "").trim())
+    .filter(Boolean);
+  return { body: summary.slice(0, idx).trim(), items };
+}
+
+/** 빠른 경로용: LLM 없이 최근 도구 호출을 결정적으로 나열. */
+function recentActionsDigest(dropped: ChatMessage[]): string {
+  const calls = dropped.flatMap((m) => m.tool_calls ?? []).slice(-6);
+  if (calls.length === 0) return "";
+  return `## Recent actions\n${calls.map((c) => `- ${c.function.name}(${c.function.arguments.slice(0, 80)})`).join("\n")}`;
+}
+
+/** 이보다 짧은 요약은 실패로 본다(에코/한 토큰 출력 방어). */
+const MIN_USABLE_SUMMARY_CHARS = 20;
+
+/**
+ * 요약 지시문. 연구 근거(2025~2026):
+ * - 구조화된 고정 섹션 + 이전 요약을 **갱신**(anchored iterative summarization,
+ *   Factory.ai 평가): 매번 처음부터 다시 쓰면 오래된 사실이 세대를 거치며 닳는다.
+ * - 에이전트 컨텍스트 압축은 "다음 행동에 필요한 것"을 남기는 쪽이 중요하다
+ *   (ACON, arXiv 2510.00615): 실패한 시도·결정 이유·정확한 식별자(경로, 명령, 오류).
+ * - 의도적으로 **끝의 user 메시지에만** 둔다: system 을 바꾸면 llama-server 의
+ *   프롬프트 캐시 접두사가 깨져 prefill 비용이 되살아난다(위 캐시 노트).
+ */
+export function buildSummaryInstruction(mustPreserveClause: string, hasPreviousSummary: boolean, maxTokens: number): string {
+  const update = hasPreviousSummary
+    ? "The system message already holds a [Compacted history summary] of earlier work. UPDATE it, do not start over: " +
+      "carry forward everything still relevant, mark finished items as done, and drop what is obsolete.\n\n"
+    : "";
+  return (
+    "Summarize the conversation above for context compaction so the work can continue with no other history. " +
+    "Preserve verbatim any user-stated constraints and decisions" +
+    mustPreserveClause +
+    "\n\n" +
+    update +
+    "Use exactly these sections (omit one only if truly empty):\n" +
+    "## Goal — what the user asked for, in their own words where they gave requirements\n" +
+    "## Constraints & decisions — rules, preferences, choices made and WHY\n" +
+    "## Progress — what is done, what is in progress\n" +
+    "## State — exact file paths, commands, identifiers, error messages that matter next\n" +
+    "## Dead ends — approaches that failed, so they are not retried\n" +
+    "## Next — the immediate next step\n\n" +
+    `Be dense and concrete; stay under about ${maxTokens} tokens.\n\nNow write the summary of the conversation above. Output only the summary.`
+  );
 }
 
 const SUMMARY_HEADER = "[Compacted history summary]";

@@ -528,7 +528,7 @@ test("compaction summary failure doesn't crash the loop — reports a status mes
       model: "m",
       backend,
       systemPrompt: "sys",
-      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100 },
+      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100, fastPathInputTokens: 0 },
       onStatus: (s) => statusMessages.push(s),
     });
 
@@ -1053,7 +1053,7 @@ test("compact()'s own summary request retries once on the same transient backend
       model: "m",
       backend,
       systemPrompt: "sys",
-      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100 },
+      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100, fastPathInputTokens: 0 },
       onStatus: (s) => statusMessages.push(s),
     });
 
@@ -1097,7 +1097,7 @@ test("compact()'s own summary request reports [compaction failed] (not silently 
       model: "m",
       backend,
       systemPrompt: "sys",
-      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100 },
+      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100, fastPathInputTokens: 0 },
       onStatus: (s) => statusMessages.push(s),
     });
 
@@ -1569,7 +1569,7 @@ test("onCompactionStatus fires running then failed when the compaction summary r
       model: "m",
       backend,
       systemPrompt: "sys",
-      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100 },
+      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100, fastPathInputTokens: 0 },
       onCompactionStatus: (status) => events.push({ status }),
     });
 
@@ -2623,7 +2623,7 @@ test("resuming in a NEW process carries the previous session's summary and recen
       tokenCounts: [1],
       summaryText: "SESSION-A-SUMMARY: fixed the WebSocket handshake; ws_verify.mjs still fails on reconnect.",
     });
-    const loopA = new AgentLoop({ projectRoot: dir, model: "m", backend: a.backend, systemPrompt: "sys", thresholds: { autoTriggerRatio: 0.9, contextWindowTokens: 24576 } });
+    const loopA = new AgentLoop({ projectRoot: dir, model: "m", backend: a.backend, systemPrompt: "sys", thresholds: { autoTriggerRatio: 0.9, contextWindowTokens: 24576, fastPathInputTokens: 0 } });
     await loopA.send("continue the improvement work");
     await loopA.saveStateOnQuit();
 
@@ -2980,4 +2980,47 @@ test("P0-2: near threshold falls back to exact and still compacts", () =>
     await loop.send("do the thing");
     const checkpoint = await readCheckpoint(dir);
     assert.ok(checkpoint, "near-threshold in-batch check must still compact via exact fallback");
+  }));
+
+test("rule-based compaction (tool-output masking) alone satisfies the target — no summary request is made", () =>
+  withTempProject(async (dir) => {
+    let summaryCalls = 0;
+    const backend: ModelBackend = {
+      async chat(req: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+        if (!req.tools) summaryCalls++;
+        return { choices: [{ message: { role: "assistant", content: "## Goal\nsummary from the model" }, finish_reason: "stop" }] };
+      },
+      async listModels() {
+        return [];
+      },
+      async tokenize(text: string) {
+        return Math.ceil(text.length / 4);
+      },
+    };
+    const statuses: string[] = [];
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 20000 },
+      onStatus: (s) => statuses.push(s),
+    });
+    const msgs: ChatMessage[] = [{ role: "system", content: "sys" }, { role: "user", content: "fix the bug" }];
+    for (let i = 0; i < 8; i++) {
+      msgs.push({ role: "assistant", content: null, tool_calls: [{ id: `c${i}`, type: "function", function: { name: "read_file", arguments: `{"path":"f${i}"}` } }] });
+      msgs.push({ role: "tool", tool_call_id: `c${i}`, content: "z".repeat(3000) });
+    }
+    (loop as any).messages = msgs;
+    await (loop as any).compact("auto-threshold", null);
+
+    assert.equal(summaryCalls, 0, "masking was enough, so no LLM summary");
+    assert.ok(statuses.some((s) => s.includes("규칙 기반 압축")));
+    const after = (loop as any).messages as ChatMessage[];
+    assert.equal(after.filter((m) => String(m.content).startsWith("[tool output omitted")).length, 4);
+    assert.equal(after[1].content, "fix the bug", "the conversation itself is intact");
+
+    // 수동 /compact 는 규칙만으로 끝내지 않고 요약을 만든다.
+    await (loop as any).compact("manual", null);
+    assert.equal(summaryCalls, 1);
   }));

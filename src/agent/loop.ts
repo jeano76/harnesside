@@ -6,6 +6,7 @@ import { logFailure, getFailureLog } from "../hermes/selfHeal.js";
 import { proposeImprovement, writeProposedRule, appendImprovementLog, ImprovementProposal } from "../hermes/selfImprove.js";
 import {
   runCompaction,
+  FAST_PATH_INPUT_TOKENS,
   estimateTokens,
   estimateTokensFast,
   buildResumePrompt,
@@ -21,6 +22,7 @@ import {
 } from "../compaction/compactor.js";
 import { clearCheckpoint, writeCheckpoint, readCheckpoint } from "../compaction/checkpoint.js";
 import type { Checkpoint } from "../compaction/checkpoint.js";
+import { maskObservations } from "../compaction/masking.js";
 import { stripToolCallTemplateLeak } from "./textSanitize.js";
 import { salvagePartialFileWrite } from "./toolCallSalvage.js";
 import { existsSync } from "node:fs";
@@ -363,6 +365,10 @@ export interface AgentLoopOptions {
  * (PROMPT.md §2) and the self-healing circuit breaker (§3) are wired in here
  * so every call site gets both automatically.
  */
+/** 규칙 기반만으로 끝내려면 압축 후 목표(트리거×targetRatio)의 이 배수 이하여야 한다 —
+ *  요약 경로보다 덜 줄이므로 다음 압축까지 여유를 확보하려는 완충. */
+const RULE_ONLY_TARGET_SLACK = 1.5;
+
 export class AgentLoop {
   private messages: ChatMessage[];
   private breaker = new CircuitBreaker();
@@ -1808,6 +1814,47 @@ export class AgentLoop {
       pendingToolCall,
       mustPreserve: [],
     };
+    // 1단계(규칙, 0초): 오래된 도구 출력을 자리표시자로 바꾼다. LLM 요약의 비용은
+    // 생성 시간(38 tok/s)이 전부인데, 컨텍스트 대부분은 다시 실행하면 복원되는 도구
+    // 출력이라 이것만으로 충분히 줄어드는 경우가 많다. 충분하면 요약을 아예 생략하고,
+    // 부족하면 마스킹된(=더 작은) 대화를 아래 요약 경로에 넘긴다. 수동 /compact 는
+    // 사용자가 요약을 기대하므로 건너뛰지 않는다.
+    const masked = maskObservations(this.messages, this.thresholds.masking);
+    if (masked.maskedCount > 0) {
+      const maskStartedAt = Date.now();
+      this.messages = masked.messages;
+      try {
+        const used = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
+        this.estimateCallsExact++;
+        const targetRatio = this.thresholds.postCompactionTargetRatio ?? DEFAULT_POST_COMPACTION_TARGET_RATIO;
+        const ruleOnlyTarget = Math.floor(
+          this.thresholds.contextWindowTokens * this.thresholds.autoTriggerRatio * targetRatio * RULE_ONLY_TARGET_SLACK
+        );
+        if (reason !== "manual" && used <= ruleOnlyTarget) {
+          const timestamp = new Date().toISOString();
+          await writeCheckpoint(this.opts.projectRoot, { version: 1, timestamp, ...partial });
+          this.progress.onCompaction();
+          this.lastCompactionUsed = used;
+          this.opts.onStatus?.(
+            `[compaction] 규칙 기반 압축 ${((Date.now() - maskStartedAt) / 1000).toFixed(1)}s — ` +
+              `오래된 도구 출력 ${masked.maskedCount}개 생략(약 ${masked.savedTokens} 토큰 절감), 요약 생성 없음`
+          );
+          this.opts.onStatus?.(`[compaction complete] ${timestamp}`);
+          this.opts.onCompactionStatus?.("complete", timestamp);
+          this.opts.onCompactionDetail?.({
+            droppedCount: masked.maskedCount,
+            droppedTokens: masked.savedTokens,
+            droppedPreview: masked.preview,
+            keptCount: this.messages.length,
+            keptTokens: used,
+            summary: "(규칙 기반: 오래된 도구 출력만 자리표시자로 대체 — 대화 본문은 그대로)",
+          });
+          return;
+        }
+      } catch {
+        // 추정 실패 — 마스킹은 이미 적용됐으니 그대로 LLM 경로로 진행한다.
+      }
+    }
     // The compaction summary request is a chat() call like any other, so it
     // can hit the exact same two transient, non-deterministic backend
     // failures the main turn loop already retries once (connection timeout
@@ -1845,7 +1892,8 @@ export class AgentLoop {
           partial,
           this.thresholds.contextWindowTokens,
           budget.tailBudgetFraction,
-          budget.summaryMaxTokens
+          budget.summaryMaxTokens,
+          this.thresholds.fastPathInputTokens ?? FAST_PATH_INPUT_TOKENS
         );
         this.messages = messages;
         this.progress.onCompaction();

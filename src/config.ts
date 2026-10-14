@@ -114,6 +114,13 @@ export interface HarnessideConfig {
      */
     minGrowthFraction?: number;
     /**
+     * 규칙 기반 1단계: 오래된 도구 출력을 자리표시자로 바꿔 LLM 요약 없이(0초) 줄인다.
+     * 이것만으로 목표 아래로 내려가면 요약을 생략한다. 기본 켜짐.
+     * `keepRecentToolResults` 최근 N개 보존(4), `minChars` 이보다 짧으면 둠(400),
+     * `keepChars` 남길 앞부분(200, 오류면 3배).
+     */
+    masking?: { enabled?: boolean; keepRecentToolResults?: number; minChars?: number; keepChars?: number };
+    /**
      * Wall-clock ceiling for the summary generation, in milliseconds. Unset /
      * 0 = no ceiling, which is the historical behavior.
      *

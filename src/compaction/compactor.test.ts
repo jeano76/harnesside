@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { estimateTokens, shouldCompact, shouldEarlyCompact, buildResumePrompt, runCompaction, recommendThresholds, DEFAULT_TAIL_BUDGET_FRACTION, composeSystemMessage, selectKeptTail, splitSystemMessage, stripResumePrefix, estimateTextTokens, CONTINUE_AFTER_COMPACTION } from "./compactor.js";
+import { estimateTokens, shouldCompact, shouldEarlyCompact, buildResumePrompt, runCompaction, recommendThresholds, DEFAULT_TAIL_BUDGET_FRACTION, composeSystemMessage, selectKeptTail, splitSystemMessage, stripResumePrefix, estimateTextTokens, CONTINUE_AFTER_COMPACTION, buildSummaryInstruction, splitAnchor, FAST_PATH_INPUT_TOKENS } from "./compactor.js";
 import { writeCheckpoint, Checkpoint } from "./checkpoint.js";
 import type { ChatCompletionRequest, ChatMessage, ChatCompletionResponse, ModelBackend } from "../backend/types.js";
 
@@ -258,7 +258,7 @@ test("runCompaction sanitizes tool_calls/tool-role messages so a strict backend 
       // The original system prompt ("sys") must survive compaction, concatenated
       // with the summary as ONE system message — not silently replaced by it.
       assert.equal(result.messages[0].role, "system");
-      assert.equal(result.messages[0].content, "sys\n\n[Compacted history summary]\nsummary text");
+      assert.ok(String(result.messages[0].content).startsWith("sys\n\n[Compacted history summary]\nsummary text"));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -286,7 +286,7 @@ test("runCompaction returns a detail report naming what was dropped and what rep
 
       assert.ok(result.detail.droppedCount > 0, "expected some older messages to be dropped");
       assert.ok(result.detail.keptCount > 0, "expected some recent messages kept as the tail");
-      assert.equal(result.detail.summary, "summary text"); // strictNoToolsBackend's scripted reply
+      assert.ok(result.detail.summary.startsWith("summary text")); // strictNoToolsBackend's scripted reply (+ code-appended user-request anchor)
       assert.ok(
         result.detail.droppedPreview.some((l) => l.includes("please investigate the slow endpoint")),
         "the dropped-content preview should name what was actually summarized away"
@@ -338,27 +338,27 @@ test("runCompaction sets max_tokens on the summary request, scaled to the real c
       assert.ok(sent);
       assert.ok(typeof sent!.max_tokens === "number" && sent!.max_tokens! > 0, `expected a positive max_tokens, got ${sent!.max_tokens}`);
       // Bounded by the WINDOW, not a flat constant — but the default is now
-      // DEFAULT_SUMMARY_MAX_TOKENS (1024), not the window's 25%.
+      // DEFAULT_SUMMARY_MAX_TOKENS (768), not the window's 25%.
       //
       // Reported directly: "컴팩션의 시간이 오래걸리는데". Measured: the summary
       // request's prefill is served from the prompt cache (~0.3 s), and decode
       // runs at 38 tok/s, so the old window-derived 4096 was ~107 s of pure
-      // generation for a summary whose job is to COMPRESS the history. 1024 is
+      // generation for a summary whose job is to COMPRESS the history. 768 is
       // ~27 s. The budget is still window-bounded (a small window still shrinks
       // it) and still overridable per-config, because the right trade is a
       // judgement call rather than a fact.
-      assert.equal(sent!.max_tokens, 1024);
+      assert.equal(sent!.max_tokens, 768);
       assert.equal(
         sent!.max_tokens!,
-        Math.min(1024, Math.floor(16384 * 0.25)),
-        "1024 default, still capped by the window"
+        Math.min(768, Math.floor(16384 * 0.25)),
+        "768 default, still capped by the window"
       );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   })());
 
-test("the summary budget defaults to 1024 and the retry cap can only tighten it", () =>
+test("the summary budget defaults to 768 and the retry cap can only tighten it", () =>
   (async () => {
     const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
     try {
@@ -370,9 +370,9 @@ test("the summary budget defaults to 1024 and the retry cap can only tighten it"
       ];
       const partial = { reason: "manual" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
 
-      // Default: 1024, whatever the window is.
+      // Default: 768, whatever the window is.
       await runCompaction(dir, messages, backend, "m", partial, 16_384);
-      assert.equal(lastRequest()!.max_tokens, 1024);
+      assert.equal(lastRequest()!.max_tokens, 768);
 
       // The cap parameter can only TIGHTEN. Raising the budget is done one layer
       // up, in loop.ts's postCompactionBudget, from
@@ -385,7 +385,7 @@ test("the summary budget defaults to 1024 and the retry cap can only tighten it"
       await runCompaction(dir, messages, backend, "m", partial, 16_384, 0.4, 99_999);
       assert.equal(
         lastRequest()!.max_tokens,
-        1024,
+        768,
         "a cap above the default does not raise it — only config.yaml can"
       );
 
@@ -420,7 +420,7 @@ test("runCompaction's summary max_tokens has a floor for a small context window,
       assert.equal(lastRequest()!.max_tokens, 256); // floor, not 512*0.25=128
 
       await runCompaction(dir, messages, backend, "m", partial, 200_000); // huge window
-      assert.equal(lastRequest()!.max_tokens, 1024); // default cap, not 50000
+      assert.equal(lastRequest()!.max_tokens, 768); // default cap, not 50000
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -969,7 +969,8 @@ test("a second runCompaction feeds the previous summary (via the preserved syste
       );
       assert.equal(requests[1].messages[0].role, "system");
       const sys = second.messages[0].content as string;
-      assert.equal(sys, "BASE\n\n[Compacted history summary]\nSUMMARY-2\n\nsecond paragraph 2");
+      assert.ok(sys.startsWith("BASE\n\n[Compacted history summary]\nSUMMARY-2\n\nsecond paragraph 2"));
+      assert.ok(!sys.includes("SUMMARY-1"), "the old summary body is replaced, not stacked");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1137,7 +1138,7 @@ test("recommendThresholds keeps the proven defaults on a large calibrated window
   const t = recommendThresholds(32_768);
   assert.equal(t.contextWindowTokens, 32_768);
   assert.equal(t.autoTriggerRatio, 0.6);
-  assert.equal(t.summaryMaxTokens, 1024);
+  assert.equal(t.summaryMaxTokens, 768);
   assert.equal(t.postCompactionTargetRatio, 0.4);
   assert.equal(t.minGrowthFraction, 0.05);
 });
@@ -1154,9 +1155,9 @@ test("recommendThresholds moves the trigger earlier on a small window, never bel
 });
 
 test("recommendThresholds scales the summary budget with the window inside its latency bounds", () => {
-  assert.equal(recommendThresholds(200_000).summaryMaxTokens, 1024);
+  assert.equal(recommendThresholds(200_000).summaryMaxTokens, 768);
   const mid = recommendThresholds(8192).summaryMaxTokens!;
-  assert.ok(mid < 1024 && mid >= 256, `got ${mid}`);
+  assert.ok(mid < 768 && mid >= 256, `got ${mid}`);
   assert.equal(recommendThresholds(1024).summaryMaxTokens, 256);
 });
 
@@ -1205,3 +1206,107 @@ test("P3 shouldEarlyCompact: 실패 2연속+0.5 초과면 조기 압축", () => 
   assert.equal(shouldEarlyCompact(5500, 10000, 2, t), true);
   assert.equal(shouldEarlyCompact(7500, 10000, 2, t), false, "0.7 초과는 일반 경로가 처리");
 });
+
+test("summary instruction is structured and asks to UPDATE only when a previous summary exists", () => {
+  const fresh = buildSummaryInstruction(".", false, 512);
+  assert.ok(fresh.includes("## Dead ends") && fresh.includes("## Next"));
+  assert.ok(!fresh.includes("UPDATE it"));
+  assert.ok(fresh.includes("512 tokens"));
+  assert.ok(buildSummaryInstruction(".", true, 512).includes("UPDATE it"));
+});
+
+test("an unusable summary keeps the previous summary instead of overwriting it", () =>
+  (async () => {
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
+    try {
+      const backend: ModelBackend = {
+        async chat() {
+          return { choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] };
+        },
+        async listModels() {
+          return [];
+        },
+      };
+      const partial = { reason: "auto-threshold" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
+      const convo: ChatMessage[] = Array.from({ length: 20 }, (_, i) => ({
+        role: (i % 2 ? "assistant" : "user") as "user" | "assistant",
+        content: "x".repeat(400),
+      }));
+      const sys = "BASE\n\n[Compacted history summary]\nOLD-FACT: deploy key lives in vault";
+      const r = await runCompaction(dir, [{ role: "system", content: sys }, ...convo], backend, "m", partial, 4096);
+      assert.ok(String(r.messages[0].content).startsWith(sys), "the previous summary body survives");
+      assert.equal(r.checkpoint.summary, undefined, "a failed summary must not be stored in the checkpoint");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  })());
+
+test("user requests are anchored verbatim, survive repeated compactions, and the first request is never evicted", () =>
+  (async () => {
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
+    try {
+      const backend: ModelBackend = {
+        async chat() {
+          return { choices: [{ message: { role: "assistant", content: "## Goal\nsome model summary text" }, finish_reason: "stop" }] };
+        },
+        async listModels() {
+          return [];
+        },
+      };
+      const partial = { reason: "auto-threshold" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
+      const convo = (tag: string): ChatMessage[] =>
+        Array.from({ length: 20 }, (_, i) => ({
+          role: (i % 2 ? "assistant" : "user") as "user" | "assistant",
+          content: i === 0 ? `REQUEST ${tag}: never touch prod` : "x".repeat(400),
+        }));
+      let msgs: ChatMessage[] = [{ role: "system", content: "BASE" }, ...convo("A")];
+      let sys = "";
+      for (const tag of ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]) {
+        if (tag !== "A") msgs = [...msgs, ...convo(tag)];
+        const r = await runCompaction(dir, msgs, backend, "m", partial, 4096);
+        msgs = r.messages;
+        sys = String(msgs[0].content);
+      }
+      assert.ok(sys.includes("REQUEST A: never touch prod"), "the original request must survive 10 compactions");
+      assert.ok(sys.includes("REQUEST J"), "the latest dropped request is present");
+      assert.equal((sys.match(/User requests \(verbatim/g) ?? []).length, 1, "exactly one anchor block, never stacked");
+      assert.ok(splitAnchor(sys.slice(sys.indexOf("[Compacted"))).items.length <= 8);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  })());
+
+test("fast path: a tiny dropped slice skips the LLM entirely but still anchors user requests", () =>
+  (async () => {
+    const dir = await mkdtemp(join(tmpdir(), "harnesside-test-"));
+    try {
+      let calls = 0;
+      const backend: ModelBackend = {
+        async chat() {
+          calls++;
+          return { choices: [{ message: { role: "assistant", content: "should not be called at all" }, finish_reason: "stop" }] };
+        },
+        async listModels() {
+          return [];
+        },
+      };
+      const partial = { reason: "manual" as const, goal: "g", steps: [], files: [], pendingToolCall: null, mustPreserve: [] };
+      const msgs: ChatMessage[] = [
+        { role: "system", content: "sys" },
+        { role: "user", content: "fix the login bug" },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: "q2" },
+        { role: "assistant", content: "a2" },
+        { role: "user", content: "q3" },
+        { role: "assistant", content: "a3" },
+      ];
+      const r = await runCompaction(dir, msgs, backend, "m", partial, 30, 0.4, undefined, FAST_PATH_INPUT_TOKENS);
+      assert.equal(calls, 0);
+      assert.ok(String(r.messages[0].content).includes("fix the login bug"));
+      // 기본값(0)은 기존 계약 그대로 — 항상 모델을 부른다.
+      await runCompaction(dir, msgs, backend, "m", partial, 30);
+      assert.equal(calls, 1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  })());
