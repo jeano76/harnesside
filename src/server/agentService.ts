@@ -468,6 +468,18 @@ export class AgentService {
     return loop;
   }
 
+  /**
+   * 워크스페이스 전환을 **살아 있는 루프에** 알린다. `invalidate()` 는 대화 기록까지 버리므로
+   * 쓰지 않는다. 루프가 아직 없으면 다음 `ensureLoop()` 가 새 루트로 만든다.
+   */
+  workspaceChanged(note: string): void {
+    this.loop?.applyWorkspaceChange({
+      root: this.opts.baseDir(),
+      systemPrompt: typeof this.opts.systemPrompt === "function" ? this.opts.systemPrompt() : this.opts.systemPrompt,
+      note,
+    });
+  }
+
   /** 루프를 **버린다** — 워크스페이스 전환 후 이전 루프가 옛 기준 디렉터리를 들고 있으므로. */
   invalidate(): void {
     this.loop = null;

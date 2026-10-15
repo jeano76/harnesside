@@ -215,6 +215,11 @@ async function main(): Promise<number> {
       });
       emit(`[workspace] ${e.from.root} → ${e.to.root}`);
       void rememberWorkspace(home, e.to.root);
+      // 세션 분류 루트와 살아 있는 루프를 새 루트로 옮긴다 — 안 하면 모델은 옛 폴더 기준으로 계속 일한다.
+      // 안내문은 루프로 전달되므로 대기 목록에서 비운다.
+      session.rebindWorkspace();
+      agent.workspaceChanged(e.note);
+      workspace.takeNotes();
     },
   });
   // M1 터미널. PTY 는 **워크스페이스 루트 에서만** 연다 — 밖에서 열면 승인 게이트를

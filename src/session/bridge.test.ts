@@ -201,3 +201,19 @@ test("**완료된 뒤의** 같은 도구는 새 블록이다 — 경계가 없�
   assert.equal(b.length, 2, `서로 다른 두 명령이 ${b.length}개 블록이다 — 몇 번 불렀는지 모른다`);
   assert.equal(b[1]!.tool?.done, false, "새 명령이 '완료' 로 표시된다");
 });
+
+test("rebindWorkspace: 전환 뒤 세션이 새 루트로 분류된다 — 안 하면 새 루트에서 이어받기가 이 세션을 못 찾는다", async () => {
+  const s = await sandbox();
+  try {
+    let root = "/a";
+    const b = new SessionBridge({ stateDir: s.stateDir, workspace: () => root, debounceMs: 1000 });
+    b.start();
+    assert.equal(b.doc?.workspace, "/a");
+    root = "/b";
+    b.rebindWorkspace();
+    assert.equal(b.doc?.workspace, "/b");
+    assert.equal(b.pending, 1, "바뀐 분류가 저장 예약되지 않았다");
+  } finally {
+    await s.cleanup();
+  }
+});

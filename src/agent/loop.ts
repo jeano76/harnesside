@@ -455,9 +455,31 @@ export class AgentLoop {
    *  the right place. */
   private cancelRequested = false;
 
+  /** 워크스페이스 전환 대기분 — 다음 턴 시작에서 적용한다(턴 중간에 끼우면 tool_calls/결과 쌍이 깨진다). */
+  private pendingWorkspace: { root: string; systemPrompt: string; note: string } | null = null;
+
   constructor(private opts: AgentLoopOptions) {
     this.messages = [{ role: "system", content: opts.systemPrompt }];
     this.progress = new ProgressTracker(opts.progressGuard ?? DEFAULT_PROGRESS_GUARD, this.now());
+  }
+
+  /**
+   * 워크스페이스가 전환됐음을 알린다. 루프는 `projectRoot`·시스템 프롬프트를 생성 시점에
+   * 캡처하므로, 알리지 않으면 도구가 옛 폴더를 기준으로 돌고 모델은 전환 사실을 모른다.
+   * 대화 기록은 유지하고, 다음 턴 시작에 루트·시스템 프롬프트를 바꾸며 경계 문장을 남긴다.
+   */
+  applyWorkspaceChange(c: { root: string; systemPrompt: string; note: string }): void {
+    this.pendingWorkspace = c;
+  }
+
+  private flushPendingWorkspace(): void {
+    const c = this.pendingWorkspace;
+    if (!c) return;
+    this.pendingWorkspace = null;
+    this.opts.projectRoot = c.root;
+    this.opts.systemPrompt = c.systemPrompt;
+    if (this.messages[0]?.role === "system") this.messages[0] = { role: "system", content: c.systemPrompt };
+    this.messages.push({ role: "user", content: c.note });
   }
 
   /** P0-2 계측: exact(backend HTTP) vs fast(로컬 근사) 호출 수. */
@@ -593,6 +615,7 @@ export class AgentLoop {
       // session silently dropped it instead of picking the interrupted work
       // back up, even though a checkpoint was sitting on disk the whole
       // time. Check every time, not just at startup.
+      this.flushPendingWorkspace();
       await this.injectResumeContextIfPending();
       this.goal ??= userText.trim().slice(0, 200) || null;
       this.messages.push({ role: "user", content: userText });

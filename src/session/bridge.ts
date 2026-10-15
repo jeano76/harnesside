@@ -144,6 +144,20 @@ export class SessionBridge {
     void opts.streaming;
   }
 
+  /**
+   * 워크스페이스가 전환됐다 — 진행 중 세션의 분류 루트를 **새 루트로 옮긴다.**
+   * `start()` 에서만 기록하면 전환 뒤에도 옛 루트로 남아, 새 루트에서
+   * `list()`/`latest()` 가 이 세션을 찾지 못한다(2026-10-15 실측).
+   */
+  rebindWorkspace(): void {
+    const doc = this.current;
+    if (!doc) return;
+    const root = this.opts.workspace();
+    if (doc.workspace === root) return;
+    doc.workspace = root;
+    this.store.schedule(doc);
+  }
+
   /** 사용자가 보낸 메시지를 대화에 넣는다 — "내가 뭐라고 했나" 가 세션의 핵심이다. */
   noteUser(text: string): void {
     if (!this.current) this.start();
