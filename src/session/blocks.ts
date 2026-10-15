@@ -426,7 +426,7 @@ export function applyEvent(
     case "agent.error":
       return appendToBlock(blocks, "error", e.text ?? "", at);
     case "agent.diff":
-      return appendToBlock(blocks, "text", `[${e.text ?? "diff"}] 변경됨`, at);
+      return appendToBlock(blocks, "text", `[${e.text ?? "diff"}] changed`, at);
     default:
       return blocks;
   }
@@ -436,25 +436,25 @@ export function applyEvent(
 export function blockLabel(b: AgentBlock): string {
   switch (b.kind) {
     case "user":
-      return b.text.slice(0, 60) || "(빈 입력)";
+      return b.text.slice(0, 60) || "(empty input)";
     case "reasoning":
-      return `사고 ${b.text.length.toLocaleString("ko-KR")}자`;
+      return `Thinking ${b.text.length.toLocaleString("en-US")} chars`;
     case "text":
-      return b.text.slice(0, 60) || "(빈 답변)";
+      return b.text.slice(0, 60) || "(empty answer)";
     case "status":
       return b.text;
     case "tool":
-      return `도구 ${b.tool?.name ?? "?"}`;
+      return `Tool ${b.tool?.name ?? "?"}`;
     case "view":
       // 사람이 연 블록의 이름. **무엇을 열었는지** 말해야 세션 목록에서 찾을 수 있다.
       return b.view?.what === "settings"
-        ? "설정"
+        ? "Settings"
         : b.view?.what === "diff"
-          ? "변경 검토"
+          ? "Change review"
           : b.view?.what === "file"
-            ? `파일 ${b.view.path ?? ""}`
-              : "디렉터리";
+            ? `File ${b.view.path ?? ""}`
+              : "Directory";
     case "error":
-      return `오류: ${b.text.slice(0, 60)}`;
+      return `Error: ${b.text.slice(0, 60)}`;
   }
 }

@@ -40,7 +40,7 @@ export async function readBody(req: IncomingMessage, maxBytes = 8 * 1024 * 1024)
   for await (const c of req) {
     const b = c as Buffer;
     size += b.byteLength;
-    if (size > maxBytes) throw Object.assign(new Error("요청 본문이 너무 큽니다"), { status: 413 });
+    if (size > maxBytes) throw Object.assign(new Error("Request body is too large"), { status: 413 });
     chunks.push(b);
   }
   const raw = Buffer.concat(chunks).toString("utf8");

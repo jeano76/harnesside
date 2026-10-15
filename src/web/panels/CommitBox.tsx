@@ -14,6 +14,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiClient, ApiError } from "../api.js";
+import { useI18n } from "../i18n/index.js";
 
 const DIM = "#6e7681";
 const FG = "#c9d1d9";
@@ -34,14 +35,14 @@ interface Summary {
   clean: boolean;
 }
 
-const CODE_LABEL: Record<string, string> = {
-  M: "수정",
-  A: "추가",
-  D: "삭제",
-  R: "이름 변경",
-  "?": "미추적",
-  "??": "미추적",
-  C: "복사",
+const CODE_KEY: Record<string, string> = {
+  M: "git.code.M",
+  A: "git.code.A",
+  D: "git.code.D",
+  R: "git.code.R",
+  "?": "git.code.untracked",
+  "??": "git.code.untracked",
+  C: "git.code.C",
 };
 
 export function CommitBox({
@@ -54,6 +55,7 @@ export function CommitBox({
   onCommitted?: () => void;
 }) {
   const [sum, setSum] = useState<Summary | null>(null);
+  const t = useI18n();
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -97,14 +99,14 @@ export function CommitBox({
         all: false,
       });
       setMsg("");
-      onNotice("info", "커밋했습니다", `${r.hash.slice(0, 7)} — ${r.message}`);
+      onNotice("info", t("git.committed"), `${r.hash.slice(0, 7)} — ${r.message}`);
       void load();
       onCommitted?.();
     } catch (e) {
       // 실패 사유를 그대로 보여준다 — 서버가 이미 사람이 읽을 문장으로 바꿨다.
       const detail = e instanceof ApiError ? e.message : String(e);
       setErr(detail);
-      onNotice("error", "커밋하지 못했습니다", detail);
+      onNotice("error", t("git.commitFailed"), detail);
     } finally {
       setBusy(false);
     }
@@ -116,8 +118,8 @@ export function CommitBox({
   if (err && !sum) {
     return (
       <div style={{ padding: 8, fontSize: 11, color: DIM, display: "grid", gap: 6 }}>
-        <div>커밋할 수 없습니다 — {err}</div>
-        <div style={{ fontSize: 10 }}>저장소가 아니거나 git 이 설치되어 있지 않습니다.</div>
+        <div>{t("git.cannotCommit", { err })}</div>
+        <div style={{ fontSize: 10 }}>{t("git.notRepo")}</div>
       </div>
     );
   }
@@ -125,28 +127,28 @@ export function CommitBox({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 0, padding: "6px 8px" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}>
-        <strong>커밋</strong>
+        <strong>{t("git.commit")}</strong>
         <span style={{ color: DIM, fontSize: 10 }}>{sum?.branch ?? "?"}</span>
-        {sum?.shallow && <span style={{ color: "#d29922", fontSize: 10 }}>얕은 복사 — 원격 차이 계산 불가</span>}
-        {!!sum?.ahead && <span style={{ color: "#d29922", fontSize: 10 }}>미전송 {sum.ahead}</span>}
-        {!!sum?.behind && <span style={{ color: "#d29922", fontSize: 10 }}>미반영 {sum.behind} (마지막 fetch 기준)</span>}
+        {sum?.shallow && <span style={{ color: "#d29922", fontSize: 10 }}>{t("git.shallow")}</span>}
+        {!!sum?.ahead && <span style={{ color: "#d29922", fontSize: 10 }}>{t("git.ahead", { n: sum.ahead })}</span>}
+        {!!sum?.behind && <span style={{ color: "#d29922", fontSize: 10 }}>{t("git.behind", { n: sum.behind })}</span>}
         <span style={{ flex: 1 }} />
         <button type="button" onClick={() => void load()} style={btn}>
-          새로고침
+          {t("git.refresh")}
         </button>
       </div>
 
       {files.length === 0 ? (
         // **빈 화면을 두지 않는다**(§11.3) — 왜 비었는지 말한다.
-        <div style={{ fontSize: 11, color: DIM }}>바뀐 파일이 없습니다 — 커밋할 것이 없습니다.</div>
+        <div style={{ fontSize: 11, color: DIM }}>{t("git.nothing")}</div>
       ) : (
         <div style={{ display: "grid", gap: 2, maxHeight: 140, overflow: "auto" }}>
           {files.map((f) => (
             <label key={f.path} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, cursor: "pointer" }}>
               <input type="checkbox" checked={picked.has(f.path)} onChange={() => toggle(f.path)} />
-              <span style={{ color: "#d29922", fontSize: 10, width: 42 }}>{CODE_LABEL[f.code] ?? f.code}</span>
+              <span style={{ color: "#d29922", fontSize: 10, width: 42 }}>{CODE_KEY[f.code] ? t(CODE_KEY[f.code]) : f.code}</span>
               <span style={{ color: FG, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.path}</span>
-              {f.staged && <span style={{ color: DIM, fontSize: 10 }}>이미 스테이징됨</span>}
+              {f.staged && <span style={{ color: DIM, fontSize: 10 }}>{t("git.staged")}</span>}
             </label>
           ))}
         </div>
@@ -158,13 +160,13 @@ export function CommitBox({
           onChange={(e) => setMsg(e.target.value)}
           // **placeholder 는 이름이 아니다**(M8). 화면 판독기는 placeholder 를
           // 라벨로 읽지 않고, Tab 한 번 지나갈 때 이름 없는 입력이라는 사실만 남는다.
-          aria-label="커밋 메시지"
+          aria-label={t("git.msg")}
           onKeyDown={(e) => {
             // **빈 메시지는 서버가 막는다.** 여기서 조용히 막아도 되지만,
             // 왜 안 되는지 말해야 하므로 서버에 보내 그 문장을 그대로 받는다.
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canCommit) void doCommit();
           }}
-          placeholder="커밋 메시지"
+          placeholder={t("git.msg")}
           style={{
             flex: 1,
             background: "#0d1117",
@@ -178,13 +180,13 @@ export function CommitBox({
           }}
         />
         <button type="button" onClick={() => void doCommit()} disabled={!canCommit} style={{ ...btn, opacity: canCommit ? 1 : 0.5 }}>
-          {busy ? "커밋 중" : `커밋 (${picked.size})`}
+          {busy ? t("git.committing") : t("git.commitN", { n: picked.size })}
         </button>
       </div>
 
       {err && sum && <div style={{ color: "#f85149", fontSize: 10 }}>⚠ {err}</div>}
       {msg.trim() && picked.size === 0 && (
-        <div style={{ color: "#d29922", fontSize: 10 }}>커밋할 파일을 하나 이상 고르십시오.</div>
+        <div style={{ color: "#d29922", fontSize: 10 }}>{t("git.pickFiles")}</div>
       )}
     </div>
   );

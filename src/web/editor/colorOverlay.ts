@@ -38,6 +38,8 @@
 import { tokenizeLine, colorFor, LANGUAGE_LABEL, type Language, type Token } from "./highlight.js";
 import { COLOR, FONT } from "../theme/tokens.js";
 import { indentInfoFor, type IndentInfo } from "./indentRules.js";
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
 
 /**
  * 두 층이 **공유해야 하는** 글자 모양·여백.
@@ -120,8 +122,8 @@ export function normalizeForOverlay(text: string): string {
 
 /** 화면에 말할 "색칠하지 않는다" 문장 — 조용히 칠하지 않는 것이 이 저장소의 규칙. */
 export function unsupportedNote(path: string): string {
-  const ext = path.includes(".") ? `.${path.split(".").pop()}` : "(확장자 없음)";
-  return `이 형식은 색칠하지 않습니다 (미지원: ${ext}) — 내용은 그대로 보입니다.`;
+  const ext = path.includes(".") ? `.${path.split(".").pop()}` : i18n.t("ed.noColorExt");
+  return i18n.t("ed.noColor", { ext });
 }
 
 /**
@@ -164,10 +166,10 @@ export function editorOverlayPlan(opts: {
 
 function buildNote(o: { colorable: boolean; path?: string; total: number; shown: number; lang: Language }): string | undefined {
   const parts: string[] = [];
-  if (!o.colorable) parts.push(unsupportedNote(o.path ?? "파일"));
+  if (!o.colorable) parts.push(unsupportedNote(o.path ?? i18n.t("ed.fileWord")));
   if (o.total > o.shown) {
     // **자른 사실을 말한다.** 조용히 자르면 사용자는 "파일에 없던 줄"을 찾는다.
-    parts.push(`${o.total.toLocaleString("ko-KR")}줄 중 ${o.shown.toLocaleString("ko-KR")}줄만 색칠했습니다 — 나머지는 아래에 그대로 있습니다(자르지 않았습니다).`);
+    parts.push(i18n.t("ed.coloredPart", { n: o.total.toLocaleString(), shown: o.shown.toLocaleString() }));
   }
   return parts.length ? parts.join(" ") : undefined;
 }

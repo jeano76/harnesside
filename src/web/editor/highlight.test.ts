@@ -126,7 +126,7 @@ test("**모르는 확장자는 `text`** — 그리고 그 이름이 '일반 텍�
   for (const p of ["a.rs", "a.go", "a.java", "a.rb", "a.c", "a.cpp", "a.sql", "Makefile", "a.toml", "a.exe", "a.png"]) {
     assert.equal(languageFor(p), "text", `${p} 를 임의의 언어로 분류했다`);
   }
-  assert.equal(LANGUAGE_LABEL[languageFor("a.rs")], "일반 텍스트");
+  assert.equal(LANGUAGE_LABEL[languageFor("a.rs")], "Plain text");
   // 대소문자는 무시한다 — `.RS` 도 같은 답이어야 한다.
   assert.equal(languageFor("A.RS"), "text");
   assert.equal(languageFor("A.TS"), "typescript");

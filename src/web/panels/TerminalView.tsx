@@ -18,6 +18,8 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ApiClient, ApiError } from "../api.js";
 import { subscribeWs } from "../wsBus.js";
+import { i18n, useI18n } from "../i18n/index.js";
+import "../i18n/install.js";
 
 const DIM = "#6e7681";
 const FG = "#c9d1d9";
@@ -45,12 +47,12 @@ export interface TerminalSession {
 }
 
 /** 종료 상태 문장 — 서버의 `exitLabel` 와 **같은 규칙** 을 화면에서도 쓴다. */
-function exitLabel(s: TerminalSession): string | null {
+function exitLabel(s: TerminalSession, t: (k: string, v?: Record<string, string | number>) => string): string | null {
   if (s.state !== "exited") return null;
-  if (s.openError) return `셸 열기 실패 — ${s.openError}`;
-  if (s.exitSignal !== null) return `신호로 종료 (${s.exitSignal})`;
-  if (s.exitCode === null) return "종료됨 (코드 없음)";
-  return s.exitCode === 0 ? "종료됨 (0)" : `종료됨 (${s.exitCode})`;
+  if (s.openError) return t("term.openFailed", { err: s.openError });
+  if (s.exitSignal !== null) return t("term.signal", { s: s.exitSignal });
+  if (s.exitCode === null) return t("term.exitedNoCode");
+  return t("term.exited", { c: s.exitCode });
 }
 
 export function TerminalView({
@@ -71,6 +73,7 @@ export function TerminalView({
   focusRequest?: { n: number; session: TerminalSession } | null;
   onActiveCli?: (t: { terminalId: string; provider: string; sessionName: string; title: string; cwd: string; alive: boolean; auto: boolean; yolo: boolean } | null) => void;
 }) {
+  const t = useI18n();
   // ── 콜백이 매 렌더 새로 만들어져 deps 를 오염시킨다 (2026-10-01 실측) ──────────
   //
   // 부모(`main.tsx`)는 인라인 화살표를 넘긴다. 그래서 `onNotice` 의 동일성이 매 렌더마다
@@ -153,7 +156,7 @@ export function TerminalView({
         }
       } catch (e) {
         if (!alive) return;
-        notice("warn", "터미널을 열지 못했습니다", e instanceof ApiError ? e.message : String(e));
+        notice("warn", i18n.t("term.cantOpen"), e instanceof ApiError ? e.message : String(e));
       }
     })();
 
@@ -194,7 +197,7 @@ export function TerminalView({
         // 두면 "앗 눌러야 되나" 로 읽힌다. 대신 **어디서 열리는지**(cwd)와
         // 기다리는 중이라는 사실만 말한다.
         <div style={{ padding: "8px 10px", color: DIM, fontSize: 11, display: "flex", gap: 8, alignItems: "baseline" }}>
-          <span>열린 AI CLI 탭이 없습니다 — 프롬프트 옆 선택기나 /cli claude 로 여세요.</span>
+          <span>{t("term.noTabs")}</span>
         </div>
       )}
     </div>
@@ -217,6 +220,7 @@ function XtermPane({
   /** TerminalView 의 안정적인 래퍼. 값은 항상 최신, 동일성은 고정. */
   notice: (kind: "info" | "warn" | "error", title: string, body: string) => void;
 }) {
+  const t = useI18n();
   const host = useRef<HTMLDivElement | null>(null);
   const term = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -307,7 +311,7 @@ function XtermPane({
         // 판단하고, 사실은 "셸이 끝났는데 화면이 살아 있다" 다.
         if (err instanceof ApiError && err.status === 409) {
           setDead(true);
-          notice("warn", "셸이 이미 끝났습니다", `${session.title} — ${err.message}`);
+          notice("warn", i18n.t("term.shellEnded"), `${session.title} — ${err.message}`);
         }
       });
     });
@@ -322,13 +326,13 @@ function XtermPane({
     };
   }, [session.id, client, notice, session.title]);
 
-  const label = exitLabel(session);
+  const label = exitLabel(session, t);
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "2px 8px", fontSize: 10, color: DIM, flex: "0 0 auto" }}>
         <span>{session.cwd}</span>
         <span style={{ flex: 1 }} />
-        {label ? <span style={{ color: dead ? "#d29922" : DIM }}>{label}</span> : <span style={{ color: "#3fb950" }}>실행 중</span>}
+        {label ? <span style={{ color: dead ? "#d29922" : DIM }}>{label}</span> : <span style={{ color: "#3fb950" }}>{t("term.running")}</span>}
       </div>
       <div ref={host} style={{ flex: "1 1 auto", minHeight: 0, padding: 2 }} />
     </div>

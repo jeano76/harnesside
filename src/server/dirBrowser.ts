@@ -7,7 +7,7 @@
  * 미리보기와 확인을 거친다.
  */
 
-import { readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, dirname, resolve } from "node:path";
 
 export const MAX_DIR_ENTRIES = 500;
@@ -81,4 +81,29 @@ export async function listDirs(
       hiddenCount,
     },
   };
+}
+
+export type MkdirResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: "invalid" | "not-found" | "exists" | "denied"; detail: string };
+
+/** Create one folder named `name` directly inside `parent`. No nesting, no `..`: the explorer creates a single level at a time. */
+export async function createDir(parent: string, name: string): Promise<MkdirResult> {
+  const n = name.trim();
+  if (!n || n === "." || n === ".." || /[\\/\0]/.test(n) || Buffer.byteLength(n) > 255) {
+    return { ok: false, reason: "invalid", detail: `Invalid folder name: ${name}` };
+  }
+  if (!isAbsolute(parent) || parent.includes("\0")) return { ok: false, reason: "invalid", detail: `Path must be absolute: ${parent}` };
+  const base = resolve(parent);
+  if (!(await stat(base).catch(() => null))?.isDirectory()) return { ok: false, reason: "not-found", detail: `Not a folder: ${base}` };
+  const path = join(base, n);
+  try {
+    await mkdir(path);
+    return { ok: true, path };
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") return { ok: false, reason: "exists", detail: `Already exists: ${path}` };
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") return { ok: false, reason: "denied", detail: `Permission denied: ${path}` };
+    return { ok: false, reason: "invalid", detail: `Could not create folder: ${path}` };
+  }
 }

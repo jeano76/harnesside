@@ -42,7 +42,7 @@ test("**401 은 '인증 실패'** 라고 말한다 — 원인을 모르면 사�
     (e: unknown) => {
       assert.ok(e instanceof ApiError);
       assert.equal(e.status, 401);
-      assert.match(e.message, /인증 실패/);
+      assert.match(e.message, /Authentication failed/);
       // 원인이 함께 있어야 추측이 줄어든다.
       assert.match(e.message, /토큰 불일치/);
       return true;

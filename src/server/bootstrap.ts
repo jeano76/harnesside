@@ -156,18 +156,18 @@ export interface BootstrapResult {
 
 /** §3.2 의 12단계. 이 배열의 순서 자체가 명세다. */
 export const STEP_NAMES = [
-  "인스턴스 가드",
-  "하드웨어 탐지",
-  "llama-server 탐색",
-  "모델 결정",
-  "브라우저 GPU 정책 + 실측 VRAM",
-  "포트 계획",
-  "llama-server 기동",
-  "헬스체크 대기",
-  "웹 자산 확인",
-  "HTTP/WS 서버 기동",
-  "Chrome 기동",
-  "루프 유지",
+  "Instance guard",
+  "Hardware detection",
+  "Find llama-server",
+  "Choose model",
+  "Browser GPU policy + measured VRAM",
+  "Port plan",
+  "Start llama-server",
+  "Wait for health check",
+  "Check web assets",
+  "Start HTTP/WS server",
+  "Start Chrome",
+  "Keep running",
 ] as const;
 
 async function timed<T>(
@@ -199,7 +199,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         n: i + 1,
         name: STEP_NAMES[i],
         ok: true,
-        detail: "dry-run: 실행하지 않음",
+        detail: "dry-run: nothing executed",
         tookSeconds: 0,
         fatal: false,
         pending: i + 1 >= 9,
@@ -211,8 +211,8 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
 
   const record = (s: BootstrapStep) => {
     steps.push(s);
-    logger?.info({ step: s.n, ok: s.ok, took: s.tookSeconds }, `부팅 ${s.n}/12 ${s.name}: ${s.detail}`);
-    log(`[${s.n}/12] ${s.name} — ${s.detail}${s.ok ? "" : " (실패)"}`);
+    logger?.info({ step: s.n, ok: s.ok, took: s.tookSeconds }, `boot ${s.n}/12 ${s.name}: ${s.detail}`);
+    log(`[${s.n}/12] ${s.name} — ${s.detail}${s.ok ? "" : " (failed)"}`);
     // 실패면 **왜 · 다음** 두 줄을 바로 밑에 — 창도 같은 함수로 같은 말을 한다(Q-5).
     for (const l of bootFailureLines(s)) log(l);
   };
@@ -248,7 +248,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         return (await detectHardware(opts.run)) as Hardware;
       } catch (e) {
         // 탐지 실패는 곧 진행 불가지만, 창은 떠야 한다(§3.2: fail 대신 degrade).
-        errors.push(`하드웨어 탐지 실패: ${msg(e)}`);
+        errors.push(`Hardware detection failed: ${msg(e)}`);
         throw e;
       }
     }).catch((e) => ({ value: undefined, seconds: 0, error: msg(e) } as never));
@@ -258,8 +258,8 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       name: STEP_NAMES[1],
       ok: !!hw,
       detail: hw
-        ? `CPU ${hw.cpuCount}코어 · RAM ${(hw.ramTotalBytes / 1024 ** 3).toFixed(0)}GiB · GPU ${hw.gpus.length}개`
-        : "탐지 실패 — CPU 전용으로 계속",
+        ? `CPU ${hw.cpuCount} cores · RAM ${(hw.ramTotalBytes / 1024 ** 3).toFixed(0)}GiB · GPU ${hw.gpus.length}`
+        : "Detection failed — continuing CPU-only",
       tookSeconds: seconds,
       fatal: false,
     });
@@ -278,7 +278,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         // 환경을 주입받았으면 홈도 그 환경을 따른다 — 안 그러면 `~/llama.cpp` 는 진짜 홈에서 찾는다(테스트가 머신을 검사하게 된다).
         const found = await findLlamaServer({ env: opts.env, home: opts.env?.HOME });
         // 못 찾았을 때 "왜" 를 말할 재료 — 있지만 실행 못 한 후보가 있으면 그게 원인이다.
-        if (!found.location && found.rejected.length) llamaWhy = `있지만 실행할 수 없는 llama-server: ${found.rejected[0]}`;
+        if (!found.location && found.rejected.length) llamaWhy = `Found llama-server that cannot run: ${found.rejected[0]}`;
         return found.location;
       } catch (e) {
         llamaWhy = firstLine(msg(e));
@@ -296,7 +296,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         } as never);
         result.llama = { binPath, source: "built", backend: hw?.gpuBackend === "none" ? "cpu" : "cuda" };
       } catch (e) {
-        errors.push(`llama.cpp 빌드 실패: ${msg(e)}`);
+        errors.push(`llama.cpp build failed: ${msg(e)}`);
       }
     }
     record({
@@ -304,18 +304,18 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       name: STEP_NAMES[2],
       ok: !!result.llama,
       detail: result.llama
-        ? `찾음: ${result.llama.binPath}`
+        ? `Found: ${result.llama.binPath}`
         : opts.allowBuild
-          ? "빌드 실패 — 이후 단계는 계속 진행합니다"
-          : "찾지 못함 (allowBuild=false) — 이후 단계는 계속 진행합니다",
+          ? "Build failed — later steps continue"
+          : "Not found (allowBuild=false) — later steps continue",
       why: result.llama
         ? null
-        : (errors.find((e) => e.startsWith("llama.cpp 빌드 실패")) ??
+        : (errors.find((e) => e.startsWith("llama.cpp build failed")) ??
           llamaWhy ??
-          "PATH · ~/llama.cpp/build*/bin · ~/.harnesside/llama.cpp 어디에도 llama-server 가 없음"),
+          "No llama-server in PATH, ~/llama.cpp/build*/bin or ~/.harnesside/llama.cpp"),
       next: result.llama
         ? null
-        : "`harnesside doctor --install` 로 설치하거나, 이미 있는 llama-server 경로를 HARNESSIDE_LLAMA_SERVER 로 지정하세요",
+        : "Install with `harnesside doctor --install`, or point HARNESSIDE_LLAMA_SERVER at an existing llama-server",
       tookSeconds: seconds,
       fatal: false,
     });
@@ -347,10 +347,10 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       name: STEP_NAMES[3],
       detail: value.path
         ? `${value.reason} · ${(modelBytes / 1024 ** 3).toFixed(1)}GB`
-        : `${value.reason} — 모델 없음(설정에서 선택 필요)`,
+        : `${value.reason} — no model (pick one in settings)`,
       ok: !!value.path,
       why: value.path ? null : value.reason,
-      next: value.path ? null : "`harnesside doctor --install` 로 모델을 받거나, `.harnesside/config.yaml` 의 llama.modelPath 에 GGUF 경로를 적으세요",
+      next: value.path ? null : "Download a model with `harnesside doctor --install`, or set llama.modelPath in `.harnesside/config.yaml` to a GGUF path",
       tookSeconds: seconds,
       fatal: false,
     });
@@ -364,7 +364,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         return {
           mode: "full" as GpuMode,
           reserveMiB: 0,
-          rationale: ["하드웨어를 모릅니다 — GPU 설정을 하지 않고 진행합니다."],
+          rationale: ["Hardware unknown — continuing without GPU settings."],
           measured: { vramTotalMiB: 0, vramFreeMiB: 0, modelMiB: 0, headroomMiB: 0 },
         } satisfies GpuDecision;
       }
@@ -376,8 +376,8 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       name: STEP_NAMES[4],
       ok: true,
       detail:
-        `모드 ${value.mode} · 브라우저 예약 ${value.reserveMiB}MiB · ` +
-        `실측 free ${value.measured.vramFreeMiB}MiB / 모델 ${value.measured.modelMiB}MiB`,
+        `mode ${value.mode} · browser reserve ${value.reserveMiB}MiB · ` +
+        `measured free ${value.measured.vramFreeMiB}MiB / model ${value.measured.modelMiB}MiB`,
       tookSeconds: seconds,
       fatal: false,
     });
@@ -432,10 +432,10 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       name: STEP_NAMES[5],
       ok: true,
       detail: adoptedServer
-        ? `llama ${value.llamaPort} · IDE ${value.idePort} — 기존 서버를 채택(${adoptedServer.model}). ` +
-            `두 번째 서버를 띄우지 않습니다: 8GiB 카드에서 두 개는 즉시 OOM 합니다(실측).`
+        ? `llama ${value.llamaPort} · IDE ${value.idePort} — adopting the existing server (${adoptedServer.model}). ` +
+            `Not starting a second server: two on an 8GiB card OOM immediately (measured).`
         : `llama ${value.llamaPort} · IDE ${value.idePort}` +
-          (value.moved.length ? ` (${value.moved.length}건 이동: ${value.moved.map((m) => m.what).join(",")})` : ""),
+          (value.moved.length ? ` (${value.moved.length} moved: ${value.moved.map((m) => m.what).join(",")})` : ""),
       tookSeconds: seconds,
       fatal: false,
     });
@@ -448,8 +448,8 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
     if (adoptedServer) {
       // **튜닝을 계산하지 않는다.** 그 숫자는 지금 실행되지 않을 프로세스의 플래그라서
       // 보여주면 "이 플래그로 돈다" 고 읽힌다.
-      detail = `스폰하지 않음 — 기존 서버를 그대로 사용(${adoptedServer.model}:${adoptedServer.port}). ` +
-        `종료할 때도 이 서버는 죽이지 않습니다(우리가 띄운 것이 아닙니다).`;
+      detail = `Not spawning — using the existing server as is (${adoptedServer.model}:${adoptedServer.port}). ` +
+        `It is not stopped on exit either (we did not start it).`;
     } else if (result.llama && result.model?.path && result.ports) {
       result.tuning = hw
         ? tuneForHardware(hw, { modelBytes })
@@ -458,12 +458,12 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       // 모델과 브라우저가 서로를 죽인다.
       if (result.tuning && result.gpu && result.gpu.reserveMiB > 0) {
         result.tuning.rationale.push(
-          `브라우저 VRAM 예약 ${result.gpu.reserveMiB}MiB(GPU 모드 ${result.gpu.mode})를 제외했습니다.`
+          `Excluded the browser VRAM reserve of ${result.gpu.reserveMiB}MiB (GPU mode ${result.gpu.mode}).`
         );
       }
-      detail = `튜닝: ngl=${result.tuning?.gpuLayers} c=${result.tuning?.contextSize} t=${result.tuning?.threads}`;
+      detail = `tuning: ngl=${result.tuning?.gpuLayers} c=${result.tuning?.contextSize} t=${result.tuning?.threads}`;
     } else {
-      detail = "선행 조건 미충족(llama binary 또는 모델 없음) — 스킵";
+      detail = "Preconditions not met (no llama binary or model) — skipped";
     }
     // `ok` 는 늘 true 다. 단계 7 은 실패로 표시하지 않는다 — 모델이 없거나 스폰을
     // 건너뛰어도 **창은 떠야 한다**(요구 9 의 degrade). "준비됐는가" 는 단계 8 이 말한다.
@@ -496,7 +496,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       // **경로가 실재한다** — 이제 단계 4 의 결과를 지배한다.
       result.model = {
         path: asPath,
-        reason: `기존 서버가 서빙 중인 모델을 사용합니다: ${adoptedServer.model}`,
+        reason: `Using the model the existing server is serving: ${adoptedServer.model}`,
         via: "priority-series",
         suggestions: [],
       };
@@ -510,16 +510,16 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       const prior = [...steps].reverse().find((s) => s.n === 4);
       if (prior) {
         prior.ok = true;
-        prior.detail = `기존 서버가 서빙 중인 모델을 사용합니다: ${asPath}`;
-        logger?.info({ step: 4, ok: true }, `부팅 4/12 정정: ${prior.detail}`);
-        log(`[4/12] ${prior.name} — ${prior.detail} (기존 서버 채택으로 정정 · 앞줄 "모델 없음" 은 superseded)`);
+        prior.detail = `Using the model the existing server is serving: ${asPath}`;
+        logger?.info({ step: 4, ok: true }, `boot 4/12 correction: ${prior.detail}`);
+        log(`[4/12] ${prior.name} — ${prior.detail} (corrected by adopting the existing server · the earlier "no model" line is superseded)`);
       }
     } else {
       // **경로는 없다.** 이름만 안다는 사실을 구분해서 기록한다.
       record({
         n: 4,
         name: STEP_NAMES[3],
-        detail: `모델 파일 경로는 모릅니다 — 실행 중인 서버가 "${adoptedServer.model}" 을 서빙 중입니다.`,
+        detail: `Model file path unknown — the running server is serving "${adoptedServer.model}".`,
         ok: true,
         fatal: false,
         tookSeconds: 0,
@@ -539,10 +539,10 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       name: STEP_NAMES[7],
       ok: result.llamaReady,
       detail: adoptedServer
-        ? `기존 서버 ${adoptedServer.model} 응답 확인(채택) — 스폰 없음`
+        ? `Existing server ${adoptedServer.model} responded (adopted) — no spawn`
         : result.llamaReady
-          ? `모델 ${result.model?.path ?? result.servedModel ?? "(경로 모름)"} 준비됨`
-          : "모델 서버 미기동 — 창은 계속 뜨고 '모델 연결 실패' 배너를 표시합니다",
+          ? `Model ${result.model?.path ?? result.servedModel ?? "(path unknown)"} ready`
+          : "Model server not running — the window still opens and shows a 'model connection failed' banner",
       // 왜 — 앞 단계(3 탐색 · 4 모델 · 7 기동) 중 **처음 실패한 것**이 원인이다. 없으면 모른다고 말한다.
       why: result.llamaReady
         ? null
@@ -552,7 +552,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
           })(),
       next: result.llamaReady
         ? null
-        : `이미 띄운 llama-server 가 있으면 포트 ${result.ports?.llamaPort ?? 8080} 에서 답하는지 확인(curl -s http://127.0.0.1:${result.ports?.llamaPort ?? 8080}/v1/models) — 없으면 \`harnesside doctor --install\``,
+        : `If a llama-server is already running, check that it answers on port ${result.ports?.llamaPort ?? 8080} (curl -s http://127.0.0.1:${result.ports?.llamaPort ?? 8080}/v1/models) — otherwise run \`harnesside doctor --install\``,
       tookSeconds: (Date.now() - t0) / 1000,
       fatal: false,
     });
@@ -573,7 +573,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
         n,
         name: STEP_NAMES[n - 1],
         ok: false,
-        detail: `아직 구현되지 않음 (${PHASE_LABEL[n]})`,
+        detail: `Not implemented yet (${PHASE_LABEL[n]})`,
         tookSeconds: 0,
         fatal: false,
         pending: true,
@@ -586,12 +586,12 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
       record({ n, name: STEP_NAMES[n - 1], ok: out.ok, detail: out.detail, why: out.why ?? null, next: out.next ?? null, tookSeconds: (Date.now() - t0) / 1000, fatal: false });
     } catch (e) {
       // 실패해도 부팅은 계속된다 — 창은 떠야 한다(§3.2 [8] 의 degrade 원칙과 같다).
-      errors.push(`단계 ${n} 실패: ${msg(e)}`);
+      errors.push(`Step ${n} failed: ${msg(e)}`);
       record({
         n,
         name: STEP_NAMES[n - 1],
         ok: false,
-        detail: `실패: ${firstLine(msg(e)) ?? "확인 못 함"}`,
+        detail: `Failed: ${firstLine(msg(e)) ?? "unknown"}`,
         why: firstLine(msg(e)),
         next: null,
         tookSeconds: (Date.now() - t0) / 1000,
@@ -602,7 +602,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<BootstrapResult
 
   // 중단 조건이 없으므로 여기까지 온다. ok 는 "치명적 실패 없음" 을 뜻한다.
   result.ok = !aborted;
-  if (errors.length) logger?.warn({ errors }, "부팅 중 오류가 있었습니다(진행은 계속)");
+  if (errors.length) logger?.warn({ errors }, "Errors during boot (continuing)");
   return result;
 }
 
@@ -645,8 +645,8 @@ export async function acquireInstanceLock(opts: {
     await handle.close();
     if (alive) {
       throw new Error(
-        `이미 실행 중입니다 (PID ${pid}). 새 인스턴스를 띄우지 않습니다. ` +
-          `창을 보려면 harnesside open, 종료하려면 harnesside down 을 쓰세요.`
+        `Already running (PID ${pid}). Not starting a new instance. ` +
+          `Use harnesside open to see the window, harnesside down to stop it.`
       );
     }
     // 고아 락: 서버가 죽었는데 락이 남은 경우만 정리한다.
@@ -654,7 +654,7 @@ export async function acquireInstanceLock(opts: {
     await writeFile(path, `${process.pid}\n${new Date().toISOString()}\n`, { flag: "wx" }).catch(() => {});
   }
   return {
-    detail: `락 획득 (PID ${process.pid})`,
+    detail: `lock acquired (PID ${process.pid})`,
     release: async () => {
       await unlink(path).catch(() => {});
     },

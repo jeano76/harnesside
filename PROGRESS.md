@@ -11,15 +11,35 @@
 
 ---
 
-## ① 현재 상태 (마지막 갱신: 2026-10-12)
+## ① 현재 상태 (마지막 갱신: 2026-10-15)
 
 ```yaml
-phase: push + CI 전체 통과 (15커밋, 커버리지 80.03%)
+phase: U-Phase1 (U-1 팔레트 통합 · U-11 키맵) 구현
 status: in_progress
-last_commit: "ff685e2 docs(progress): 기호·복원 라이브 11/11 기록"
-next_action: "M9 패널 i18n화 또는 S-9 나머지 중 선택"
+last_commit: "TBD feat(phase1): 팔레트 통합·키맵 프리셋"
+next_action: "U-Phase2 (U-6 레시피 · U-7 진단)"
 blocking: 없음
 ```
+
+## 2026-10-15 · U-Phase1 (U-1 · U-11) 구현
+
+> `PROMPT_UNIFIED_IDE.md` Phase 1. 입구(팔레트·키맵)가 정본이 된다.
+> - 신규 순수 로직: `src/web/palette/prefix.ts`(접두어 5종·줄이동·맥락칩·잘림) + `prefix.logic.test.ts` 7 ·
+>   `src/web/keymap/keymap.ts`(vscode/intellij·충돌0·예약키 경고·단축키로 찾기) + `keymap.logic.test.ts` 6 ·
+>   `src/shared/productivity.ts`(U-12 최소: 빈 데이터→판정 불가) + test 3.
+> - 배선(`src/web/main.tsx`): Ctrl+K·Ctrl+P·Ctrl+Shift+P·Shift Shift 모두 같은 `openPalette` ·
+>   접두어가 기본 범위를 이김 · 행마다 글자+모양 배지 · "N개 중 M개" 잘림 · Tab 맥락 첨부 ·
+>   F12/Ctrl+B 등 U-11 단축키 존재(인덱스 전 honest toast) · 첫 실행 키맵 1화면(건너뛰기 가능) ·
+>   U-12 로컬 계측 버퍼.
+> - i18n `en`·`ko` 25키씩 추가 (parity 유지). `verify-window.mjs` 에 U-1 팔레트 검사 1건 추가.
+> - 결함 1건(테스트가 잡음): `findKeymapConflicts` 가 팔레트 가족 내 겹침(Ctrl+K/Ctrl+P)을
+>   충돌로 보고 → `PALETTE_FAMILY` 제외로 수정 (같은 함수이므로 충돌 아님, 코드에 사유 기록).
+> - 배선 회귀 1건: `TerminalView.logic.test.ts` 팔레트 매처가 `hits.map` 만 인식 →
+>   `hits.slice().map` 도 같은 버튼으로 인정하도록 갱신.
+>
+> 검증: `npm test` **2552/2552** · `typecheck` clean · `ci-checks` PASS · `build` PASS.
+> 미측정: headed 창 라이브(`verify-window.mjs` 신규 항목)·Mac Cmd·`Shift Shift` OS별 동작.
+> 다음: U-Phase2 (U-6 레시피 · U-7 진단).
 
 ## 2026-10-12 · push + CI 전체 통과
 

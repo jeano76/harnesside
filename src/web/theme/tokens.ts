@@ -11,6 +11,9 @@
  * - `DIM`(#8b949e)이 기본 메타 색. `#6e7681`은 `DIM_SUBTLE`로만 쓴다.
  */
 
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
+
 export const COLOR = {
   FG: "#c9d1d9",
   DIM: "#8b949e",
@@ -49,8 +52,8 @@ export function toneColor(tone: "normal" | "warn" | "error" | "good" | undefined
 /** 도구 블록 상태점 — 색+기호 병기용. */
 export function statusGlyph(done: boolean): { glyph: string; color: string; label: string } {
   return done
-    ? { glyph: "✓", color: COLOR.GOOD, label: "완료" }
-    : { glyph: "▸", color: COLOR.YELLOW, label: "실행 중" };
+    ? { glyph: "✓", color: COLOR.GOOD, get label() { return i18n.t("block.statusDone"); } }
+    : { glyph: "▸", color: COLOR.YELLOW, get label() { return i18n.t("block.statusRunning"); } };
 }
 
 export const FONT = {
@@ -99,18 +102,19 @@ export const LAYOUT = {
 } as const;
 
 export const BLOCK_KIND_META = {
-  user: { glyph: "🧑", label: "나" },
-  assistant: { glyph: "🤖", label: "답변" },
-  think: { glyph: "💭", label: "생각 중" },
-  shell: { glyph: "▸", label: "셸 실행" },
-  file: { glyph: "📄", label: "열기" },
-  edit: { glyph: "✏️", label: "수정" },
-  search: { glyph: "🔍", label: "검색" },  files: { glyph: "📁", label: "빠른 이동" },
-  settings: { glyph: "⚙️", label: "설정" },
-  review: { glyph: "📝", label: "변경 검토" },
-  approval: { glyph: "⚠️", label: "승인 필요" },
-  notice: { glyph: "ℹ️", label: "알림" },
-  tool: { glyph: "🔧", label: "도구" },
+  user: { glyph: "🧑", get label() { return i18n.t("block.kind.user"); } },
+  assistant: { glyph: "🤖", get label() { return i18n.t("block.kind.assistant"); } },
+  think: { glyph: "💭", get label() { return i18n.t("block.kind.think"); } },
+  shell: { glyph: "▸", get label() { return i18n.t("block.kind.shell"); } },
+  file: { glyph: "📄", get label() { return i18n.t("block.kind.file"); } },
+  edit: { glyph: "✏️", get label() { return i18n.t("block.kind.edit"); } },
+  search: { glyph: "🔍", get label() { return i18n.t("block.kind.search"); } },
+  files: { glyph: "📁", get label() { return i18n.t("block.kind.files"); } },
+  settings: { glyph: "⚙️", get label() { return i18n.t("block.kind.settings"); } },
+  review: { glyph: "📝", get label() { return i18n.t("block.kind.review"); } },
+  approval: { glyph: "⚠️", get label() { return i18n.t("block.kind.approval"); } },
+  notice: { glyph: "ℹ️", get label() { return i18n.t("block.kind.notice"); } },
+  tool: { glyph: "🔧", get label() { return i18n.t("block.kind.tool"); } },
 } as const;
 
 export type BlockKindKey = keyof typeof BLOCK_KIND_META;

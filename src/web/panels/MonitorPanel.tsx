@@ -157,6 +157,7 @@ export interface GaugeProps {
  * **색 판정만** 뒤집는다.
  */
 export function Gauge({ label, pct, value, color, size = 72, higherIsWorse = true, why }: GaugeProps) {
+  const t = useI18n();
   const r = size / 2 - 7;
   const c = 2 * Math.PI * r;
   // **위험 판정은 값이 아니라 여유로 한다.** 디스크가 91% 차 있으면 초록(정상)이
@@ -177,7 +178,7 @@ export function Gauge({ label, pct, value, color, size = 72, higherIsWorse = tru
   if (pct === null) {
     return (
       <div style={{ width: size, textAlign: "center" }}>
-        <svg width={size} height={size} role="img" aria-label={`${label}: 측정 불가${why ? ` — ${why}` : ""}`}>
+        <svg width={size} height={size} role="img" aria-label={`${label}: ${t("mon.unmeasurable")}${why ? ` — ${why}` : ""}`}>
           <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#21262d" strokeWidth={7} />
           <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" fill={DIM} fontSize={16}>
             ?
@@ -191,7 +192,7 @@ export function Gauge({ label, pct, value, color, size = 72, higherIsWorse = tru
           // 사유가 길어도 게이지가 **넘치지 않게** — 이 패널은 높이가 고정이다.
           title={why}
         >
-          {why ?? "측정 불가"}
+          {why ?? t("mon.unmeasurable")}
         </div>
       </div>
     );
@@ -224,7 +225,8 @@ export function Gauge({ label, pct, value, color, size = 72, higherIsWorse = tru
 
 /** 스파크라인 — 구멍(null)은 잇지 않고 끊는다. 0 과 잇으면 "측정 실패" 가 "0%" 로 보인다. */
 export function Sparkline({ data, width = 120, height = 28, color = "#3fb950" }: { data: (number | null)[]; width?: number; height?: number; color?: string }) {
-  if (data.length < 2) return <div style={{ width, height, color: DIM, fontSize: 10 }}>추이 없음</div>;
+  const t = useI18n();
+  if (data.length < 2) return <div style={{ width, height, color: DIM, fontSize: 10 }}>{t("mon.noTrend")}</div>;
   const max = Math.max(1, ...data.map((d) => d ?? 0));
   const x = (i: number) => (i / (data.length - 1)) * (width - 1);
   const y = (v: number) => height - 1 - (v / max) * (height - 2);
@@ -240,7 +242,7 @@ export function Sparkline({ data, width = 120, height = 28, color = "#3fb950" }:
   });
   if (cur.length) segs.push(cur.join(" "));
   return (
-    <svg width={width} height={height} role="img" aria-label={`추이 ${data.length}샘플`} style={{ display: "block" }}>
+    <svg width={width} height={height} role="img" aria-label={t("mon.trendLabel", { n: data.length })} style={{ display: "block" }}>
       {segs.map((d, i) => (
         <path key={i} d={d} fill="none" stroke={color} strokeWidth={1.25} />
       ))}
@@ -250,13 +252,14 @@ export function Sparkline({ data, width = 120, height = 28, color = "#3fb950" }:
 
 /** 코어 히트맵 — 코어 0~N 격자. */
 export function CoreHeatmap({ cores, cell = 7 }: { cores: number[]; cell?: number }) {
-  if (cores.length === 0) return <div style={{ color: DIM, fontSize: 11 }}>코어 정보 없음</div>;
+  const t = useI18n();
+  if (cores.length === 0) return <div style={{ color: DIM, fontSize: 11 }}>{t("mon.noCores")}</div>;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(16, 1fr)", gap: 2 }} role="img" aria-label={`코어 ${cores.length}개 사용률`}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(16, 1fr)", gap: 2 }} role="img" aria-label={t("mon.coresLabel", { n: cores.length })}>
       {cores.map((c, i) => (
         <div
           key={i}
-          title={`코어 ${i}: ${c.toFixed(0)}%`}
+          title={t("mon.core", { i, pct: c.toFixed(0) })}
           style={{ width: cell, height: cell, borderRadius: 2, background: SEVERITY_COLOR[severity(c)] }}
         />
       ))}
@@ -288,7 +291,8 @@ function Bar({ label, pct, text, color }: { label: string; pct: number | null; t
  * 늘고 줄며, track 이 곧 100% 스케일이다. 수치는 전부 보인다(추측 금지).
  */
 export function MonitorStrip({ latest }: { latest: Metrics | null }) {
-  if (!latest) return <div style={{ fontSize: 10, color: DIM, padding: "1px 8px" }}>계측 시작 중…</div>;
+  const t = useI18n();
+  if (!latest) return <div style={{ fontSize: 10, color: DIM, padding: "1px 8px" }}>{t("mon.starting")}</div>;
   const cell = (label: string, pct: number | null, text: string, warn?: boolean) => (
     <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 4, flex: "1 1 90px", minWidth: 80 }} title={`${label} ${text}`}>
       <span style={{ color: DIM, flexShrink: 0 }}>{label}</span>
@@ -339,7 +343,7 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
       >
         <div style={{ fontSize: 10, color: DIM }}>{t("panel.monitor")}</div>
         {!latest ? (
-          <div style={{ color: DIM, fontSize: 11 }}>계측 시작 중…</div>
+          <div style={{ color: DIM, fontSize: 11 }}>{t("mon.starting")}</div>
         ) : (
           <>
             <Bar label="CPU" pct={latest.cpu.cores.length ? latest.cpu.overall : null} text={`${latest.cpu.overall.toFixed(0)}%`} />
@@ -347,27 +351,27 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
             <Bar
               label="VRAM"
               pct={latest.gpu ? latest.gpu.memPct : null}
-              text={latest.gpu ? `${latest.gpu.memPct.toFixed(0)}%` : "? (GPU 없음)"}
+              text={latest.gpu ? `${latest.gpu.memPct.toFixed(0)}%` : t("mon.noGpuShort")}
             />
             <Bar
-              label="컨텍스트"
+              label={t("mon.context")}
               pct={latest.context?.pct ?? null}
-              text={latest.context ? `${latest.context.pct.toFixed(0)}%` : "? (작업 중에만 측정)"}
+              text={latest.context ? `${latest.context.pct.toFixed(0)}%` : t("mon.contextOnly")}
               color={latest.context && latest.context.pct > 80 ? SEVERITY_COLOR.crit : undefined}
             />
-            <Bar label="디스크 여유" pct={100 - latest.disk.usedPct} text={fmtBytes(latest.disk.freeBytes)} />
+            <Bar label={t("mon.diskFree")} pct={100 - latest.disk.usedPct} text={fmtBytes(latest.disk.freeBytes)} />
             {latest.gpu && (
               <Bar
-                label="GPU 사용률"
+                label={t("mon.gpuUtil")}
                 pct={latest.gpu.utilPct}
-                text={latest.gpu.utilPct === null ? "? (값 없음)" : `${latest.gpu.utilPct.toFixed(0)}%`}
+                text={latest.gpu.utilPct === null ? t("mon.noValue") : `${latest.gpu.utilPct.toFixed(0)}%`}
               />
             )}
             <div style={{ fontSize: 10, color: DIM, lineHeight: 1.5 }}>
-              {latest.gpu?.tempC !== null && latest.gpu?.tempC !== undefined ? `온도 ${latest.gpu.tempC.toFixed(0)}°C · ` : ""}
-              {latest.gpu?.powerW !== null && latest.gpu?.powerW !== undefined ? `전력 ${latest.gpu.powerW.toFixed(0)}W · ` : ""}
+              {latest.gpu?.tempC !== null && latest.gpu?.tempC !== undefined ? t("mon.temp", { v: latest.gpu.tempC.toFixed(0) }) : ""}
+              {latest.gpu?.powerW !== null && latest.gpu?.powerW !== undefined ? t("mon.power", { v: latest.gpu.powerW.toFixed(0) }) : ""}
               {latest.llama ? `llama ${fmtBytes(latest.llama.rssBytes)} · ` : ""}
-              {latest.context ? `${latest.context.usedTokens.toLocaleString()}tok` : "토큰 —"}
+              {latest.context ? `${latest.context.usedTokens.toLocaleString()}tok` : t("mon.tokensNone")}
             </div>
           </>
         )}
@@ -384,12 +388,12 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
             <span>CPU {b.cpu.toFixed(1)}%</span>
             <span>RAM {b.mem.toFixed(1)}%</span>
             {b.gpuMem !== null && <span>VRAM {b.gpuMem.toFixed(1)}%</span>}
-            {b.ctx !== null && <span style={{ color: b.ctx > 80 ? SEVERITY_COLOR.crit : FG }}>컨텍스트 {b.ctx.toFixed(1)}%</span>}
+            {b.ctx !== null && <span style={{ color: b.ctx > 80 ? SEVERITY_COLOR.crit : FG }}>{t("mon.contextPct", { v: b.ctx.toFixed(1) })}</span>}
           </>
         )}
         {onToggle && (
           <button type="button" onClick={onToggle} style={{ marginLeft: "auto", background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit" }}>
-            펼치기
+            {t("mon.expand")}
           </button>
         )}
       </div>
@@ -417,7 +421,7 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
     >
       {!latest ? (
         // §11.3: 빈 화면은 결함이다 — 무엇을 하고 있고 무엇이 안 되는지 말한다.
-        <div style={{ color: DIM, fontSize: 12 }}>계측 시작 중… 서버가 1초마다 샘플을 모읍니다.</div>
+        <div style={{ color: DIM, fontSize: 12 }}>{t("mon.startingLong")}</div>
       ) : (
         <>
           {/* ── 게이지 2×2 강제 (2026-10-03 요구) ───────────────────────
@@ -434,10 +438,10 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
               value={latest.gpu ? `${latest.gpu.memPct.toFixed(0)}%` : "?"}
               // **GPU 자체가 없을 때** — 드라이버가 없거나 `nvidia-smi` 를 못 찾았다.
               // "측정 불가" 라면 무엇을 설치해야 하는지 알 수 없다.
-              why={latest.gpu ? undefined : "GPU 없음 — 드라이버 미설치"}
+              why={latest.gpu ? undefined : t("mon.noGpuWhy")}
             />
             <Gauge
-              label="컨텍스트"
+              label={t("mon.context")}
               pct={latest.context?.pct ?? null}
               value={latest.context ? `${latest.context.pct.toFixed(0)}%` : "?"}
               color={latest.context && latest.context.pct > 80 ? SEVERITY_COLOR.crit : undefined}
@@ -445,14 +449,14 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
               // 대화가 멈춘 사이에 값은 오래된 것이거나 없다. 그래서 이유를 말한다 —
               // 실측: 이 값이 계속 "?" 로만 보여 "측정 불가" 를 결함으로 오해했다.
               // (0으로 두지 않는다 — 없는 것과 0 은 다르다.)
-              why={latest.context ? undefined : "작업 중이 아니면 측정되지 않습니다"}
+              why={latest.context ? undefined : t("mon.contextWhy")}
             />
             {/* §5.5: 80% 초과에 "컴팩션 임박" — 게이지 색과 함께 이유를 말한다. */}
             {latest.context && latest.context.pct > 80 && (
               <div style={{ alignSelf: "center", color: SEVERITY_COLOR.crit, fontSize: 11 }}>
-                컴팩션 임박
+                {t("mon.compactSoon")}
                 <div style={{ color: DIM }}>
-                  {latest.context.usedTokens.toLocaleString()} / {latest.context.totalTokens.toLocaleString()} 토큰
+                  {t("mon.tokens", { used: latest.context.usedTokens.toLocaleString(), total: latest.context.totalTokens.toLocaleString() })}
                 </div>
               </div>
             )}
@@ -472,19 +476,19 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
                 원형으로 그릴 수 없다(80W 의 72% 가 무슨 뜻이 없는지 모른다. 도넛에 억지로
                 넣으면 수치가 있다는 사실이 사라진다. */}
             <Gauge
-              label="디스크 여유"
+              label={t("mon.diskFree")}
               pct={100 - latest.disk.usedPct}
               value={`${fmtBytes(latest.disk.freeBytes)}`}
               higherIsWorse={false}
             />
             {latest.gpu && (
               <Gauge
-                label="GPU 사용률"
+                label={t("mon.gpuUtil")}
                 pct={latest.gpu.utilPct}
                 // **null 을 0 으로 그리지 않는다** — 모르는 값을 아는 것처럼 보이면
                 // 조용히 실패다. `?` 와 사유를 그대로 보여준다.
                 value={latest.gpu.utilPct === null ? "?" : `${latest.gpu.utilPct.toFixed(0)}%`}
-                why={latest.gpu.utilPct === null ? "nvidia-smi 가 값을 안 줬습니다" : undefined}
+                why={latest.gpu.utilPct === null ? t("mon.smiNoValue") : undefined}
               />
             )}
           </div>
@@ -495,38 +499,38 @@ export function MonitorPanel({ latest, series, height = 200, onToggle, collapsed
             {latest.gpu && (
               <>
                 {latest.gpu.tempC !== null && (
-                  <Bar label="GPU 온도" pct={latest.gpu.tempC} text={`${latest.gpu.tempC.toFixed(0)}°C`} color={latest.gpu.tempC > 85 ? SEVERITY_COLOR.crit : undefined} />
+                  <Bar label={t("mon.gpuTemp")} pct={latest.gpu.tempC} text={`${latest.gpu.tempC.toFixed(0)}°C`} color={latest.gpu.tempC > 85 ? SEVERITY_COLOR.crit : undefined} />
                 )}
-                {latest.gpu.powerW !== null && <Bar label="전력" pct={null} text={`${latest.gpu.powerW.toFixed(0)} W`} color="#a371f7" />}
+                {latest.gpu.powerW !== null && <Bar label={t("mon.powerLabel")} pct={null} text={`${latest.gpu.powerW.toFixed(0)} W`} color="#a371f7" />}
               </>
             )}
             {latest.llama && <Bar label="llama RSS" pct={null} text={fmtBytes(latest.llama.rssBytes)} color="#58a6ff" />}
-            <span style={{ fontSize: 10, color: DIM }}>디스크 총 {fmtBytes(latest.disk.totalBytes)}</span>
+            <span style={{ fontSize: 10, color: DIM }}>{t("mon.diskTotal", { v: fmtBytes(latest.disk.totalBytes) })}</span>
           </div>
 
           <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
             <div>
-              <div style={{ fontSize: 11, color: DIM }}>CPU 추이 (최근 {series?.length ?? 0}샘플)</div>
-              {series && series.length > 1 ? <Sparkline data={series} /> : <div style={{ color: DIM, fontSize: 11 }}>추적 중…</div>}
+              <div style={{ fontSize: 11, color: DIM }}>{t("mon.cpuTrend", { n: series?.length ?? 0 })}</div>
+              {series && series.length > 1 ? <Sparkline data={series} /> : <div style={{ color: DIM, fontSize: 11 }}>{t("mon.tracking")}</div>}
             </div>
             <div>
-              <div style={{ fontSize: 11, color: DIM }}>코어별 (0~N)</div>
+              <div style={{ fontSize: 11, color: DIM }}>{t("mon.perCore")}</div>
               <CoreHeatmap cores={latest.cpu.cores} />
             </div>
             {latest.tokensPerSec !== null && (
               <div style={{ fontSize: 11, color: DIM }}>
-                토큰 속도 <b style={{ color: FG }}>{latest.tokensPerSec.toFixed(1)}</b> tok/s
+                {t("mon.tokenRate")} <b style={{ color: FG }}>{latest.tokensPerSec.toFixed(1)}</b> tok/s
               </div>
             )}
           </div>
 
           <div style={{ fontSize: 10, color: DIM, display: "flex", gap: 10 }}>
-            <span>기준 {new Date(latest.at).toLocaleTimeString("ko-KR")}</span>
-            <span>· 서버 1Hz 계측, 요청당 계측 없음</span>
-            {!visible && <span style={{ color: SEVERITY_COLOR.warn }}>· 탭이 숨겨져 갱신을 멈췄습니다</span>}
+            <span>{t("mon.asOf", { time: new Date(latest.at).toLocaleTimeString() })}</span>
+            <span>{t("mon.hz")}</span>
+            {!visible && <span style={{ color: SEVERITY_COLOR.warn }}>{t("mon.hidden")}</span>}
             {onToggle && (
               <button type="button" onClick={onToggle} style={{ marginLeft: "auto", background: "none", border: 0, color: DIM, cursor: "pointer", font: "inherit" }}>
-                접기
+                {t("mon.collapse")}
               </button>
             )}
           </div>

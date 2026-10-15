@@ -29,6 +29,7 @@ export type LogStatus = {
 
 import type { LogEntry, LogLevel } from "../../server/logRing.js";
 import { i18n, translatorFor, type Locale } from "../i18n/index.js";
+import "../i18n/install.js";
 
 export const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 30, warn: 40, error: 50 };
 
@@ -105,7 +106,7 @@ export function clampLine(msg: string, max = MAX_LINE_CHARS): { text: string; tr
   const head = Math.floor(max * 0.6);
   const tail = max - head;
   return {
-    text: `${msg.slice(0, head)}\n… ${(msg.length - max).toLocaleString()}자 생략 …\n${msg.slice(-tail)}`,
+    text: `${msg.slice(0, head)}\n${i18n.t("log.omitted", { n: (msg.length - max).toLocaleString() })}\n${msg.slice(-tail)}`,
     truncated: true,
     dropped: msg.length - max,
   };

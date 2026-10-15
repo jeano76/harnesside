@@ -27,7 +27,7 @@ test("결정은 **한 번만** — 이중 실행 방지", () => {
   assert.equal(a.changed, true);
   const again = decide(a.items, item("a.ts").id, "approved");
   assert.equal(again.changed, false, "같은 승인 두 번");
-  assert.match(again.reason, /이미 승인/);
+  assert.match(again.reason, /Already approved/);
   // 반대 결정은 가능해야 한다 (사용자가 생각을 바꿈)
   const flip = decide(a.items, item("a.ts").id, "rejected");
   assert.equal(flip.changed, true);
@@ -36,7 +36,7 @@ test("결정은 **한 번만** — 이중 실행 방지", () => {
 test("없는 항목은 거부하고 **이유** 를 말한다", () => {
   const r = decide([], "없는 id", "approved");
   assert.equal(r.changed, false);
-  assert.match(r.reason, /찾을 수 없/);
+  assert.match(r.reason, /not found/i);
 });
 
 test("결정 시점의 해시를 **기록**한다 — 이것이 stale 판정의 기준", () => {
@@ -51,7 +51,7 @@ test("결정 후 내용이 바뀌면 **승인이 무효화**된다", () => {
   assert.equal(d.items[0].state, "approved");
   const refreshed = refreshHashes(d.items, { "a.ts": hashOf("v2") });
   assert.equal(refreshed[0].state, "stale", "바뀐 내용을 그대로 승인했다");
-  assert.match(refreshed[0].note ?? "", /다시 검토/);
+  assert.match(refreshed[0].note ?? "", /another review/);
 });
 
 test("거절 후 변경되어도 stale 이 된다", () => {
@@ -80,7 +80,7 @@ test("되돌리기는 **사본을 남긴다** — 실패하면 복구할 곳이 
   assert.equal(r.ok, true);
   assert.equal(r.backup, "/tmp/bak/a.ts");
   assert.equal(r.items[0].state, "reverted");
-  assert.match(r.reason, /되돌렸습니다/);
+  assert.match(r.reason, /reverted/);
 });
 
 test("**stale 은 되돌리지 않는다** — 사용자의 새 편집을 지우게 된다", () => {
@@ -89,14 +89,14 @@ test("**stale 은 되돌리지 않는다** — 사용자의 새 편집을 지우
   const stale = refreshHashes(d.items, { "a.ts": hashOf("v2") });
   const r = revert(stale, it.id, "/tmp/bak/a.ts", "이전 내용");
   assert.equal(r.ok, false, "바뀐 내용을 되돌렸다 — 지금 편집이 사라진다");
-  assert.match(r.reason, /지금 내용을 잃습니다/);
+  assert.match(r.reason, /lose the current content/);
 });
 
 test("미결정 항목은 되돌리지 않는다", () => {
   const it = item("a.ts");
   const r = revert([it], it.id, "/tmp/bak", "원본");
   assert.equal(r.ok, false);
-  assert.match(r.reason, /아직 결정되지/);
+  assert.match(r.reason, /not been decided/);
 });
 
 test("이미 되돌린 항목은 다시 되돌리지 않는다", () => {
@@ -105,7 +105,7 @@ test("이미 되돌린 항목은 다시 되돌리지 않는다", () => {
   const first = revert(d.items, it.id, "/tmp/bak", "원본");
   const second = revert(first.items, it.id, "/tmp/bak2", "원본");
   assert.equal(second.ok, false);
-  assert.match(second.reason, /이미 되돌렸/);
+  assert.match(second.reason, /Already reverted/);
 });
 
 test("원본 내용이 비면 되돌리지 않는다 — 빈 파일로 덮어쓴다", () => {
@@ -118,7 +118,7 @@ test("원본 내용이 비면 되돌리지 않는다 — 빈 파일로 덮어쓴
 test("없으면 거부", () => {
   const r = revert([], "nope", "/tmp/bak", "x");
   assert.equal(r.ok, false);
-  assert.match(r.reason, /찾을 수 없/);
+  assert.match(r.reason, /not found/i);
 });
 
 test("요약: **검토 대기** 와 완료가 구분된다", () => {
@@ -150,10 +150,10 @@ test("요약 라벨: 대기/다시 검토 수를 **숫자로** 보여준다", ()
   const label = summaryLabel(summarize(stale));
   assert.match(label, /\+3/);
   assert.match(label, /−1/);
-  assert.match(label, /다시 검토 1/);
+  assert.match(label, /Review again 1/);
   // stale 은 "검토 대기" 로도 센다 — 사용자가 할 일이 남아 있다
-  assert.match(label, /검토 대기 1/);
-  assert.equal(summaryLabel(summarize([])), "변경 없음");
+  assert.match(label, /Awaiting review 1/);
+  assert.equal(summaryLabel(summarize([])), "No changes");
 });
 
 test("정렬: **다시 검토 → 대기** 순 — 사용자가 볼 것을 먼저", () => {

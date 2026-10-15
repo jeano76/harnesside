@@ -33,6 +33,8 @@ import React, { useMemo } from "react";
 import { marked } from "marked";
 import { colorFor, tokenizeLine, languageFor } from "../editor/highlight.js";
 import { COLOR, FONT, RADIUS } from "../theme/tokens.js";
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
 
 // ── 색 (GitHub Dark 계열 — 파일 미리보기와 **같은 계열**로 맞춘다) ────────────
 const FG = COLOR.FG;
@@ -68,9 +70,9 @@ function renderFence(code: string, langHint: string | undefined, key: string): R
     <div key={key} style={{ margin: "6px 0", border: `1px solid ${BORDER}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", borderBottom: `1px solid ${BORDER}`, color: DIM, fontSize: 10 }}>
         {/* **언어 표기** — 무엇으로 칠해졌는지 말한다. 지어내지 않는다. */}
-        <span>{lang === "text" ? "코드" : lang}</span>
+        <span>{lang === "text" ? i18n.t("md.code") : lang}</span>
         <span style={{ flex: 1 }} />
-        <span>{lines.length}줄</span>
+        <span>{i18n.t("cb.lines", { n: lines.length })}</span>
       </div>
       <pre style={{ margin: 0, padding: "6px 8px", overflow: "auto", font: `${FONT.AUX}px/${FONT.LINE_CODE} ${FONT.MONO}`, tabSize: FONT.TAB_SIZE }}>
         {lines.map((l, i) => (
@@ -147,7 +149,7 @@ function styleNode(node: React.ReactNode, key: number): React.ReactNode {
     if (!href) {
       // **삭제하지 않고 글자로 보여준다** — 링크가 왜 눌리지 않는지 알 수 있어야 한다.
       return (
-        <span key={key} style={{ color: YELLOW, borderBottom: `1px dotted ${COLOR.DIM_SUBTLE}`, cursor: "not-allowed" }} title={`허용되지 않는 주소입니다: ${el.props.href ?? ""}`}>
+        <span key={key} style={{ color: YELLOW, borderBottom: `1px dotted ${COLOR.DIM_SUBTLE}`, cursor: "not-allowed" }} title={i18n.t("md.badLink", { href: el.props.href ?? "" })}>
           {kids}
         </span>
       );

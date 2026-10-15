@@ -102,20 +102,20 @@ test("토큰 경계가 어긋나도 겹치지 않는다 — 이모지 안의 인
 });
 
 test("통계 라벨: 없는 항목은 숨긴다", () => {
-  assert.equal(statLabel({ added: 0, removed: 0, modified: 0, unchanged: 10 }), "변경 없음");
-  assert.equal(statLabel({ added: 3, removed: 1, modified: 0, unchanged: 5 }), "추가 3 · 삭제 1");
-  assert.equal(statLabel({ added: 1, removed: 1, modified: 2, unchanged: 5 }), "수정 2 · 추가 1 · 삭제 1");
+  assert.equal(statLabel({ added: 0, removed: 0, modified: 0, unchanged: 10 }), "No changes");
+  assert.equal(statLabel({ added: 3, removed: 1, modified: 0, unchanged: 5 }), "Added 3 · Deleted 1");
+  assert.equal(statLabel({ added: 1, removed: 1, modified: 2, unchanged: 5 }), "Modified 2 · Added 1 · Deleted 1");
 });
 
 test("diff 소스별 좌/우 라벨 — 무엇끼리 비교하는지 표시해야 한다", () => {
   const g = initialView("git", "src/a.ts", "side");
   assert.match(g.leftLabel, /HEAD/);
-  assert.match(g.rightLabel, /워킹트리/);
+  assert.match(g.rightLabel, /Working tree/);
   const f = initialView("file", "src/a.ts", "side");
-  assert.equal(f.leftLabel, "디스크");
-  assert.equal(f.rightLabel, "버퍼");
+  assert.equal(f.leftLabel, "Disk");
+  assert.equal(f.rightLabel, "Buffer");
   const t = initialView("tool", "src/a.ts", "side");
-  assert.equal(t.rightLabel, "실행 후");
+  assert.equal(t.rightLabel, "After run");
 });
 
 test("초기 레이아웃: 넓으면 가로, 좁으면 인라인", () => {

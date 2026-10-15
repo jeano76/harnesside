@@ -91,17 +91,17 @@ test("오류를 **사람 문장**으로 바꾼다 — TypeError 를 그대로 �
   const net = humanizeError(new TypeError("fetch failed"), "모델 목록 조회");
   assert.equal(/TypeError/.test(net.message), false, `원시 오류를 그대로 띄웠다: ${net.message}`);
   assert.match(net.message, /모델 목록 조회/);
-  assert.match(net.message, /연결하지 못/);
+  assert.match(net.message, /Could not reach/);
   assert.equal(net.retryable, true);
 
-  assert.match(humanizeError(new Error("ENOSPC: no space left on device"), "저장").message, /디스크가 가득/);
-  assert.match(humanizeError(new Error("EACCES: permission denied"), "저장").message, /권한/);
-  assert.match(humanizeError(new Error("409 Conflict"), "저장").message, /충돌/);
-  assert.match(humanizeError(new Error("500 internal server error"), "저장").message, /서버 오류/);
+  assert.match(humanizeError(new Error("ENOSPC: no space left on device"), "저장").message, /disk is full/);
+  assert.match(humanizeError(new Error("EACCES: permission denied"), "저장").message, /Permission denied/);
+  assert.match(humanizeError(new Error("409 Conflict"), "저장").message, /conflicted/);
+  assert.match(humanizeError(new Error("500 internal server error"), "저장").message, /server error/i);
   // 알려지지 않은 오류는 **원인을 남긴다** — 삼키면 버그를 못 찾는다
   const unknown = humanizeError(new Error("weird thing"), "동기화");
   assert.match(unknown.message, /weird thing/);
-  assert.match(unknown.message, /^동기화.{0,4}실패/, `문장 형태가 어색하다: ${unknown.message}`);
+  assert.match(unknown.message, /^The .{0,12} failed/, `문장 형태가 어색하다: ${unknown.message}`);
 });
 
 // ------------------------------------------------------------------ 드래프트
@@ -219,7 +219,7 @@ test("명령은 **한 번만** 실행된다 — 두 번 실행되면 파일이 �
     count++;
   });
   assert.equal(dup.ran, false, "동일 명령이 두 번 실행됐다");
-  assert.match(dup.reason ?? "", /이미 실행 중/);
+  assert.match(dup.reason ?? "", /Already running/);
   assert.equal(r.isRunning("a"), true);
   release();
   await p1;
@@ -233,7 +233,7 @@ test("실패한 명령은 **사람 문장**으로 이력에 남는다", async ()
     throw new Error("fetch failed");
   });
   assert.equal(res.ran, false);
-  assert.match(res.reason ?? "", /서버 오류|연결/);
+  assert.match(res.reason ?? "", /server error|reach/i);
   const h = r.history_;
   assert.equal(h.length, 1);
   assert.equal(h[0].ok, false);

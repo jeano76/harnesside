@@ -7,6 +7,8 @@
  */
 
 import { authHeaders, wsUrl } from "./session.js";
+import { i18n } from "./i18n/index.js";
+import "./i18n/install.js";
 
 export class ApiError extends Error {
   constructor(
@@ -75,7 +77,7 @@ export class ApiClient {
         // 본문이 JSON 이 아니면 상태 코드만으로 말한다
       }
       if (res.status === 401) {
-        throw new ApiError(401, `인증 실패 — 토큰이 없거나 세션이 만료됐습니다. (${detail})`, parsed);
+        throw new ApiError(401, i18n.t("api.auth", { detail }), parsed);
       }
       // **본문을 그대로 실어 보낸다** — 409 의 서버본문을 안 쓰면 충돌 UI 가 없다.
       throw new ApiError(res.status, detail, parsed);

@@ -40,13 +40,13 @@ test("llama·모델이 없는 부팅 — 3·4·8 단계가 왜·다음을 말하
     for (const n of [3, 4, 8]) {
       const f = describeBootFailure(by(n));
       assert.ok(f, `${n}단계가 실패로 보이지 않는다: ${JSON.stringify(by(n))}`);
-      assert.notEqual(f!.why, "확인 못 함", `${n}단계의 '왜' 가 비었다`);
-      assert.doesNotMatch(f!.next, /확인 못 함/, `${n}단계의 '다음' 이 비었다`);
+      assert.notEqual(f!.why, "unknown", `${n}단계의 '왜' 가 비었다`);
+      assert.doesNotMatch(f!.next, /unknown/, `${n}단계의 '다음' 이 비었다`);
     }
     // 8단계의 '왜' 는 앞선 원인 단계를 가리킨다 — 지어낸 문장이 아니라 그 단계의 결과다.
-    assert.match(describeBootFailure(by(8))!.why, /^3\/12 llama-server 탐색/);
-    assert.match(describeBootFailure(by(8))!.next, /포트 \d+/);
-    assert.ok(lines.some((l) => l.includes("· 왜:")) && lines.some((l) => l.includes("· 다음:")), `로그에 왜·다음 줄이 없다:\n${lines.join("\n")}`);
+    assert.match(describeBootFailure(by(8))!.why, /^3\/12 Find llama-server/);
+    assert.match(describeBootFailure(by(8))!.next, /port \d+/);
+    assert.ok(lines.some((l) => l.includes("· why:")) && lines.some((l) => l.includes("· next:")), `로그에 왜·다음 줄이 없다:\n${lines.join("\n")}`);
     // 성공한 단계는 실패 설명이 없다.
     assert.equal(describeBootFailure(by(1)), null);
   } finally {

@@ -1332,7 +1332,7 @@ export class AgentLoop {
           };
           const decision = await this.opts.approvalGate!.request(toolRequest);
           if (decision !== "allow-once" && decision !== "allow-always") {
-            content = `승인되지 않았습니다 — ${decision}`;
+            content = `Not approved — ${decision}`;
             logFailure({
               timestamp: new Date().toISOString(),
               summary: `tool ${call.function.name} blocked by approval gate`,

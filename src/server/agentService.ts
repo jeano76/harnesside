@@ -244,28 +244,28 @@ export class AgentService {
       return {
         ok: false,
         step: "check",
-        reason: "이미 떠 있는 서버를 채택한 상태입니다 — 그 서버는 사용자의 것이라 교체하지 않았습니다. 서버를 직접 내린 뒤 다시 실행하십시오.",
+        reason: "An already-running server was adopted — it belongs to you, so it was not replaced. Stop that server yourself and run again.",
         responseOk: false,
       };
     }
     try {
       await opts.stopChild();
     } catch (e) {
-      return { ok: false, step: "stop-llama", reason: `이전 llama 종료 실패: ${msgOf(e)}`, responseOk: false };
+      return { ok: false, step: "stop-llama", reason: `Could not stop the previous llama: ${msgOf(e)}`, responseOk: false };
     }
     let ready: boolean;
     try {
       ready = await opts.spawn();
     } catch (e) {
-      return { ok: false, step: "restart", reason: `재기동 실패: ${msgOf(e)}`, responseOk: false };
+      return { ok: false, step: "restart", reason: `Restart failed: ${msgOf(e)}`, responseOk: false };
     }
     // §5.13.1: **"설치 성공 = 성공" 은 함정이다.** 새 모델이 실제로 응답해야 성공이다.
     return {
       ok: ready,
       step: "verify",
       reason: ready
-        ? "새 모델이 응답합니다(/v1/models 200)"
-        : "교체는 끝났지만 새 모델이 응답하지 않습니다 — '성공' 으로 세지 않습니다",
+        ? "The new model responds (/v1/models 200)"
+        : "The swap finished but the new model does not respond — not counted as success",
       responseOk: ready,
     };
   }
@@ -291,7 +291,7 @@ export class AgentService {
 
   /** 사용자 입력을 대화에 넣는다 — "내가 뭐라고 했나" 가 세션의 핵심이다. */
   addUserMessage(text: string): void {
-    this.emit({ type: "agent.status", text: `전송: ${text.slice(0, 80)}`, at: (this.opts.now ?? Date.now)() });
+    this.emit({ type: "agent.status", text: `Sent: ${text.slice(0, 80)}`, at: (this.opts.now ?? Date.now)() });
   }
 
   get ready(): boolean {
@@ -370,7 +370,7 @@ export class AgentService {
           this.think = { ...this.think, enabled: true };
           this.invalidate();
         }
-        this.emit({ type: "agent.status", text: "모델이 응답 중입니다", at: now() });
+        this.emit({ type: "agent.status", text: "The model is responding", at: now() });
       },
       onReasoningDelta: (text) => {
         // **언어별 추정**을 쓴다 — 예전 `길이 / 3.4` 은 영문 기준이라 한글 사고의
@@ -386,8 +386,8 @@ export class AgentService {
               // **조치 방법까지 말한다.** 예전 문구는 "꺼져 있습니다" 라고만 해서
               // 사용자가 무엇을 해야 하는지 알 수 없었다(실측 질문).
               text:
-                `사고 상한(${this.think.maxReasoningTokens.toLocaleString("ko-KR")} 토큰)을 넘어 thinking 표시를 껐습니다 ` +
-                `— 모델이 이미 쓴 예산이라 되돌릴 수 없습니다. 다음 턴부터 다시 켜집니다. ` +
+                `Thinking display turned off: the reasoning limit (${this.think.maxReasoningTokens.toLocaleString("en-US")} tokens) was exceeded. ` +
+                `The budget is already spent, so this cannot be undone. It turns back on from the next turn. ` +
                 // **존재하지 않는 손잡이를 가리키지 않는다.**
                 //
                 // 예전엔 "설정의 사고 토큰 상한 을 올리십시오" 라고 적었는데, 그 설정은
@@ -396,7 +396,7 @@ export class AgentService {
                 //
                 // 이제는 실제로 읽는다 — 그래서 **어디를 고쳐야 하는지**를 경로로 말한다.
                 // 웹 화면에 숫자 입력란은 없다(없다고 말하는 게 낫다). 이 파일을 고치면 된다.
-                `더 오래 보고 싶으면 프로젝트의 .harnesside/config.yaml 의 agent.maxReasoningTokens 를 올리십시오 (지금 ${this.think.maxReasoningTokens.toLocaleString("ko-KR")}, 허용 ${MIN_REASONING_FLOOR}~${MAX_REASONING_CEILING.toLocaleString("ko-KR")}).`,
+                `To see more, raise agent.maxReasoningTokens in the project's .harnesside/config.yaml (now ${this.think.maxReasoningTokens.toLocaleString("en-US")}, allowed ${MIN_REASONING_FLOOR}~${MAX_REASONING_CEILING.toLocaleString("en-US")}).`,
               at: now(),
             });
           }
@@ -429,15 +429,15 @@ export class AgentService {
       onToolResult: (command, output) => this.opts.logger?.(`[tool] ${command}: ${output.slice(0, 200)}`),
       onDiff: (path, diff) => {
         this.opts.diff?.(path, diff);
-        this.emit({ type: "agent.status", text: `${path} 변경됨`, at: now() });
+        this.emit({ type: "agent.status", text: `${path} changed`, at: now() });
       },
       onStatus: (status) => this.emit({ type: "agent.status", text: status, at: now() }),
-      onPlanProgress: (done, total) => this.emit({ type: "agent.status", text: `계획 ${done}/${total}`, at: now() }),
+      onPlanProgress: (done, total) => this.emit({ type: "agent.status", text: `Plan ${done}/${total}`, at: now() }),
       onCompactionStatus: (s) => {
         // 시작·진행을 전용 이벤트로도 흘린다 — 상태 줄 텍스트만으로는
         // "지금 압축 중인가 끝났나" 를 화면이 알 수 없다.
         this.emit({ type: "agent.compaction", compaction: { phase: s }, at: now() });
-        this.emit({ type: "agent.status", text: `압축 ${s}`, at: now() });
+        this.emit({ type: "agent.status", text: `Compaction ${s}`, at: now() });
       },
       onCompactionDetail: (d: CompactionDetail) => {
         // 요약 본문까지 보여준다 — "무엇이 잊혀지고 무엇이 강조됐는지" 가 없으면
@@ -576,11 +576,11 @@ export class AgentService {
       this.emit({
         type: "agent.done",
         text: cancelled
-          ? "취소되었습니다"
+          ? "Cancelled"
           : this.toolCalls === 0
             ? // 도구를 한 번도 안 불렀다 — 조용히 끝내면 "왜 파일을 안 고쳤지?" 가 된다.
-              "답변만 왔고 도구 호출은 없었습니다"
-            : `도구 ${this.toolCalls}회 사용`,
+              "Only an answer came back; no tool was called"
+            : `Used tools ${this.toolCalls} time(s)`,
         queue: this.queue.length,
         at: (this.opts.now ?? Date.now)(),
       });
@@ -606,7 +606,7 @@ export class AgentService {
     this.queue = [];
     if (dropped > 0) this.emitQueue();
     await this.loop?.cancelCurrentTurn();
-    this.emit({ type: "agent.status", text: "취소 요청됨", at: (this.opts.now ?? Date.now)() });
+    this.emit({ type: "agent.status", text: "Cancel requested", at: (this.opts.now ?? Date.now)() });
     return { ok: true, detail: dropped > 0 ? `Cancelled (also cleared ${dropped} queued)` : "Cancelled" };
   }
 
@@ -632,7 +632,7 @@ export class AgentService {
     this.toolCalls = 0;
     this.reasoningTokens = 0;
     this.loop = null;
-    this.emit({ type: "agent.status", text: "대화를 시작합니다", at: (this.opts.now ?? Date.now)() });
+    this.emit({ type: "agent.status", text: "Starting the conversation", at: (this.opts.now ?? Date.now)() });
     return { ok: true, detail: "Conversation reset" };
   }
 

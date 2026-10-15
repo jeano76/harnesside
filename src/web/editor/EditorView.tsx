@@ -39,6 +39,8 @@ import {
   type Buffer,
   type ConflictChoice,
 } from "./autosave.js";
+import { i18n, useI18n } from "../i18n/index.js";
+import "../i18n/install.js";
 
 const DIM = "#6e7681";
 const FG = "#c9d1d9";
@@ -68,6 +70,7 @@ export function EditorView({
   info: FileInfo;
   onNotice: (kind: "info" | "warn" | "error", title: string, body: string) => void;
 }) {
+  const t = useI18n();
   const plan = useMemo(() => planOpen({ path: info.path, name: info.path.split("/").pop() ?? "", size: info.size }, info.content), [info]);
 
   // **버퍼는 ref 다.** 재렌더마다 새로 만들면 타이핑할 때마다 dirtySince 이 초기화돼
@@ -146,7 +149,7 @@ export function EditorView({
     if (plan.action === "keep") {
       // **버린 이유를 말해야 한다.** 미저장 편집이 있으면 그게 최우선이다.
       if (buf.current.dirtySince !== null) {
-        stableNotice("warn", "바깥에서 파일이 바뀌었습니다", `${info.path} — ${plan.why}. 저장을 시도하면 버전 충돌을 알려 드립니다.`);
+        stableNotice("warn", i18n.t("ed.externalChanged"), i18n.t("ed.externalBody", { path: info.path, why: plan.why }));
       }
       return;
     }
@@ -172,7 +175,7 @@ export function EditorView({
           const server = e.conflict ?? { content: "", version: 0 };
           if (!server.content) {
             // **충돌인데 서버본문이 없다** — 방향을 잃지 않도록 "모름" 이라고 말한다.
-            setState({ kind: "failed", detail: "충돌이 났지만 서버본문을 받지 못했습니다. 파일을 직접 확인하십시오." });
+            setState({ kind: "failed", detail: i18n.t("ed.conflictNoServer") });
             return;
           }
           setState({ kind: "conflict", server });
@@ -180,7 +183,7 @@ export function EditorView({
         }
         // 실패해도 **내 편집은 버퍼에 남는다.** 버리면 "저장 실패" + 편집 손실 = 이중 손실.
         setState({ kind: "failed", detail: e instanceof ApiError ? e.message : String(e) });
-        stableNotice("error", "자동 저장 실패", `${info.path} — ${e instanceof ApiError ? e.message : String(e)}. 편집 내용은 화면에 남아 있습니다.`);
+        stableNotice("error", i18n.t("ed.autosaveFailed"), i18n.t("ed.autosaveBody", { path: info.path, err: e instanceof ApiError ? e.message : String(e) }));
       }
     },
     // **안정된 `stableNotice` 만 넣는다** — `onNotice` 를 그대로 넣으면 여기서
@@ -243,13 +246,13 @@ export function EditorView({
         <span style={{ flex: 1 }} />
         <SaveBadge state={state} />
         <button type="button" onClick={() => void save()} style={btn} disabled={buf.current.dirtySince === null}>
-          지금 저장
+          {t("ed.saveNow")}
         </button>
       </div>
 
       {restore && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 8px", background: "#3d2b00", fontSize: 11 }}>
-          <span>이전 세션에서 저장하지 않은 내용이 있습니다({restore.content.length}자).</span>
+          <span>{t("ed.restorePrompt", { n: restore.content.length })}</span>
           <button
             type="button"
             onClick={() => {
@@ -260,7 +263,7 @@ export function EditorView({
             }}
             style={btn}
           >
-            복구
+            {t("ed.restore")}
           </button>
           <button
             type="button"
@@ -271,7 +274,7 @@ export function EditorView({
             }}
             style={btn}
           >
-            버리기
+            {t("ed.discard")}
           </button>
         </div>
       )}
@@ -374,14 +377,15 @@ function ColoredEditor({
 }
 
 function SaveBadge({ state }: { state: SaveState }) {
+  const t = useI18n();
   // **"저장됨" 을 안 보여주면 사용자는 저장이 되는지 모른다**(§11.3). 상태를 말해 준다.
   const map: Record<SaveState["kind"], { text: string; color: string }> = {
-    clean: { text: "저장됨", color: DIM },
-    pending: { text: "바뀜 · 곧 저장", color: "#d29922" },
-    saving: { text: "저장 중", color: "#58a6ff" },
-    saved: { text: `저장됨 (v${state.kind === "saved" ? state.version : "?"})`, color: "#3fb950" },
-    failed: { text: "저장 실패", color: "#f85149" },
-    conflict: { text: "충돌", color: "#f85149" },
+    clean: { text: t("ed.saved0"), color: DIM },
+    pending: { text: t("ed.pending"), color: "#d29922" },
+    saving: { text: t("ed.saving"), color: "#58a6ff" },
+    saved: { text: t("ed.savedV", { v: state.kind === "saved" ? state.version : "?" }), color: "#3fb950" },
+    failed: { text: t("ed.failed"), color: "#f85149" },
+    conflict: { text: t("ed.conflict"), color: "#f85149" },
   };
   const v = map[state.kind];
   return (
@@ -401,17 +405,18 @@ function ConflictBar({
   onResolve: (c: ConflictChoice) => void;
 }) {
   const [which, setWhich] = useState<"mine" | "theirs">("theirs");
+  const t = useI18n();
   return (
     <div style={{ borderBottom: `1px solid ${BORDER}`, padding: "6px 8px", display: "grid", gap: 6, flex: "0 0 auto" }}>
       <div style={{ color: "#f85149", fontSize: 11 }}>
-        다른 곳에서 이 파일이 바뀌었습니다(서버 v{server.version}). 자동 덮어쓰지 않습니다.
+        {t("ed.conflictBar", { v: server.version })}
       </div>
       <div style={{ display: "flex", gap: 4 }}>
         <button type="button" onClick={() => setWhich("theirs")} style={{ ...btn, ...(which === "theirs" ? activeBtn : {}) }}>
-          서버본문 보기
+          {t("ed.viewServer")}
         </button>
         <button type="button" onClick={() => setWhich("mine")} style={{ ...btn, ...(which === "mine" ? activeBtn : {}) }}>
-          내 편집 보기
+          {t("ed.viewMine")}
         </button>
       </div>
       <pre
@@ -440,12 +445,13 @@ function ConflictBar({
 }
 
 function ReadOnlyView({ plan, path, size }: { plan: { language: string; reason: string | null; content: string }; path: string; size: number }) {
+  const t = useI18n();
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "4px 8px", borderBottom: `1px solid ${BORDER}`, flex: "0 0 auto" }}>
         <strong style={{ fontSize: 11 }}>{path.split("/").pop()}</strong>
         <span style={{ color: DIM, fontSize: 10 }}>{plan.language}</span>
-        <span style={{ color: "#d29922", fontSize: 10 }}>읽기 전용</span>
+        <span style={{ color: "#d29922", fontSize: 10 }}>{t("ed.readOnly")}</span>
         <span style={{ flex: 1 }} />
         <span style={{ color: DIM, fontSize: 10 }}>{formatBytes(size)}</span>
       </div>

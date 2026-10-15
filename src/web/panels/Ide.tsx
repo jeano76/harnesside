@@ -33,6 +33,7 @@
 
 import React from "react";
 import { COLOR, LAYOUT, toneColor } from "../theme/tokens.js";
+import { useI18n } from "../i18n/index.js";
 
 const HAIRLINE = COLOR.BORDER;
 const SURFACE_2 = COLOR.SURFACE_2;
@@ -131,6 +132,7 @@ export function nextActivityIndex(key: string | null, count: number, current: nu
  * 정보라 세로 폭 안에 들어가고, 나머지는 `aria-label` 로 이름이 남는다.
  */
 function ActivityBar({ items, width }: { items: ActivityItem[]; width: number }) {
+  const t = useI18n();
   const current = Math.max(0, items.findIndex((i) => i.active === true));
   const [focus, setFocus] = React.useState(current);
   // **선택이 바뀌면 포커스도 따라간다** — 키보드 사용자가 화면 밖으로 버려지는
@@ -142,7 +144,7 @@ function ActivityBar({ items, width }: { items: ActivityItem[]; width: number })
   return (
     <div
       role="tablist"
-      aria-label="주요 보기"
+      aria-label={t("ide.mainViews")}
       aria-orientation="vertical"
       onKeyDown={(e) => {
         const to = nextActivityIndex(e.key, items.length, focus);

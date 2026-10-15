@@ -29,13 +29,13 @@ const buf = (over: Partial<Buffer> = {}): Buffer => ({
 test("깨끗하면 **저장하지 않는다** — 안 고친 파일을 쓰면 '외부 변경' 알림이 난다", () => {
   const d = planSave(buf({ dirtySince: null }), 99_999);
   assert.equal(d.action, "skip");
-  assert.match(d.action === "skip" ? d.reason : "", /바뀐 것이 없/);
+  assert.match(d.action === "skip" ? d.reason : "", /Nothing changed/);
 });
 
 test("디바운스 안이면 기다린다 — 타이핑마다 쓰면 입력이 끊긴다", () => {
   const d = planSave(buf({ dirtySince: 1_000 }), 1_000 + AUTOSAVE_DEBOUNCE_MS - 1);
   assert.equal(d.action, "skip");
-  assert.match(d.action === "skip" ? d.reason : "", /디바운스/);
+  assert.match(d.action === "skip" ? d.reason : "", /debounc/i);
 });
 
 test("디바운스가 지나면 **경로·내용·버전** 을 함께 보낸다 — 버전이 없으면 충돌을 못 안다", () => {
@@ -49,7 +49,7 @@ test("디바운스가 지나면 **경로·내용·버전** 을 함께 보낸다 
 test("내용을 전부 지우면 **저장하지 않는다** — 원본이 빈 파일로 남는다", () => {
   const d = planSave(buf({ content: "", dirtySince: 1_000 }), 99_999);
   assert.equal(d.action, "skip", "빈 파일 저장을 조용히 했다");
-  assert.match(d.action === "skip" ? d.reason : "", /명시적/);
+  assert.match(d.action === "skip" ? d.reason : "", /explicit/);
 });
 
 test("새로 만든 빈 파일(버전 0)은 저장한다 — 그건 사용자가 만든 것이니까", () => {

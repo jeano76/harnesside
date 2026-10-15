@@ -13,6 +13,9 @@
  * 이라는 규칙이 테스트할 수 있다.
  */
 
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
+
 export const AUTOSAVE_DEBOUNCE_MS = 1500;
 export const LOCAL_DRAFT_KEY = "harnesside:dirty";
 
@@ -37,12 +40,12 @@ export type SaveDecision =
  * 즉 저장이 **알림을 유발하는** 순간이 된다(실제로 그렇게 돌아온다).
  */
 export function planSave(b: Buffer, now: number, debounceMs = AUTOSAVE_DEBOUNCE_MS): SaveDecision {
-  if (b.dirtySince === null) return { action: "skip", reason: "바뀐 것이 없습니다" };
-  if (now - b.dirtySince < debounceMs) return { action: "skip", reason: "아직 디바운스 중" };
+  if (b.dirtySince === null) return { action: "skip", reason: i18n.t("ed.reason.clean") };
+  if (now - b.dirtySince < debounceMs) return { action: "skip", reason: i18n.t("ed.reason.debounce") };
   if (!b.content.length && b.baseVersion > 0) {
     // **빈 내용이 되면 저장하지 않는다** — 실수로 전부 지운 뒤 창을 닫으면
     // 파일이 빈 채로 남는다(원본이 사라진다). 그건 사용자가 명시적으로 해야 한다.
-    return { action: "skip", reason: "내용을 모두 지웠습니다 — 빈 파일 저장은 명시적 저장이어야 합니다" };
+    return { action: "skip", reason: i18n.t("ed.reason.emptied") };
   }
   return { action: "save", body: { path: b.path, content: b.content, baseVersion: b.baseVersion } };
 }
@@ -77,13 +80,13 @@ export function planExternalChange(b: Buffer, disk: { content: string; version: 
   if (b.dirtySince !== null) {
     // **미저장 편집이 있으면 절대 덮지 않는다.** 이 프로그램의 다른 곳
     // (`planSave` 의 충돌 처리) 도 같은 원칙을 따른다 — 조용히 덮어쓰지 않는다.
-    return { action: "keep", why: "저장하지 않은 편집이 있어 그대로 둡니다" };
+    return { action: "keep", why: i18n.t("ed.why.keep") };
   }
   if (disk.content === b.content) {
     // 내용이 같으면 손댈 것이 없다. `mtime` 만 바뀐 경우도 여기 걸린다.
-    return { action: "keep", why: "내용이 같습니다" };
+    return { action: "keep", why: i18n.t("ed.why.same") };
   }
-  return { action: "adopt", why: "저장하지 않은 편집이 없어 디스크를 따랐습니다" };
+  return { action: "adopt", why: i18n.t("ed.why.adopt") };
 }
 
 export interface LocalDraft {
@@ -134,9 +137,9 @@ export type ConflictChoice = "keep-mine" | "take-theirs" | "both";
  */
 export function conflictOptions(server: { content: string; version: number }): { choice: ConflictChoice; label: string; detail: string }[] {
   return [
-    { choice: "keep-mine", label: "내 편집 유지", detail: "서버본문을 덮어씁니다. 되돌리려면 저장소에서 복구해야 합니다." },
-    { choice: "take-theirs", label: "서버본문 사용", detail: "내 편집을 잃습니다." },
-    { choice: "both", label: "둘 다 남기기", detail: "서버본문을 먼저 두고 내 편집을 뒤에 붙입니다(수동 정리 필요)." },
+    { choice: "keep-mine", label: i18n.t("ed.opt.keepMine"), detail: i18n.t("ed.opt.keepMineD") },
+    { choice: "take-theirs", label: i18n.t("ed.opt.takeTheirs"), detail: i18n.t("ed.opt.takeTheirsD") },
+    { choice: "both", label: i18n.t("ed.opt.both"), detail: i18n.t("ed.opt.bothD") },
   ];
 }
 
