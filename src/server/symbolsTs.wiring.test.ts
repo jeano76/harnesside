@@ -25,14 +25,14 @@ describe("symbols definition wiring", () => {
   });
   it("범위 밖 줄·열은 400이다 (빈 목록으로 속이지 않는다)", () => {
     const src = read("index.ts");
-    assert.match(src, /line·col 은 1 이상 정수/, "400 검증 문구가 없다 — 조용히 빈 목록을 줄 수 있다");
+    assert.match(src, /line and col are integers/, "400 검증 문구가 없다 — 조용히 빈 목록을 줄 수 있다");
   });
   it("FilePreview 가 정의 API 를 부르고 available:false 를 말한다", () => {
     const src = readFileSync(join(here, "..", "web", "panels", "FilePreview.tsx"), "utf8");
     assert.match(src, /\/api\/fs\/definition/, "화면이 definition 을 부르지 않는다 — 배선이 끊겼다");
     assert.match(src, /\/api\/fs\/references/, "화면이 references 를 부르지 않는다");
     assert.match(src, /available/, "available:false(typescript 없음)를 처리하지 않는다 — 조용히 빈 화면이 된다");
-    assert.match(src, /추측하지 않/, "빈 결과를 지어내지 않는다는 말을 화면이 하지 않는다");
+    assert.match(src, /not guessing|fp\.none/, "빈 결과를 지어내지 않는다는 말을 화면이 하지 않는다");
   });
   it("도구 파일 블록이 미리보기를 자동으로 읽는다 — 헤더만이면 점프 진입로가 없다", () => {
     const src = readFileSync(join(here, "..", "web", "panels", "ToolBlock.tsx"), "utf8");

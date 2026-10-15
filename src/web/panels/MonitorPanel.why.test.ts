@@ -77,16 +77,16 @@ test("**측정 불가에 사유**를 말한다 — '측정 불가' 만 있으면
   assert.match(panel, /why\?: string;/, "Gauge 가 사유를 받지 않는다");
   // "측정 불가" 는 세 가지 다른 상태를 한 문장으로 뭉갠다: 도구 없음 / 아직 첫
   // 표본 없음 / 권한 없음. 사용자는 셋 중 무엇을 해야 하는지 달라서 다르게 대응한다.
-  assert.match(panel, /why=\{latest\.gpu \? undefined : "GPU 없음/, "GPU 없음 사유가 없다");
-  assert.match(panel, /why=\{latest\.context \? undefined : "작업 중이 아니면/, "컨텍스트 사유가 없다");
-  assert.match(panel, /why=\{latest\.gpu\.utilPct === null \? "nvidia-smi/, "GPU 사용률 사유가 없다");
+  assert.match(panel, /why=\{latest\.gpu \? undefined : t\("mon.noGpuWhy"\)/, "GPU 없음 사유가 없다");
+  assert.match(panel, /why=\{latest\.context \? undefined : t\("mon.contextWhy"\)/, "컨텍스트 사유가 없다");
+  assert.match(panel, /why=\{latest\.gpu\.utilPct === null \? t\("mon\.smiNoValue"\)/, "GPU 사용률 사유가 없다");
 });
 
 test("사유는 **도형만이 아니라** 말로도 전달된다 — `title` 만으로는 부족하다", () => {
   // `aria-label` 에 사유를 넣는다 — 그래야 판독기가 "왜" 를 함께 읽는다.
   assert.match(
     panel,
-    /aria-label=\{`\$\{label\}: 측정 불가\$\{why \? ` — \$\{why\}` : ""\}`\}/,
+    /aria-label=\{`\$\{label\}: \$\{t\("mon\.unmeasurable"\)\}\$\{why \? ` — \$\{why\}` : ""\}`\}/,
     "aria-label 에 사유가 없다 — 화면은 아는데 판독기는 모른다",
   );
 });

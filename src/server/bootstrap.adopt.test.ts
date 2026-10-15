@@ -77,7 +77,7 @@ test("이미 떠 있는 서버가 있으면 채택하고 **포트를 옮기지 �
       [],
       "옮기지 않았는데 옮긴 기록이 있으면 그건 거짓이다 — 부팅 로그가 사람을 속인다"
     );
-    assert.match(r.steps[5].detail, /채택/, "단계 6 이 왜 이 포트를 썼는지 말해야 한다");
+    assert.match(r.steps[5].detail, /adopting/, "단계 6 이 왜 이 포트를 썼는지 말해야 한다");
   } finally {
     await s.cleanup();
   }
@@ -164,7 +164,7 @@ test("채택했으면 **스폰하지 않는다** — 모델도 바이너리도 �
       skipLlamaSpawn: true,
     });
     assert.equal(r.model?.path ?? null, null, "로컬 모델 파일이 없는 것이 사실이다");
-    assert.match(r.steps[6].detail, /스폰하지 않음/, "단계 7 이 스폰하지 않았음을 말해야 한다");
+    assert.match(r.steps[6].detail, /Not spawning/, "단계 7 이 스폰하지 않았음을 말해야 한다");
     assert.equal(r.tuning, undefined, "띄우지 않을 프로세스의 플래그를 만들어 두면 '이 플래그로 돈다' 고 읽힌다");
     assert.equal(r.llamaReady, true, "이미 응답하는 서버가 있으면 준비된 상태다");
     assert.equal(r.steps[7].ok, true);

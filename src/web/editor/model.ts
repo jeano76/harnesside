@@ -6,6 +6,9 @@
  * 이 규칙들은 렌더러가 바뀌어도 그대로여야 한다(§1.5: lazy load).
  */
 
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
+
 export type EditorKind = "code" | "markdown" | "json" | "image" | "binary" | "readonly";
 
 export interface FileInfo {
@@ -60,7 +63,7 @@ export function planOpen(info: FileInfo, raw: string, opts: { readOnlyPaths?: st
   const language = languageOf(info.path);
 
   if (IMAGE_EXT.has(ext) && ext !== "svg") {
-    return { kind: "image", language, truncate: false, content: "", omittedLines: 0, readOnly: true, reason: "이미지" };
+    return { kind: "image", language, truncate: false, content: "", omittedLines: 0, readOnly: true, reason: i18n.t("ed.image") };
   }
   // NUL 바이트가 있으면 텍스트가 아니다(§3.4 와 같은 판정).
   if (raw.includes("\u0000")) {
@@ -71,7 +74,7 @@ export function planOpen(info: FileInfo, raw: string, opts: { readOnlyPaths?: st
       content: "",
       omittedLines: 0,
       readOnly: true,
-      reason: `바이너리 파일입니다 (${formatBytes(info.size)})`,
+      reason: i18n.t("ed.binary", { size: formatBytes(info.size) }),
     };
   }
 
@@ -87,7 +90,7 @@ export function planOpen(info: FileInfo, raw: string, opts: { readOnlyPaths?: st
       content: head,
       omittedLines: lines.length - MAX_LINES,
       readOnly: true,
-      reason: `${lines.length.toLocaleString("ko-KR")}줄 — 앞 ${MAX_LINES.toLocaleString("ko-KR")}줄만 표시합니다(읽기 전용). 전체는 편집기로 열지 않습니다.`,
+      reason: i18n.t("ed.bigFile", { n: lines.length.toLocaleString(), max: MAX_LINES.toLocaleString() }),
     };
   }
 
@@ -98,7 +101,7 @@ export function planOpen(info: FileInfo, raw: string, opts: { readOnlyPaths?: st
     content: raw,
     omittedLines: 0,
     readOnly,
-    reason: readOnly ? "읽기 전용 경로입니다" : "",
+    reason: readOnly ? i18n.t("ed.roPath") : "",
   };
 }
 
@@ -132,10 +135,10 @@ export function decideSave(input: {
   serverVersion?: number;
   outsideWorkspace?: boolean;
 }): SaveResult {
-  if (input.tab.readOnly) return { ok: false, reason: "read-only", detail: "읽기 전용입니다" };
-  if (input.outsideWorkspace) return { ok: false, reason: "outside-workspace", detail: "워크스페이스 밖입니다" };
+  if (input.tab.readOnly) return { ok: false, reason: "read-only", detail: i18n.t("ed.roSave") };
+  if (input.outsideWorkspace) return { ok: false, reason: "outside-workspace", detail: i18n.t("ed.outside") };
   if (new TextEncoder().encode(input.content).length > MAX_EDITABLE_BYTES) {
-    return { ok: false, reason: "too-large", detail: `5 MiB 를 초과합니다 (${formatBytes(new TextEncoder().encode(input.content).length)})` };
+    return { ok: false, reason: "too-large", detail: i18n.t("ed.tooLarge", { size: formatBytes(new TextEncoder().encode(input.content).length) }) };
   }
   const serverVersion = input.serverVersion ?? input.tab.baseVersion;
   if (serverVersion !== input.tab.baseVersion) {
@@ -157,7 +160,7 @@ export function openTab(state: LayoutState, tab: Tab, opts: { preview?: boolean 
     // 이미 열려 있으면 포커스만 옮긴다. **중복 탭을 만들면 같은 파일이 두 군데에서 수정된다.**
     return { ...state, active: tab.path };
   }
-  const next: Tab = opts.preview ? { ...tab, preview: "미리보기" } : tab;
+  const next: Tab = opts.preview ? { ...tab, preview: i18n.t("ed.previewTab") } : tab;
   return { ...state, tabs: [...state.tabs, next], active: tab.path, order: [...state.order, tab.path] };
 }
 

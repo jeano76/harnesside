@@ -11,6 +11,9 @@
  *  3. 되돌리기 직전 **사본을 남긴다**(되돌리기 실패 시 복구 경로).
  */
 
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
+
 export type ReviewState = "pending" | "approved" | "rejected" | "reverted" | "stale";
 
 export interface DiffLineLite {
@@ -57,14 +60,14 @@ export function makeItem(path: string, added: number, removed: number, currentHa
  */
 export function decide(items: ReviewItem[], id: string, state: "approved" | "rejected"): { items: ReviewItem[]; changed: boolean; reason: string } {
   const it = items.find((x) => x.id === id);
-  if (!it) return { items, changed: false, reason: "항목을 찾을 수 없습니다" };
-  if (it.state === "reverted") return { items, changed: false, reason: "이미 되돌린 항목입니다" };
-  if (it.state === state) return { items, changed: false, reason: state === "approved" ? "이미 승인했습니다" : "이미 거절했습니다" };
+  if (!it) return { items, changed: false, reason: i18n.t("rv.notFound") };
+  if (it.state === "reverted") return { items, changed: false, reason: i18n.t("rv.alreadyReverted") };
+  if (it.state === state) return { items, changed: false, reason: state === "approved" ? i18n.t("rv.alreadyApproved") : i18n.t("rv.alreadyRejected") };
   const next: ReviewItem = { ...it, state, decidedHash: it.currentHash };
   return {
     items: items.map((x) => (x.id === id ? next : x)),
     changed: true,
-    reason: state === "approved" ? `${it.path} 승인` : `${it.path} 거절 — 되돌릴 수 있습니다`,
+    reason: state === "approved" ? i18n.t("rv.approved", { path: it.path }) : i18n.t("rv.rejected", { path: it.path }),
   };
 }
 
@@ -83,7 +86,7 @@ export function refreshHashes(items: ReviewItem[], currentHashByPath: Record<str
       currentHash: h,
       // 결정이 있었는데 바뀌었다면 `stale` — 조용히 승인 상태를 유지하면 안 된다.
       state: wasDecided ? "stale" : it.state,
-      note: wasDecided ? "결정 이후 내용이 변경되어 다시 검토해야 합니다" : it.note,
+      note: wasDecided ? i18n.t("rv.stale") : it.note,
     };
   });
 }
@@ -102,16 +105,16 @@ export interface RevertResult {
  */
 export function revert(items: ReviewItem[], id: string, backupPath: string, original: string): RevertResult {
   const it = items.find((x) => x.id === id);
-  if (!it) return { items, ok: false, reason: "항목을 찾을 수 없습니다", backup: null };
-  if (it.state === "reverted") return { items, ok: false, reason: "이미 되돌렸습니다", backup: it.backupPath };
-  if (it.state === "pending") return { items, ok: false, reason: "아직 결정되지 않은 항목입니다", backup: null };
+  if (!it) return { items, ok: false, reason: i18n.t("rv.revNotFound"), backup: null };
+  if (it.state === "reverted") return { items, ok: false, reason: i18n.t("rv.revAlready"), backup: it.backupPath };
+  if (it.state === "pending") return { items, ok: false, reason: i18n.t("rv.revPending"), backup: null };
   if (it.state === "stale") {
     // 결정 이후 변경됨 → 되돌리면 **사용자의 새 편집까지 지운다.** 막는다.
-    return { items, ok: false, reason: "결정 이후 변경되었습니다. 되돌리면 지금 내용을 잃습니다. 먼저 내용을 비교하십시오.", backup: null };
+    return { items, ok: false, reason: i18n.t("rv.revStale"), backup: null };
   }
-  if (!original) return { items, ok: false, reason: "되돌릴 원본 내용이 없습니다", backup: null };
-  const next: ReviewItem = { ...it, state: "reverted", backupPath, note: `되돌림 (사본: ${backupPath})` };
-  return { items: items.map((x) => (x.id === id ? next : x)), ok: true, reason: `${it.path} 되돌렸습니다 (원본 ${original.length.toLocaleString()}자)`, backup: backupPath };
+  if (!original) return { items, ok: false, reason: i18n.t("rv.revNoOriginal"), backup: null };
+  const next: ReviewItem = { ...it, state: "reverted", backupPath, note: i18n.t("rv.revNote", { path: backupPath }) };
+  return { items: items.map((x) => (x.id === id ? next : x)), ok: true, reason: i18n.t("rv.revDone", { path: it.path, n: original.length.toLocaleString() }), backup: backupPath };
 }
 
 export interface ReviewSummary {
@@ -144,11 +147,11 @@ export function summarize(items: ReviewItem[]): ReviewSummary {
 }
 
 export function summaryLabel(s: ReviewSummary): string {
-  if (s.total === 0) return "변경 없음";
+  if (s.total === 0) return i18n.t("rv.sumNone");
   const parts: string[] = [`+${s.added}`, `−${s.removed}`];
-  if (s.pending) parts.push(`검토 대기 ${s.pending}`);
-  if (s.stale) parts.push(`다시 검토 ${s.stale}`);
-  if (s.approved) parts.push(`승인 ${s.approved}`);
+  if (s.pending) parts.push(i18n.t("rv.sumPending", { n: s.pending }));
+  if (s.stale) parts.push(i18n.t("rv.sumStale", { n: s.stale }));
+  if (s.approved) parts.push(i18n.t("rv.sumApproved", { n: s.approved }));
   return parts.join(" · ");
 }
 

@@ -11,6 +11,9 @@
  * 로 명시적으로 닫을 수 있게 한다. 조용히 사라지면 "안 왔나?" 가 된다.
  */
 
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
+
 export type ToastKind = "info" | "success" | "warn" | "error";
 
 export interface Toast {
@@ -111,28 +114,28 @@ export function errorCenter(items: Toast[], maxActive = 10): ErrorCenter {
  * `TypeError: fetch failed` 를 그대로 띄우면 사용자는 원인을 모른다.
  * 원본에서도 이 함정을 고친 이력이 있다 — 웹에서도 같은 기준을 적용한다.
  */
-export function humanizeError(e: unknown, context = "요청"): { message: string; retryable: boolean } {
+export function humanizeError(e: unknown, context = i18n.t("err.request")): { message: string; retryable: boolean } {
   const raw = e instanceof Error ? e.message : String(e);
   if (/fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|network/i.test(raw)) {
-    return { message: `${context} 중 서버에 연결하지 못했습니다. 서버가 멈췄는지 확인하십시오.`, retryable: true };
+    return { message: i18n.t("err.network", { ctx: context }), retryable: true };
   }
   if (/AbortError|aborted/i.test(raw)) {
-    return { message: `${context}가 중단되었습니다.`, retryable: true };
+    return { message: i18n.t("err.aborted", { ctx: context }), retryable: true };
   }
   if (/ENOSPC|no space left/i.test(raw)) {
-    return { message: `디스크가 가득 찼습니다. 로그를 정리한 뒤 다시 시도하십시오.`, retryable: false };
+    return { message: i18n.t("err.disk"), retryable: false };
   }
   if (/EACCES|EPERM|permission denied/i.test(raw)) {
-    return { message: `권한이 없습니다. ${context} 실패했습니다.`, retryable: false };
+    return { message: i18n.t("err.perm", { ctx: context }), retryable: false };
   }
   if (/409|conflict/i.test(raw)) {
-    return { message: `${context}가 충돌했습니다. 다른 곳에서 먼저 변경되었습니다.`, retryable: true };
+    return { message: i18n.t("err.conflict", { ctx: context }), retryable: true };
   }
   if (/5\d\d|internal server/i.test(raw)) {
-    return { message: `서버 오류로 ${context}에 실패했습니다. 잠시 뒤 다시 시도하십시오.`, retryable: true };
+    return { message: i18n.t("err.server", { ctx: context }), retryable: true };
   }
   // 원인은 남기되 앞에 사람이 읽을 문장을 붙인다.
-  return { message: `${context}에 실패했습니다: ${raw}`, retryable: false };
+  return { message: i18n.t("err.generic", { ctx: context, raw }), retryable: false };
 }
 
 // ------------------------------------------------------------------ 드래프트 (M7)
@@ -273,14 +276,14 @@ export class CommandRunner {
   private history: { cmd: string; at: number; ok: boolean; error?: string }[] = [];
 
   async run(id: string, fn: () => Promise<void> | void, now = Date.now()): Promise<{ ran: boolean; reason?: string }> {
-    if (this.running.has(id)) return { ran: false, reason: "이미 실행 중입니다" };
+    if (this.running.has(id)) return { ran: false, reason: i18n.t("err.running") };
     this.running.add(id);
     try {
       await fn();
       this.history.push({ cmd: id, at: now, ok: true });
       return { ran: true };
     } catch (e) {
-      const h = humanizeError(e, "명령 실행");
+      const h = humanizeError(e, i18n.t("err.command"));
       this.history.push({ cmd: id, at: now, ok: false, error: h.message });
       return { ran: false, reason: h.message };
     } finally {

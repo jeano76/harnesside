@@ -26,7 +26,7 @@ export interface BootFailure {
   next: string;
 }
 
-export const UNKNOWN = "확인 못 함";
+export const UNKNOWN = "unknown";
 
 /** 여러 줄 출력에서 첫 의미 있는 줄 하나(최대 200자). 원본을 고치지 않는다 — 자르기만 한다. */
 export function firstLine(text: string | null | undefined): string | null {
@@ -43,12 +43,12 @@ export function describeBootFailure(s: StepLike): BootFailure | null {
     where: `${s.n}/12 ${s.name}`,
     what: s.detail,
     why: firstLine(s.why) ?? UNKNOWN,
-    next: firstLine(s.next) ?? `${UNKNOWN} — 서버 로그(harnesside logs)를 보세요`,
+    next: firstLine(s.next) ?? `${UNKNOWN} — check the server log (harnesside logs)`,
   };
 }
 
 /** 로그용 두 줄(무엇은 단계 줄이 이미 말한다). */
 export function bootFailureLines(s: StepLike): string[] {
   const f = describeBootFailure(s);
-  return f ? [`       · 왜: ${f.why}`, `       · 다음: ${f.next}`] : [];
+  return f ? [`       · why: ${f.why}`, `       · next: ${f.next}`] : [];
 }

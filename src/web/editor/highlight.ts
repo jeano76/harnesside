@@ -54,10 +54,10 @@ export const LANGUAGE_LABEL: Record<Language, string> = {
   yaml: "YAML",
   markdown: "Markdown",
   python: "Python",
-  shell: "셸",
+  shell: "Shell",
   css: "CSS",
   html: "HTML",
-  text: "일반 텍스트",
+  text: "Plain text",
 };
 
 /** 사람이 읽는 색. 어두운 테마 기준 — 배경을 기준으로 정하지 않으면 판독이 안 된다. */

@@ -128,7 +128,7 @@ test("도구를 **한 번도 안 부르면** 그것을 말한다 — '완료' �
     await svc.send("고쳐줘");
     const done = events.find((e) => e.type === "agent.done");
     assert.ok(done, "done 이벤트 없음");
-    assert.match(String(done?.text), /도구 호출은 없/, `도구 미사용을 말하지 않음: ${done?.text}`);
+    assert.match(String(done?.text), /no tool was called/, `도구 미사용을 말하지 않음: ${done?.text}`);
   } finally {
     await s.cleanup();
   }
@@ -153,15 +153,15 @@ test("표시를 꺼도 **예산은 이미 씀** 을 한 번 말한다 — 조용
   try {
     const svc = service(fakeBackend({ reasonChunks: "가".repeat(60) }), events, s.dir, { enableThinking: false });
     await svc.send("생각해봐");
-    const notices = events.filter((e) => e.type === "agent.status" && /예산|상한/.test(String(e.text)));
+    const notices = events.filter((e) => e.type === "agent.status" && /budget|limit/.test(String(e.text)));
     assert.equal(notices.length, 1, `한 번만 말해야 하는데 ${notices.length}번 했다`);
     assert.equal(svc.thinking.usedTokens > 0, true, "소비된 토큰을 세지 않았다");
     // 문구가 바뀌어도 **의미**는 지켜져야 한다 — 정규식 하나에 묶지 않는다.
     // 예전에는 "꺼져 있습니다" 라고만 해서 사용자가 무엇을 해야 하는지 몰랐다(실측 질문).
     const text = String(notices[0].text);
-    assert.match(text, /이미 쓴|되돌릴 수 없/, "예산이 이미 소비됐다는 사실을 말하지 않는다");
-    assert.match(text, /다음 턴/, "언제 다시 켜지는지 말하지 않는다 — 사용자가 계속 꺼진 것으로 안다");
-    assert.match(text, /상한/, "어떤 상한을 넘었는지 말하지 않는다");
+    assert.match(text, /already spent|cannot be undone/, "예산이 이미 소비됐다는 사실을 말하지 않는다");
+    assert.match(text, /next turn/, "언제 다시 켜지는지 말하지 않는다 — 사용자가 계속 꺼진 것으로 안다");
+    assert.match(text, /limit/, "어떤 상한을 넘었는지 말하지 않는다");
     // **어디를 고쳐야 하는지**를 말해야 하고, 그곳이 **실제로 통하는 곳**이어야 한다.
     //
     // 예전엔 "설정의 사고 토큰 상한 을 올리십시오" 라고 적었는데, 그 설정은 **아무도 읽지
@@ -170,7 +170,7 @@ test("표시를 꺼도 **예산은 이미 씀** 을 한 번 말한다 — 조용
     assert.match(text, /\.harnesside\/config\.yaml/, "고칠 파일 경로를 말하지 않는다");
     assert.match(text, /agent\.maxReasoningTokens/, "고칠 키를 말하지 않는다");
     assert.match(text, /4,096/, "지금 값을 말하지 않는다 — 무엇을 고쳐야 하는지 알 수 없다");
-    assert.match(text, /허용/, "허용 범위를 말하지 않는다 — 값을 어디까지 올려도 되는지 모른다");
+    assert.match(text, /allowed/, "허용 범위를 말하지 않는다 — 값을 어디까지 올려도 되는지 모른다");
   } finally {
     await s.cleanup();
   }

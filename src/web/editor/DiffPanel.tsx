@@ -14,6 +14,8 @@ import React, { useMemo, useRef, useEffect } from "react";
 import { useFollowTail } from "../panels/useFollowTail.js";
 import { diffText, type DiffResult, type DiffLine } from "./diff.js";
 import { inlineSpans, statLabel, type DiffSource, type Span } from "./inline.js";
+import { i18n, useI18n } from "../i18n/index.js";
+import "../i18n/install.js";
 
 const BG = "#0d1117";
 const FG = "#c9d1d9";
@@ -46,17 +48,18 @@ export interface DiffPanelProps {
   autoScroll?: boolean;
 }
 
-const DEFAULT_LEFT: Record<DiffSource, string> = { file: "디스크", git: "HEAD", tool: "실행 전" };
-const DEFAULT_RIGHT: Record<DiffSource, string> = { file: "버퍼", git: "워킹트리", tool: "실행 후" };
+const defaultLeft = (s: DiffSource): string => ({ file: i18n.t("diff.disk"), git: "HEAD", tool: i18n.t("diff.before") })[s];
+const defaultRight = (s: DiffSource): string => ({ file: i18n.t("diff.buffer"), git: i18n.t("diff.worktree"), tool: i18n.t("diff.after") })[s];
 
 export function DiffPanel(props: DiffPanelProps) {
+  const t = useI18n();
   const {
     path,
     oldText,
     newText,
     source,
-    leftLabel = DEFAULT_LEFT[source],
-    rightLabel = DEFAULT_RIGHT[source],
+    leftLabel = defaultLeft(source),
+    rightLabel = defaultRight(source),
     layout,
     onLayoutChange,
     onClose,
@@ -127,10 +130,10 @@ export function DiffPanel(props: DiffPanelProps) {
           type="button"
           onClick={() => onLayoutChange?.(mode === "side" ? "inline" : "side")}
           disabled={!onLayoutChange}
-          title="가로/인라인 전환 (기본은 가로)"
+          title={t("diff.toggleTitle")}
           style={btn}
         >
-          {mode === "side" ? "가로" : "인라인"}
+          {mode === "side" ? t("diff.side") : t("diff.inline")}
         </button>
         <button
           type="button"
@@ -140,13 +143,13 @@ export function DiffPanel(props: DiffPanelProps) {
             if (document.fullscreenElement) void document.exitFullscreen();
             else void el.requestFullscreen?.().catch(() => undefined);
           }}
-          title="전체 화면 (Ctrl+Alt+D)"
+          title={t("diff.fullscreen")}
           style={btn}
         >
           ⛶
         </button>
         {onClose && (
-          <button type="button" onClick={onClose} title="닫기" style={btn}>
+          <button type="button" onClick={onClose} title={t("diff.close")} style={btn}>
             ✕
           </button>
         )}
@@ -155,7 +158,7 @@ export function DiffPanel(props: DiffPanelProps) {
       {diff.hunks.length === 0 ? (
         // §11.3: 빈 화면은 결함이다. "변경 없음" 을 이유와 함께 말한다.
         <div style={{ padding: 16, color: DIM }}>
-          두 내용이 같습니다. 차분이 없습니다.
+          {t("diff.same")}
         </div>
       ) : mode === "side" ? (
         <SideBySide lines={lines} bodyRef={bodyRef} height={height} onBodyScroll={follow.onScroll} />
@@ -222,6 +225,7 @@ function SideBySide({
   height: number;
   onBodyScroll?: () => void;
 }) {
+  const t = useI18n();
   const pairs = pairIndex(lines);
   const left: DiffLine[] = [];
   const right: DiffLine[] = [];
@@ -244,7 +248,7 @@ function SideBySide({
     <div ref={bodyRef} onScroll={onBodyScroll} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", overflow: "auto", height, flex: "1 1 auto", minHeight: 0 }}>
       <div>
         <div style={{ position: "sticky", top: 0, background: "#161b22", padding: "3px 8px", color: DIM, borderBottom: "1px solid #21262d" }}>
-          이전
+          {t("diff.old")}
         </div>
         {left.map((l, i) => (
           <Row key={i} line={l} mate={right[i]} side="old" />
@@ -252,7 +256,7 @@ function SideBySide({
       </div>
       <div style={{ borderLeft: "1px solid #30363d" }}>
         <div style={{ position: "sticky", top: 0, background: "#161b22", padding: "3px 8px", color: DIM, borderBottom: "1px solid #21262d" }}>
-          현재
+          {t("diff.new")}
         </div>
         {right.map((l, i) => (
           <Row key={i} line={l} mate={left[i]} side="new" />

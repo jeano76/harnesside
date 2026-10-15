@@ -28,6 +28,7 @@ import { colorFor, tokenizeLine, type Language } from "../editor/highlight.js";
 import { IndentGuides } from "../editor/IndentGuides.js";
 import { indentInfoFor } from "../editor/indentRules.js";
 import { COLOR, FONT, LAYOUT, RADIUS, SPACE } from "../theme/tokens.js";
+import { useI18n } from "../i18n/index.js";
 
 const DIM = COLOR.DIM_SUBTLE;
 const BORDER = COLOR.BORDER;
@@ -99,6 +100,7 @@ export function CodeBlock({
   maxHeight = LAYOUT.CODE_MAX_HEIGHT,
   autoScroll = false,
 }: CodeBlockProps) {
+  const t = useI18n();
   const [open, setOpen] = React.useState(!defaultCollapsed);
   const [copied, setCopied] = React.useState(false);
   // **명령줄은 출력과 따로** 그린다 — 같이 넣으면 출력이 하이라이트되어 지어내게 된다.
@@ -122,12 +124,12 @@ export function CodeBlock({
     <div style={{ margin: "4px 0 0", border: `1px solid ${COLOR.SURFACE_3}`, borderRadius: RADIUS.M, background: COLOR.SURFACE_1 }}>
       {(
         <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 6px", fontSize: FONT.META, color: DIM }}>
-          <span>{summary ?? `${lines.length}줄`}</span>
+          <span>{summary ?? t("cb.lines", { n: lines.length })}</span>
           <span style={{ flex: 1 }} />
           <button
             type="button"
-            aria-label="코드 복사"
-            title={copied ? "복사됨" : "복사"}
+            aria-label={t("cb.copyCode")}
+            title={copied ? t("cb.copied") : t("cb.copy")}
             onClick={() => {
               try {
                 void navigator.clipboard?.writeText(command ? `$ ${command}\n${text}` : text);
@@ -147,7 +149,7 @@ export function CodeBlock({
               cursor: "pointer",
             }}
           >
-            {copied ? "✓ 복사됨" : "⧉ 복사"}
+            {copied ? t("cb.copiedBtn") : t("cb.copyBtn")}
           </button>
           {canToggle ? (
           <button
@@ -165,14 +167,14 @@ export function CodeBlock({
               cursor: "pointer",
             }}
           >
-            {open ? "접기" : `나머지 ${lines.length - FIRST_COLLAPSED_LINES}줄 펼치기`}
+            {open ? t("cb.collapse") : t("cb.expandRest", { n: lines.length - FIRST_COLLAPSED_LINES })}
           </button>
           ) : (
             // VS 처럼 접기 자리는 항상 보인다. 접을 만큼 길지 않으면 비활성으로 —
             // 숨기면 접기 기능 자체를 잃었다고 읽힌다. 비활성 사유는 title 에.
             <span
               aria-disabled="true"
-              title={`접을 만큼 길지 않습니다 (${lines.length}줄)`}
+              title={t("cb.tooShort", { n: lines.length })}
               style={{
                 color: COLOR.LINE_NUM,
                 fontSize: FONT.META,
@@ -181,7 +183,7 @@ export function CodeBlock({
                 userSelect: "none",
               }}
             >
-              접기
+              {t("cb.collapse")}
             </span>
           )}
         </div>
@@ -244,7 +246,7 @@ export function CodeBlock({
           </div>
         ))}
         {hidden > 0 && (
-          <div style={{ paddingLeft: 38, color: DIM, fontSize: 10 }}>… {hidden}줄 접힘</div>
+          <div style={{ paddingLeft: 38, color: DIM, fontSize: 10 }}>{t("cb.folded", { n: hidden })}</div>
         )}
       </pre>
     </div>

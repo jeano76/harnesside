@@ -78,7 +78,8 @@ test("명령 팔레트가 **실제로 무엇을 하나** — 죽은 메뉴가 �
   // 대신 **메뉴가 실제로 메뉴** 인지 본다.
   const main = code(readFileSync(join(import.meta.dirname, "..", "main.tsx"), "utf8"));
   assert.ok(!/\{hits\.map\(\(h\) => \(\s*<div/.test(main), "팔레트 항목이 여전히 div 다 — 눌러도 아무 일도 없다");
-  assert.ok(/\{hits\.map\(\(h\) => \([\s\S]{0,400}?<button/.test(main), "팔레트 항목이 button 이 아니다");
+  // U-1: 전체 모드에서는 hits.slice(0, n).map — 같은 버튼, 같은 run 실행이다.
+  assert.ok(/\{hits\.(?:slice\(0,[^)]+\)\.map|map)\(\(h\) => \{[\s\S]{0,600}?<button/.test(main), "팔레트 항목이 button 이 아니다");
   assert.ok(/h\.cmd\.run\(\)/.test(main), "고른 항목의 run 을 실행하지 않는다");
 });
 
@@ -98,7 +99,7 @@ test("검사는 **매처가 살아 있다** — 정규식이 틀리면 위 검�
   assert.ok(!m.test("[session.id, client, notice]"), "매처가 좋은 deps 를 실패시킨다");
   // 이 검사는 **패널 바깥 경로**를 본다 — 정규식이 조용히 안 맞으면 무의미해지므로.
   const main = readFileSync(join(import.meta.dirname, "..", "main.tsx"), "utf8");
-  const pal = /\{hits\.map\(\(h\) => \([\s\S]{0,400}?<button/;
+  const pal = /\{hits\.(?:slice\(0,[^)]+\)\.map|map)\(\(h\) => \{[\s\S]{0,600}?<button/;
   assert.ok(pal.test(main), "팔레트 매처가 현재 코드를 못 찾는다");
   assert.ok(!pal.test('{hits.map((h) => (<div'), "팔레트 매처가 div 를 통과시킨다");
 });

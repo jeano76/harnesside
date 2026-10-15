@@ -100,7 +100,7 @@ test("**파일을 여는 함수가 호출된다** — 정의만 있고 불리지
 test("**`편집` 버튼은 입구가 있을 때만** 붙는다 — 죽은 버튼을 늘리지 않는다", () => {
   assert.match(previewSrc, /onEdit\?: \(path: string\) => void/, "FilePreview 가 편집 입구를 받지 않는다");
   assert.match(previewSrc, /\{onEdit && \(/, "편집 버튼이 항상 붙는다 — 눌러도 아무 일 없는 버튼");
-  assert.match(previewSrc, />\s*편집\s*</, "편집 버튼에 보이는 이름이 없다 — 아이콘만 남으면 무엇인지 모른다");
+  assert.match(previewSrc, /t\("fp\.edit"\)/, "편집 버튼에 보이는 이름이 없다 — 아이콘만 남으면 무엇인지 모른다");
   // 경로는 `onEdit(path)` 로만 전달한다 — 블록이 열기를 직접 호출하지 않는다.
   assert.match(previewSrc, /onClick=\{\(\) => onEdit\(path\)\}/, "편집 버튼이 경로 없이 호출된다");
   // 배선이 끊기면 FilePreview 는 조용히 읽기 전용으로 돌아간다 — 그게 지금의 결함이다.

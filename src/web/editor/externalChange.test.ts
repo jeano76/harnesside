@@ -34,20 +34,20 @@ const clean = (over: Partial<Buffer> = {}): Buffer => ({
 test("**깨끗한 버퍼는 디스크를 따른다** — 안 고쳤으면 따라가는 게 사용자의 기대다", () => {
   const r = planExternalChange(clean(), { content: "two\n", version: 4 });
   assert.equal(r.action, "adopt", "안 고친 버퍼인데 옛 내용을 계속 보여준다");
-  assert.match(r.why, /저장하지 않은 편집이 없어/, `왜 그런지 말하지 않는다: ${r.why}`);
+  assert.match(r.why, /No unsaved edits/, `왜 그런지 말하지 않는다: ${r.why}`);
 });
 
 test("**고치는 중이면 절대 덮지 않는다** — 데이터 손실이 가장 나쁜 실패다", () => {
   const b = clean({ content: "내 편집\n", dirtySince: 1700000000000 });
   const r = planExternalChange(b, { content: "남의 편집\n", version: 9 });
   assert.equal(r.action, "keep", "사용자 편집을 디스크로 덮어썼다");
-  assert.match(r.why, /그대로/, `보존 이유가 없다: ${r.why}`);
+  assert.match(r.why, /kept/, `보존 이유가 없다: ${r.why}`);
 });
 
 test("**내용이 같으면 건드리지 않는다** — `mtime` 만 바뀐 경우 커서를 잃을 이유가 없다", () => {
   const r = planExternalChange(clean(), { content: "one\n", version: 4 });
   assert.equal(r.action, "keep", "내용이 같은데 버퍼를 다시 만들어 커서를 잃게 했다");
-  assert.match(r.why, /내용이 같습니다/);
+  assert.match(r.why, /content is the same/);
 });
 
 test("**자기 저장이 돌아온 경우에도 지우지 않는다** — 버전만 올라간 저장 성공", () => {

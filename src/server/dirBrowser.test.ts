@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { listDirs, MAX_DIR_ENTRIES } from "./dirBrowser.js";
+import { listDirs, createDir, MAX_DIR_ENTRIES } from "./dirBrowser.js";
 
 async function fixture<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "harnesside-dirs-"));
@@ -65,4 +65,21 @@ test("너무 많으면 잘라내고 알린다", () =>
     assert.ok(r.ok);
     assert.equal(r.value.entries.length, MAX_DIR_ENTRIES);
     assert.equal(r.value.truncated, true);
+  }));
+
+test("새 폴더: 한 단계만 만들고 잘못된 이름·중복은 거절한다", () =>
+  fixture(async (dir) => {
+    const ok = await createDir(dir, " proj ");
+    assert.ok(ok.ok && ok.path === join(dir, "proj"));
+    assert.ok((await listDirs(dir, { fallback: "/", home: "/h" })).ok);
+    const dup = await createDir(dir, "proj");
+    assert.ok(!dup.ok && dup.reason === "exists");
+    for (const bad of ["", "..", ".", "a/b", "a\\b", "x\0y"]) {
+      const r = await createDir(dir, bad);
+      assert.ok(!r.ok && r.reason === "invalid", bad);
+    }
+    const nop = await createDir(join(dir, "nope"), "x");
+    assert.ok(!nop.ok && nop.reason === "not-found");
+    const rel = await createDir("rel", "x");
+    assert.ok(!rel.ok && rel.reason === "invalid");
   }));

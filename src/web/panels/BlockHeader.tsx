@@ -6,6 +6,7 @@
  */
 import React from "react";
 import { BLOCK_KIND_META, COLOR, FONT, type BlockKindKey } from "../theme/tokens.js";
+import { useI18n } from "../i18n/index.js";
 
 export interface BlockHeaderProps {
   kind: BlockKindKey;
@@ -35,12 +36,13 @@ export function headerText(kind: BlockKindKey, target?: string, status?: string)
 }
 
 export function BlockHeader({ kind, target, status, time, done, copyText }: BlockHeaderProps) {
+  const t = useI18n();
   const m = BLOCK_KIND_META[kind];
   const [copied, setCopied] = React.useState(false);
   const dot = done === undefined ? null : done ? (
-    <span style={{ color: COLOR.GOOD }} aria-label="완료">✓</span>
+    <span style={{ color: COLOR.GOOD }} aria-label={t("block.statusDone")}>✓</span>
   ) : (
-    <span style={{ color: COLOR.YELLOW }} aria-label="실행 중">▸</span>
+    <span style={{ color: COLOR.YELLOW }} aria-label={t("block.statusRunning")}>▸</span>
   );
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: FONT.META, color: COLOR.DIM, marginBottom: 2, minWidth: 0 }}>
@@ -65,8 +67,8 @@ export function BlockHeader({ kind, target, status, time, done, copyText }: Bloc
       {copyText !== undefined && (
         <button
           type="button"
-          aria-label="블록 복사"
-          title={copied ? "복사됨" : "복사"}
+          aria-label={t("block.copyBlock")}
+          title={copied ? t("block.copied") : t("block.copy")}
           onClick={() => {
             try {
               void navigator.clipboard?.writeText(copyText);

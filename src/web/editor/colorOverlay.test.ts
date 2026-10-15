@@ -127,11 +127,11 @@ test("**투명 글자와 색칠 층은 함께 존재해야 한다** — 하나�
 test("미지원 형식은 **칠하지 않고 그 사실을 말한다**", () => {
   const plan = editorOverlayPlan({ text: 'fn main() { println!("hi"); }', lang: "text", path: "src/main.rs" });
   assert.equal(plan.colorable, false, "미지원 형식을 칠했다");
-  assert.match(plan.note!, /색칠하지 않습니다/);
-  assert.match(plan.note!, /미지원: \.rs/, "어느 확장자인지 말하지 않는다");
+  assert.match(plan.note!, /not colored/);
+  assert.match(plan.note!, /unsupported: \.rs/, "어느 확장자인지 말하지 않는다");
   // 그래도 **내용은 그대로** 보여야 한다 — plain 토큰으로 전부 나온다.
   assert.equal(plan.lines.map((l) => l.tokens.map((t) => t.text).join("")).join("\n"), 'fn main() { println!("hi"); }');
-  assert.match(unsupportedNote("Makefile"), /확장자 없음/);
+  assert.match(unsupportedNote("Makefile"), /no extension/);
 });
 
 test("**자르면 그 사실을 말한다** — 조용히 자르지 않는다", () => {
@@ -139,7 +139,7 @@ test("**자르면 그 사실을 말한다** — 조용히 자르지 않는다", 
   const plan = editorOverlayPlan({ text: many, lang: "typescript" });
   assert.equal(plan.truncated, true);
   assert.equal(plan.lines.length, EDITOR_OVERLAY_MAX_LINES);
-  assert.match(plan.note!, /자르지 않았습니다/, "자른 사실을 말하지 않는다");
+  assert.match(plan.note!, /nothing was cut/, "자른 사실을 말하지 않는다");
   assert.match(plan.note!, new RegExp(EDITOR_OVERLAY_MAX_LINES.toLocaleString("ko-KR")));
   // 작은 파일에는 ** unreasonably 큰 상한이 아니라 실제로 상한이 걸리지 않는다** — 노이즈를 만들지 않는다.
   const small = editorOverlayPlan({ text: "a\nb", lang: "typescript" });

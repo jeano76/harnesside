@@ -15,6 +15,8 @@
 
 import { estimateTextTokens } from "../../shared/textTokens.js";
 import { DEFAULT_MAX_REASONING, clampReasoningBudget } from "../../shared/reasoning.js";
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
 
 export type ThinkStyle = "dots" | "pulse" | "orbit" | "shimmer" | "bar";
 
@@ -135,7 +137,7 @@ export function ingest(s: ThinkState, d: ThinkDeltas): ThinkState {
       enabled: false,
       // **위험해진 순간에만** 경고를 켠다. 켜져 있는 것과 위험한 것은 다르다.
       needsWarning: true,
-      reason: `사고 토큰이 상한(${s.maxReasoningTokens.toLocaleString("ko-KR")})을 넘어 thinking 을 끄고 도구 호출을 강제합니다.`,
+      reason: i18n.t("think.over", { n: s.maxReasoningTokens.toLocaleString() }),
     };
   }
   return {
@@ -234,7 +236,7 @@ export function initialRetry(maxAttempts = 2): RetryState {
 
 /** 최종 오류 문구 — 사용자에게 무엇이 왜 실패했는지 말해야 한다(§11.3). */
 export function exhaustedMessage(s: RetryState): string {
-  return `모델이 ${s.maxAttempts}회 재시도 후에도 도구를 선택하지 않았습니다 (마지막 오류: ${s.lastError ?? "알 수 없음"}). reasoning 예산을 줄이거나 max_tokens 를 늘린 뒤 다시 시도하십시오.`;
+  return i18n.t("think.noTool", { n: s.maxAttempts, err: s.lastError ?? i18n.t("think.unknownErr") });
 }
 
 /**

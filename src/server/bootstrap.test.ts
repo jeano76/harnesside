@@ -65,8 +65,8 @@ test("12단계가 §3.2 의 번호·이름과 순서로 나열된다", async () 
     );
     assert.deepEqual(r.steps.map((x) => x.name), [...STEP_NAMES]);
     // 단계 5 는 GPU 정책, 단계 7 은 llama 기동 — 이 인과가 순서의 이유다.
-    assert.match(STEP_NAMES[4], /GPU 정책/);
-    assert.match(STEP_NAMES[6], /llama-server 기동/);
+    assert.match(STEP_NAMES[4], /GPU policy/);
+    assert.match(STEP_NAMES[6], /Start llama-server/);
   } finally {
     await s.cleanup();
   }
@@ -166,7 +166,7 @@ test("카드에 여유가 없으면 브라우저 GPU 가 off 이고 예약은 0"
     });
     assert.equal(r.gpu?.mode, "off");
     assert.equal(r.gpu?.reserveMiB, 0);
-    assert.ok(r.steps[4].detail.includes("모드 off"), r.steps[4].detail);
+    assert.ok(r.steps[4].detail.includes("mode off"), r.steps[4].detail);
   } finally {
     await s.cleanup();
   }
@@ -197,7 +197,7 @@ test("단계 5(예약 0)는 단계 7 의 튜닝 계산에 반영된다 — 700 M
     assert.ok(r.tuning, `튜닝이 없습니다 (단계: ${r.steps.map((s) => `${s.n}:${s.ok ? "ok" : "fail"}`).join(" ")})`);
     // off 모드이므로 "브라우저 VRAM 예약을 제외했다" 는 rationale 이 없어야 한다.
     // 있으면 브라우저 예산 0 인데도 빼앗는 계산 버그다.
-    const leaked = r.tuning.rationale.some((x) => x.includes("브라우저 VRAM 예약"));
+    const leaked = r.tuning.rationale.some((x) => x.includes("browser VRAM reserve"));
     assert.equal(leaked, false, r.tuning.rationale.join(" | "));
   } finally {
     await s.cleanup();

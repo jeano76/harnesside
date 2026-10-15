@@ -36,7 +36,7 @@ import { MetricsSampler } from "./metrics.js";
 import { WorkspaceWatcher } from "./fsWatcher.js";
 import { liveModelPath, applyModelSwitch, loadThinkBudget } from "./modelIdentity.js";
 import { WorkspaceService } from "./workspaceService.js";
-import { listDirs } from "./dirBrowser.js";
+import { createDir, listDirs } from "./dirBrowser.js";
 import { formatCrashReport, writeCrashLogSync, readCrashTail, acknowledgeCrashLog, archiveHarmlessCrashLog } from "../crashHandler.js";
 import { AgentService, DEFAULT_THRESHOLDS } from "./agentService.js";
 import { recommendThresholds, type CompactionThresholds } from "../compaction/compactor.js";
@@ -215,6 +215,11 @@ async function main(): Promise<number> {
       });
       emit(`[workspace] ${e.from.root} → ${e.to.root}`);
       void rememberWorkspace(home, e.to.root);
+      // 세션 분류 루트와 살아 있는 루프를 새 루트로 옮긴다 — 안 하면 모델은 옛 폴더 기준으로 계속 일한다.
+      // 안내문은 루프로 전달되므로 대기 목록에서 비운다.
+      session.rebindWorkspace();
+      agent.workspaceChanged(e.note);
+      workspace.takeNotes();
     },
   });
   // M1 터미널. PTY 는 **워크스페이스 루트 에서만** 연다 — 밖에서 열면 승인 게이트를
@@ -910,7 +915,7 @@ const updates: UpdateService = new UpdateService({
           .route("PUT", "/api/fs/file", async (c) => {
             const body = (await readBody(c.req)) as { path?: string; content?: string; baseVersion?: number };
             if (typeof body.path !== "string" || typeof body.content !== "string") {
-              throw Object.assign(new Error("path 와 content 가 필요합니다"), { status: 400 });
+              throw Object.assign(new Error("path and content are required"), { status: 400 });
             }
             const r = await safeWriteFile(body.path, body.content, {
               root: workspace.root(),
@@ -936,13 +941,13 @@ const updates: UpdateService = new UpdateService({
           // **게이트가 아직 없을 때 503 을 말한다** — 빈 목록을 주면 사용자는
           // "승인 대기 중인 것이 없다" 고 읽는데 실제로는 **아직 시작도 안 됐다**.
           .route("GET", "/api/approval/pending", () => {
-            if (!approvalGate) throw Object.assign(new Error("승인 게이트가 아직 준비되지 않았습니다"), { status: 503 });
+            if (!approvalGate) throw Object.assign(new Error("The approval gate is not ready yet"), { status: 503 });
             // **대기 중인 것만.** 이미 결정된 것을 다시 보여주면 사용자가
             // "내가 이미 눌렀는데 왜 뜨지" 한다(조용히 중복되는 UI).
             return { pending: approvalGate.pending };
           })
           .route("POST", "/api/approval/:id", async (c) => {
-            if (!approvalGate) throw Object.assign(new Error("승인 게이트가 아직 준비되지 않았습니다"), { status: 503 });
+            if (!approvalGate) throw Object.assign(new Error("The approval gate is not ready yet"), { status: 503 });
             const body = (await readBody(c.req)) as { decision?: string };
             const decision = body.decision;
             // **결정의 종류를 먼저 검사한다.** 모르는 문자열이 들어오면
@@ -950,16 +955,16 @@ const updates: UpdateService = new UpdateService({
             // "누른 것 같다" 고 여긴다(조용히 실패하는 것이 가장 나쁘다).
             const allowed = ["allow-once", "allow-always", "reject"] as const;
             if (!decision || !(allowed as readonly string[]).includes(decision)) {
-              throw Object.assign(new Error(`결정이 올바르지 않습니다: ${String(decision)}`), { status: 400 });
+              throw Object.assign(new Error(`Invalid decision: ${String(decision)}`), { status: 400 });
             }
             const ok = approvalGate.decide(c.params.id, decision as (typeof allowed)[number], "web");
             // **이미 결정되었거나 없는 id 라면 404** — "처리했다" 고 말하면 안 된다.
             // 사용자는 자신이 승인한 줄 알지만 실제로는 아무 일도 일어나지 않았다.
-            if (!ok) throw Object.assign(new Error("이미 결정되었거나 존재하지 않는 승인 요청입니다"), { status: 404 });
+            if (!ok) throw Object.assign(new Error("This approval request was already decided or does not exist"), { status: 404 });
             return { ok: true, decided: decision };
           })
           .route("GET", "/api/approval/policy", () => {
-            if (!approvalGate) throw Object.assign(new Error("승인 게이트가 아직 준비되지 않았습니다"), { status: 503 });
+            if (!approvalGate) throw Object.assign(new Error("The approval gate is not ready yet"), { status: 503 });
             return approvalGate.getPolicy();
           })
           // ── S-5 찾기 — 저장소 전체 검색 · 빠른 이동 ────────────────────────────
@@ -1008,7 +1013,7 @@ const updates: UpdateService = new UpdateService({
             const line = Number(c.query.get("line"));
             const col = Number(c.query.get("col"));
             if (!path.trim() || !Number.isInteger(line) || !Number.isInteger(col) || line < 1 || col < 1) {
-              throw Object.assign(new Error("path·line·col 이 필요합니다 (line·col 은 1 이상 정수)"), { status: 400 });
+              throw Object.assign(new Error("path, line and col are required (line and col are integers >= 1)"), { status: 400 });
             }
             const r = await getDefinition(workspace.root(), path, line, col);
             if (!r.available) return { available: false, reason: r.reason, locations: [] };
@@ -1019,7 +1024,7 @@ const updates: UpdateService = new UpdateService({
             const line = Number(c.query.get("line"));
             const col = Number(c.query.get("col"));
             if (!path.trim() || !Number.isInteger(line) || !Number.isInteger(col) || line < 1 || col < 1) {
-              throw Object.assign(new Error("path·line·col 이 필요합니다 (line·col 은 1 이상 정수)"), { status: 400 });
+              throw Object.assign(new Error("path, line and col are required (line and col are integers >= 1)"), { status: 400 });
             }
             const r = await getReferences(workspace.root(), path, line, col);
             if (!r.available) return { available: false, reason: r.reason, locations: [] };
@@ -1049,7 +1054,7 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/git/clone", async (c) => {
             const body = (await readBody(c.req)) as { url?: string; dir?: string; branch?: string; depth?: number };
             const url = String(body.url ?? "");
-            if (!url) throw Object.assign(new Error("url 이 필요합니다"), { status: 400 });
+            if (!url) throw Object.assign(new Error("url is required"), { status: 400 });
             // **저장 위치는 워크스페이스 아래로 제한한다** — 임의 경로에 clone 되면
             // 경로 안전(§3.4) 밖에서 파일을 쓰게 된다.
             const dirInput = String(body.dir ?? "repo");
@@ -1058,7 +1063,7 @@ const updates: UpdateService = new UpdateService({
             if (!safe.ok) throw Object.assign(new Error(safe.detail), { status: 403 });
             // **이미 있으면 덮어쓰지 않는다** — clone 은 통째로 쓰는 일이라 실수 비용이 크다.
             if (await stat(safe.value).then(() => true, () => false)) {
-              throw Object.assign(new Error(`이미 있는 경로입니다: ${safe.value}`), { status: 409 });
+              throw Object.assign(new Error(`Path already exists: ${safe.value}`), { status: 409 });
             }
             const plan = planClone({ url, dir: safe.value, branch: body.branch, depth: body.depth });
             ring.info("git", `clone 시작: ${redactUrl(url)}`, "server");
@@ -1130,7 +1135,7 @@ const updates: UpdateService = new UpdateService({
             const target = resolve(terminal.cwd, String(c.query.get("path") ?? "."));
             // `resolve` 는 `..` 로 루트를 벗어난다 — `safePath` 와 같이 게이트를 둔다.
             if (!target.startsWith(terminal.cwd)) {
-              throw Object.assign(new Error("루트 밖으로는 나갈 수 없습니다"), { status: 403 });
+              throw Object.assign(new Error("Cannot go outside the root"), { status: 403 });
             }
             const names = await readdir(target, { withFileTypes: true }).catch(() => []);
             return {
@@ -1226,6 +1231,13 @@ const updates: UpdateService = new UpdateService({
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "denied" ? 403 : 400, reason: r.reason });
             return r.value;
           })
+          // 탐색기의 "새 폴더" — 한 단계씩만 만든다. 만든 뒤 전환은 여전히 plan/switch 를 거친다.
+          .route("POST", "/api/workspace/mkdir", async (c) => {
+            const body = (await readBody(c.req)) as { parent?: string; name?: string };
+            const r = await createDir(String(body.parent ?? ""), String(body.name ?? ""));
+            if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.reason === "denied" ? 403 : r.reason === "exists" ? 409 : 400, reason: r.reason });
+            return { path: r.path };
+          })
           .route("POST", "/api/workspace/plan", async (c) => {
             const body = (await readBody(c.req)) as { path?: string; openTabs?: string[] };
             const p = await workspace.preview(String(body.path ?? ""), body.openTabs ?? []);
@@ -1276,13 +1288,13 @@ const updates: UpdateService = new UpdateService({
             const body = (await readBody(c.req)) as { key?: string; arg?: string };
             const key = String(body.key ?? "");
             if (!(SERVER_SLASH_KEYS as readonly string[]).includes(key)) {
-              throw Object.assign(new Error(`서버에서 실행하는 슬래시 명령이 아닙니다: ${key}`), { status: 400 });
+              throw Object.assign(new Error(`Not a server-side slash command: ${key}`), { status: 400 });
             }
             return slash.start(key as ServerSlashKey, String(body.arg ?? ""));
           })
           .route("GET", "/api/slash/job/:id", (c) => {
             const v = slash.get(c.params.id);
-            if (!v) throw Object.assign(new Error("없는 작업입니다"), { status: 404 });
+            if (!v) throw Object.assign(new Error("No such job"), { status: 404 });
             return v;
           })
           .route("POST", "/api/system/quit", async () => {
@@ -1320,7 +1332,7 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/agent/queue/move", async (c) => {
             const body = (await readBody(c.req)) as { from?: number; to?: number };
             if (!agent.moveQueue(Number(body.from), Number(body.to))) {
-              throw Object.assign(new Error("대기열 범위를 벗어났습니다"), { status: 400 });
+              throw Object.assign(new Error("Queue index out of range"), { status: 400 });
             }
             return { ok: true, items: agent.queueView() };
           })
@@ -1444,7 +1456,7 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/models/download", async (c) => {
             const body = (await readBody(c.req)) as { repo?: string; file?: string; url?: string };
             if (!body.repo || !body.file) {
-              throw Object.assign(new Error("repo 와 file 이 필요합니다"), { status: 400 });
+              throw Object.assign(new Error("repo and file are required"), { status: 400 });
             }
             const id = `${body.repo}/${body.file}`.replace(/[^\w.-]+/g, "_");
             const dest = modelPathFor(modelsDir, body.file);
@@ -1459,7 +1471,7 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/models/cancel", async (c) => {
             const body = (await readBody(c.req)) as { id?: string };
             const item = downloader.cancel(String(body.id ?? ""));
-            if (!item) throw Object.assign(new Error("진행 중인 다운로드가 없습니다"), { status: 404 });
+            if (!item) throw Object.assign(new Error("No download in progress"), { status: 404 });
             return { item };
           })
           .route("GET", "/api/models/downloads", () => ({ items: downloader.all() }))
@@ -1469,9 +1481,9 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/models/activate", async (c) => {
             const body = (await readBody(c.req)) as { path?: string; confirm?: boolean };
             const path = String(body.path ?? "");
-            if (!path) throw Object.assign(new Error("path 가 필요합니다"), { status: 400 });
+            if (!path) throw Object.assign(new Error("path is required"), { status: 400 });
             const st = await stat(path).catch(() => null);
-            if (!st?.isFile()) throw Object.assign(new Error(`모델 파일이 없습니다: ${path}`), { status: 400 });
+            if (!st?.isFile()) throw Object.assign(new Error(`Model file not found: ${path}`), { status: 400 });
             if (body.confirm !== true) {
               // planSwap 의 경고를 그대로 사용한다 — 확인 다이얼로그의 내용.
               const sw = planSwap({
@@ -1553,7 +1565,7 @@ const updates: UpdateService = new UpdateService({
             const body = (await readBody(c.req)) as { index?: number; expectHash?: { algo: string; hex: string } };
             const st = updates.get();
             const asset = st.assets[Number(body.index ?? -1)];
-            if (!asset) throw Object.assign(new Error("자산이 없습니다 — 먼저 확인하십시오"), { status: 400 });
+            if (!asset) throw Object.assign(new Error("No asset — check for updates first"), { status: 400 });
             // R-5: **아카이브는 그대로 받고 풀지 않는다** — 여기서 트리를 만들지 않는다.
             // `downloadBundle` 가 매니페스트와 대조한 뒤 **슬롯 안**에만 트리를 만든다.
             // 검증 전에는 어떤 경로도 교체하지 않는다(§R-5.3).
@@ -1569,7 +1581,7 @@ const updates: UpdateService = new UpdateService({
             // 다른 플랫폼 zip 이면 `downloadBundle` 이 받기 전에 거부한다.
             const asset = body.index === undefined ? updates.bundleAssets().zip : st.assets[Number(body.index)];
             if (!asset) {
-              throw Object.assign(new Error(`이 머신용 배포물(${updates.bundleAssets().expected})이 릴리스에 없습니다 — 먼저 확인하십시오`), { status: 400 });
+              throw Object.assign(new Error(`The release has no bundle for this machine (${updates.bundleAssets().expected}) — check for updates first`), { status: 400 });
             }
             const r = await updates.downloadBundle(asset);
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: 400 });
@@ -1600,7 +1612,7 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/update/apply", async (c) => {
             const body = (await readBody(c.req)) as { tree?: string; manifest?: unknown; confirm?: boolean };
             if (body.confirm !== true) {
-              throw Object.assign(new Error("적용하려면 confirm:true 로 명시적으로 확인하십시오"), { status: 400 });
+              throw Object.assign(new Error("To apply, confirm explicitly with confirm:true"), { status: 400 });
             }
             const { decision } = await updates.planApply();
             if (!decision.ok) {
@@ -1610,12 +1622,12 @@ const updates: UpdateService = new UpdateService({
             const resolved = resolve(tree);
             const rel = relative(updateSlotsDir, resolved);
             if (tree === "" || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-              throw Object.assign(new Error("슬롯 안에서 검증된 트리만 적용할 수 있습니다 — 먼저 /api/update/bundle 을 통과하십시오"), { status: 400 });
+              throw Object.assign(new Error("Only a verified tree inside the slot can be applied — go through /api/update/bundle first"), { status: 400 });
             }
             try {
               await stat(resolved);
             } catch {
-              throw Object.assign(new Error("검증된 트리가 없습니다 — 먼저 배포물을 받으십시오"), { status: 400 });
+              throw Object.assign(new Error("There is no verified tree — download the bundle first"), { status: 400 });
             }
             const t0 = Date.now();
             // 매니페스트는 **경로가 아니라 내용** 으로 받는다 — 클라이언트가 경로를
@@ -1630,7 +1642,7 @@ const updates: UpdateService = new UpdateService({
               const parsed = typeof body.manifest === "object" ? parseManifest(JSON.stringify(body.manifest)) : null;
               if (!parsed || !parsed.ok) {
                 const why = parsed && !parsed.ok ? parsed.error : "형식이 아닙니다";
-                throw Object.assign(new Error(`매니페스트를 받아들일 수 없습니다: ${why} — 재검증 없이 교체하지 않습니다`), { status: 400 });
+                throw Object.assign(new Error(`Cannot accept the manifest: ${why} — not replacing without re-verification`), { status: 400 });
               }
               manifest = parsed.manifest;
             }
@@ -1702,7 +1714,7 @@ const updates: UpdateService = new UpdateService({
           .route("POST", "/api/update/rollback", async (c) => {
             const body = (await readBody(c.req)) as { confirm?: boolean };
             if (body.confirm !== true) {
-              throw Object.assign(new Error("적용하려면 confirm:true 로 명시적으로 확인하십시오"), { status: 400 });
+              throw Object.assign(new Error("To apply, confirm explicitly with confirm:true"), { status: 400 });
             }
             const r = await updates.rollback();
             if (!r.ok) throw Object.assign(new Error(r.detail), { status: r.detail.includes("SLOT_MISSING") || r.detail.includes("슬롯이 없습니다") ? 409 : 500 });
@@ -1729,12 +1741,12 @@ const updates: UpdateService = new UpdateService({
           })
           .route("POST", "/api/notices/:id/dismiss", async (c) => {
             const id = decodeURIComponent(c.params.id ?? "");
-            if (!notices.dismiss(id)) throw Object.assign(new Error("이미 처리되었거나 존재하지 않는 알림입니다"), { status: 404 });
+            if (!notices.dismiss(id)) throw Object.assign(new Error("This notice was already handled or does not exist"), { status: 404 });
             return { ok: true, id };
           })
           .route("POST", "/api/notices/:id/silence", async (c) => {
             const id = decodeURIComponent(c.params.id ?? "");
-            if (!(await notices.silence(id))) throw Object.assign(new Error("이미 처리되었거나 존재하지 않는 알림입니다"), { status: 404 });
+            if (!(await notices.silence(id))) throw Object.assign(new Error("This notice was already handled or does not exist"), { status: 404 });
             return { ok: true, id };
           });
         const { port: actual } = await http.start();

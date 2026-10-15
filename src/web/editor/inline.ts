@@ -8,6 +8,9 @@
  * 여기서 만드는 것은 **강조 구간 목록**이고, 렌더링은 `<mark>` 가 한다.
  */
 
+import { i18n } from "../i18n/index.js";
+import "../i18n/install.js";
+
 export interface Span {
   /** 강조 구간 안의 문자열. */
   text: string;
@@ -125,10 +128,10 @@ function offsetOf(s: string, tok: string[], i: number): number {
 /** 헤더용 통계 문자열 — "수정 2 · 추가 1 · 삭제 1" (§5.2). */
 export function statLabel(stat: { added: number; removed: number; modified: number; unchanged: number }): string {
   const parts: string[] = [];
-  if (stat.modified) parts.push(`수정 ${stat.modified}`);
-  if (stat.added) parts.push(`추가 ${stat.added}`);
-  if (stat.removed) parts.push(`삭제 ${stat.removed}`);
-  if (!parts.length) return "변경 없음";
+  if (stat.modified) parts.push(i18n.t("diff.statMod", { n: stat.modified }));
+  if (stat.added) parts.push(i18n.t("diff.statAdd", { n: stat.added }));
+  if (stat.removed) parts.push(i18n.t("diff.statDel", { n: stat.removed }));
+  if (!parts.length) return i18n.t("diff.statNone");
   return parts.join(" · ");
 }
 
@@ -146,16 +149,16 @@ export interface DiffViewState {
 
 export function initialView(source: DiffSource, path: string, pref: "auto" | "side" | "inline" = "auto", width = 1200): DiffViewState {
   const labels: Record<DiffSource, [string, string]> = {
-    file: ["디스크", "버퍼"],
-    git: ["HEAD", "워킹트리"],
-    tool: ["실행 전", "실행 후"],
+    file: [i18n.t("diff.disk"), i18n.t("diff.buffer")],
+    git: ["HEAD", i18n.t("diff.worktree")],
+    tool: [i18n.t("diff.before"), i18n.t("diff.after")],
   };
   const [l, r] = labels[source];
   return {
     source,
     path,
     leftLabel: source === "git" ? `HEAD · ${path}` : l,
-    rightLabel: source === "git" ? `워킹트리 · ${path}` : r,
+    rightLabel: source === "git" ? i18n.t("diff.worktreeIn", { path }) : r,
     layout: pref === "auto" ? (width < 900 ? "inline" : "side") : pref,
     fullScreen: false,
   };

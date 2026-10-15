@@ -32,7 +32,7 @@ test("확장자 → 언어 매핑", () => {
 test("읽기 전용 경로(예: 빌드 산출물)는 열되 편집하지 않는다", () => {
   const p = planOpen({ path: "secrets/a.txt", name: "a.txt", size: 10 }, "hello", { readOnlyPaths: ["secrets/"] });
   assert.equal(p.readOnly, true, "읽기 전용 경로가 편집 가능하다");
-  assert.match(p.reason, /읽기 전용/);
+  assert.match(p.reason, /Read-only/);
   // 접두사 밖은 편집 가능해야 한다(오탐 방지)
   const q = planOpen({ path: "src/a.txt", name: "a.txt", size: 10 }, "hello", { readOnlyPaths: ["secrets/"] });
   assert.equal(q.readOnly, false);
@@ -45,7 +45,7 @@ test("바이너리는 이유를 말한다 — 빈 화면이 되면 안 된다", 
   const p = planOpen({ path: "a.bin", name: "a.bin", size: 10 }, "ab\u0000cd");
   assert.equal(p.kind, "binary");
   assert.equal(p.readOnly, true);
-  assert.match(p.reason, /바이너리/);
+  assert.match(p.reason, /Binary/);
 });
 
 test("이미지는 이미지 뷰로", () => {
@@ -60,7 +60,7 @@ test("매우 큰 파일은 앞부분만 읽기 전용으로 — 통째로 넣지
   assert.equal(p.truncate, true);
   assert.equal(p.readOnly, true);
   assert.ok(p.omittedLines > 9000, "생략량을 세지 않았다");
-  assert.match(p.reason, /줄만 표시/);
+  assert.match(p.reason, /showing only the first/);
 });
 
 test("보통 파일은 그대로 열리고 편집 가능하다", () => {

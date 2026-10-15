@@ -120,7 +120,7 @@ test("긴 줄은 **앞/뒤만** 남기고 생략량을 말한다", () => {
   assert.equal(r.truncated, true);
   assert.ok(r.text.length < MAX_LINE_CHARS * 2, "자르지 않았다");
   assert.ok(r.dropped > 0, "생략량을 세지 않았다");
-  assert.match(r.text, /생략/);
+  assert.match(r.text, /omitted/);
   // 짧은 줄은 그대로
   const s = clampLine("짧다");
   assert.equal(s.truncated, false);

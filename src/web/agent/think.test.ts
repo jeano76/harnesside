@@ -76,7 +76,7 @@ test("예산을 초과하면 **thinking 을 끄고 tool_choice=required 로 전�
   assert.equal(s.enabled, false, "thinking 이 꺼지지 않았다");
   assert.equal(toolChoiceFor(s), "required", "tool_choice 가 required 가 아니다");
   assert.ok(s.reason, "전환 사유가 없다 — 사용자는 왜 바뀌었는지 모른다");
-  assert.match(s.reason!, /상한/);
+  assert.match(s.reason!, /limit/);
 });
 
 test("**한 번만** 전환한다 — 매 델타마다 사유가 바뀌지 않는다", () => {
@@ -196,9 +196,9 @@ test("소진 오류 문구에 원인과 조치가 **둘 다** 있다", () => {
   r = retryAfterNoTool(r, "응답에 tool_call 이 없음");
   r = retryAfterNoTool(r, "응답에 tool_call 이 없음");
   const msg = exhaustedMessage(r);
-  assert.match(msg, /응답에 tool_call 이 없음/, "마지막 오류를 숨겼다");
+  assert.match(msg, /tool_call/, "마지막 오류를 숨겼다");
   assert.match(msg, /reasoning|max_tokens/, "조치 방법이 없다");
-  assert.match(msg, /2회/, "몇 번 시도했는지 않는다");
+  assert.match(msg, /2 retries/, "몇 번 시도했는지 않는다");
 });
 
 test("maxAttempts 가 1 이면 한 번 만에 포기한다", () => {

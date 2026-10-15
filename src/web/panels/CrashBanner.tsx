@@ -11,8 +11,10 @@
 import React from "react";
 import type { ApiClient } from "../api.js";
 import { COLOR, FONT, RADIUS } from "../theme/tokens.js";
+import { useI18n } from "../i18n/index.js";
 
 export function CrashBanner({ client }: { client: ApiClient }) {
+  const t = useI18n();
   const [tail, setTail] = React.useState<string | null>(null);
   const [hidden, setHidden] = React.useState(false);
 
@@ -42,7 +44,7 @@ export function CrashBanner({ client }: { client: ApiClient }) {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span aria-hidden="true" style={{ color: COLOR.YELLOW }}>⚠️</span>
-        <span style={{ fontWeight: 700 }}>이전 실행이 비정상 종료되었습니다</span>
+        <span style={{ fontWeight: 700 }}>{t("crash.title")}</span>
         <span style={{ flex: 1 }} />
         <button
           type="button"
@@ -51,17 +53,17 @@ export function CrashBanner({ client }: { client: ApiClient }) {
             setHidden(true);
             void client.post("/api/crash/ack", {}).catch(() => { /* 못 옮겨도 이번 화면에선 숨겨졌다 */ });
           }}
-          aria-label="크래시 안내 닫기"
+          aria-label={t("crash.dismiss")}
           style={{ background: "transparent", color: COLOR.DIM, border: 0, cursor: "pointer", font: "inherit", fontSize: FONT.AUX }}
         >
-          닫기
+          {t("crash.close")}
         </button>
       </div>
       <div style={{ color: COLOR.DIM, marginTop: 2 }}>
-        저장된 작업이 있으면 아래 재개 배너에서 이어집니다. 크래시 기록은 서버 로그에 남아 있습니다.
+        {t("crash.body")}
       </div>
       <details style={{ marginTop: 4 }}>
-        <summary style={{ color: COLOR.DIM, cursor: "pointer", fontSize: FONT.META }}>마지막 기록 보기</summary>
+        <summary style={{ color: COLOR.DIM, cursor: "pointer", fontSize: FONT.META }}>{t("crash.last")}</summary>
         <pre style={{ margin: "4px 0 0", padding: 6, background: COLOR.SURFACE_2, borderRadius: RADIUS.S, overflow: "auto", maxHeight: 160, font: `${FONT.AUX}px/${FONT.LINE_CODE} ${FONT.MONO}`, whiteSpace: "pre-wrap", wordBreak: "break-word", color: COLOR.FG }}>
           {tail}
         </pre>

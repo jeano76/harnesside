@@ -455,6 +455,31 @@ check("패널 머리에 내부 식별자가 노출되지 않음 (§5.8)", leaked
 // 사용자가 지운 화면이다(지금 웹은 /api/fs/search 를 부르지 않는다). 없는 화면을 찾는 검사는 되살리라는 압력이 된다.
 // 결과 상한 자체는 서버 쪽(`src/fs/search.ts`, clampInt)에 남아 있고 그 유닛 테스트가 지킨다.
 
+// U-1 팔레트 통합 (Phase 1): Ctrl+K 로 같은 팔레트가 뜨고 접두어 도움이 항상 보인다.
+{
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "k", code: "KeyK", ctrlKey: true });
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "k", code: "KeyK", ctrlKey: true });
+  await new Promise((r) => setTimeout(r, 500));
+  const pal = await cdp.eval(`(() => {
+    const inputs = [...document.querySelectorAll("input")];
+    const pal = inputs.length > 0 ? document.body.innerText : "";
+    return {
+      hasInput: inputs.length > 0,
+      prefixHelp: ["@", "#", "!", ">", ":"].filter((p) => document.body.innerText.includes(p)).length,
+      hasAttach: document.body.innerText.includes("attach") || document.body.innerText.includes("첨부"),
+    };
+  })()`);
+  report(
+    pal.hasInput && pal.prefixHelp >= 3 ? "PASS" : "FAIL",
+    "U-1 팔레트 진입로 + 접두어 도움말 상시 표시",
+    pal.hasInput === true && pal.prefixHelp >= 3,
+    `input=${pal.hasInput} prefixes=${pal.prefixHelp}/5 attach=${pal.hasAttach}`,
+  );
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" });
+  await new Promise((r) => setTimeout(r, 300));
+}
+
 await new Promise((r) => setTimeout(r, 1500));
 check("콘솔 에러 0", errors.length === 0, errors.slice(0, 2).join(" | "));
 

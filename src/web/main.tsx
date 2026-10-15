@@ -48,6 +48,9 @@ import { WsClient } from "./wsClient.js";
 import { DEFAULT_LAYOUT, movePanel, keyboardMove, type PanelId, type Zone } from "./layout/engine.js";
 import { loadDraft, saveDraft, clearDraft, searchCommands, toastView, type Command, type Toast } from "./panels/notify.js";
 import { rankFiles } from "../shared/searchRank.js";
+import { parsePaletteQuery, PREFIX_HELP, SCOPE_BADGE, truncateInfo, parseGotoLine, formatAgentContext } from "./palette/prefix.js";
+import { KEYMAP_ACTIONS, keysFor, findActionByKey, checkBrowserConflicts, KEYMAP_STORAGE_KEY, parseKeymapPreset, type KeymapPreset } from "./keymap/keymap.js";
+import { summarizeProductivity, PRODUCTIVITY_STORAGE_KEY, PRODUCTIVITY_CAP, type ProductivityEvent } from "../shared/productivity.js";
 import { filterEntries, defaultFilter, visibleTail, bufferFullLabel, filterLabel, type Filter, type LogLevel } from "./panels/logFilter.js";
 import { i18n, useI18n, useLocale, LOCALES } from "./i18n/index.js";
 import { ApprovalCard, applyApprovalEvent } from "./panels/ApprovalCard.js";
@@ -200,10 +203,25 @@ export default function App() {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
-  /** 팔레트 모드 — S-5: 명령(Ctrl+K) · 파일 빠른 이동(Ctrl+P) · 내용 검색(Ctrl+Shift+F).
-   *  셋 다 같은 팔레트 껍데기를 쓰되 목록 소스만 다르다. 모드를 나누지 않으면
-   *  "P는 파일 열기" 같은 기대와 "명령 실행"이 한 목록에 섞여 엉뚱한 것이 열린다. */
+  /** 팔레트 기본 범위 — U-1: 단축키로 연 진입점. 입력 앞의 접두어(`>`·`@`·`#`·`:`·`!`)가 있으면
+   *  접두어가 이긴다. 접두어 없음 = 전체. 껍데기는 하나다 (두 번째 팔레트 금지). */
   const [paletteMode, setPaletteMode] = useState<"commands" | "files" | "search">("commands");
+  /** U-11 키맵 프리셋 — 표시·안내용. 단축키 진입로 자체는 프리셋과 무관하게 전부 같은 팔레트를 연다. */
+  const [keymapPreset, setKeymapPreset] = useState<KeymapPreset>(() => {
+    try {
+      return parseKeymapPreset(localStorage.getItem(KEYMAP_STORAGE_KEY)) ?? "vscode";
+    } catch {
+      return "vscode";
+    }
+  });
+  const [keymapChosen, setKeymapChosen] = useState<boolean>(() => {
+    try {
+      return parseKeymapPreset(localStorage.getItem(KEYMAP_STORAGE_KEY)) !== null;
+    } catch {
+      return false;
+    }
+  });
+  const lastShiftAt = useRef(0);
   const [fileList, setFileList] = useState<string[]>([]);
   const [fileListTruncated, setFileListTruncated] = useState(false);
   const [searchHits, setSearchHits] = useState<{ path: string; line: number; text: string }[]>([]);
@@ -823,8 +841,32 @@ export default function App() {
     [pushToast],
   );
 
+  /** U-12 최소 계측 — Phase 1 부터 팔레트·키맵 이벤트를 로컬에만 쌓는다 (전송 없음). */
+  const recordMetric = useCallback((kind: ProductivityEvent["kind"], detail?: string) => {
+    try {
+      const raw = localStorage.getItem(PRODUCTIVITY_STORAGE_KEY);
+      const arr: ProductivityEvent[] = raw ? (JSON.parse(raw) as ProductivityEvent[]) : [];
+      arr.push({ kind, at: Date.now(), detail });
+      while (arr.length > PRODUCTIVITY_CAP) arr.shift();
+      localStorage.setItem(PRODUCTIVITY_STORAGE_KEY, JSON.stringify(arr));
+    } catch {
+      /* 저장 불가 — 계측 없이 진행 (미측정으로 남는다) */
+    }
+  }, []);
+
+  const applyKeymap = useCallback((preset: KeymapPreset) => {
+    setKeymapPreset(preset);
+    setKeymapChosen(true);
+    try {
+      localStorage.setItem(KEYMAP_STORAGE_KEY, preset);
+    } catch {
+      /* 저장 불가 — 이번 실행에만 적용 */
+    }
+  }, []);
+
   // S-5 팔레트 모드 열기 — 파일 목록은 열 때 한 번만 가져온다(매 키 입력마다
   // 전체 목록을 다시 요청하면 입력이 버거워진다). 내용 검색은 Enter 때 실행한다.
+  // U-1: Ctrl+K · Ctrl+P · Ctrl+Shift+P · Shift Shift 모두 이 같은 함수를 부른다.
   const openPalette = useCallback(async (mode: "commands" | "files" | "search") => {
     setPaletteMode(mode);
     setPaletteQuery("");
@@ -833,6 +875,15 @@ export default function App() {
     setSearchTruncated(null);
     setSearchError(null);
     setPaletteOpen(true);
+    try {
+      const raw = localStorage.getItem(PRODUCTIVITY_STORAGE_KEY);
+      const arr: ProductivityEvent[] = raw ? (JSON.parse(raw) as ProductivityEvent[]) : [];
+      arr.push({ kind: "palette.open", at: Date.now(), detail: mode });
+      while (arr.length > PRODUCTIVITY_CAP) arr.shift();
+      localStorage.setItem(PRODUCTIVITY_STORAGE_KEY, JSON.stringify(arr));
+    } catch {
+      /* 계측 없이 진행 */
+    }
     if (mode === "files" && fileList.length === 0) {
       try {
         const r = await client.get<{ files: string[]; truncated: boolean }>("/api/fs/files");
@@ -1045,7 +1096,7 @@ export default function App() {
             // 호출이 끝나면 초안은 사라지고 완성된 블록(아래 applyEvent)이 그 자리를 잇는다.
             setLiveDraft(null);
           }
-          if (evType === "agent.status" && /응답 중/.test(String(ev.text ?? ""))) setLiveDraft(null);
+          if (evType === "agent.status" && /responding/.test(String(ev.text ?? ""))) setLiveDraft(null);
           if (evType === "agent.done" || evType === "agent.error") setLiveDraft(null);
           if (evType === "agent.done" || evType === "agent.error") {
             // 대기열이 남았으면 다음 턴이 바로 돈다 — 실행 중 표시를 내리면 깜빡인다.
@@ -1053,7 +1104,7 @@ export default function App() {
             if (evType === "agent.error" || pending === 0) setTurnRunning(false);
             else setTurnRunning(true);
           }
-          if (evType === "agent.status" && /응답 중/.test(String(ev.text ?? ""))) {
+          if (evType === "agent.status" && /responding/.test(String(ev.text ?? ""))) {
             setTurnRunning(true);
             // 새 턴 시작 — 묵은 답을 비운다. 대기열에 넣은 시점이 아니라 서버가
             // 실제로 시작을 알린 시점에 비워야 현재 턴의 누적이 지워지지 않는다.
@@ -1112,7 +1163,7 @@ export default function App() {
             pushToast({
               id: `ws:${w.slice(0, 12)}`,
               kind: "warn",
-              title: "워크스페이스가 바뀌었습니다",
+              title: t("ws.changedToast"),
               body: w,
               at: Date.now(),
               ttlMs: 15_000,
@@ -1239,23 +1290,37 @@ export default function App() {
     })();
   }, [wsState]);
 
-  // M5 팔레트 + S-5 빠른 이동/내용 검색
+  // M5 팔레트 + S-5 빠른 이동/내용 검색 + U-1/U-11 통합 진입로.
+  // U-1: Ctrl+K · Ctrl+P · Ctrl+Shift+P · Shift Shift 모두 같은 openPalette (같은 인스턴스).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // **Ctrl+K / Ctrl+P 는 모두 팔레트** — 하나의 기능에 두 단축이 걸치면 사용자는
-      // "어느 키가 정답일까" 하고 헤맬 필요가 없다. 둘 다 자주 누르는 라우팅 명령이라
-      // 겹쳐도 괜찮고, 한쪽이 죽어도 반대쪽에서 열린다. (VS Code 는 P 를 파일 열기에
-      // 쓰지만 여기선 팔레트를 여는 단축으로 재지정한다 — 겹쳐도 기능은 하나다.)
       const mod = e.ctrlKey || e.metaKey;
+      // Shift Shift (IntelliJ Search Everywhere) — 400ms 안 두 번 누르면 같은 팔레트.
+      if (e.key === "Shift") {
+        const now = Date.now();
+        if (now - lastShiftAt.current < 400 && !(e.target instanceof HTMLInputElement)) {
+          e.preventDefault();
+          lastShiftAt.current = 0;
+          if (paletteOpen) setPaletteOpen(false);
+          else void openPalette("commands");
+          return;
+        }
+        lastShiftAt.current = now;
+        return;
+      }
       if (mod && !e.shiftKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         if (paletteOpen) setPaletteOpen(false);
         else void openPalette("commands");
       } else if (mod && !e.shiftKey && e.key.toLowerCase() === "p") {
-        // S-5 빠른 이동 — 파일 목록 모드로 연다. 입력 필터 + Enter로 그 위치가 열린다.
         e.preventDefault();
         if (paletteOpen) setPaletteOpen(false);
         else void openPalette("files");
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
+        // U-1: VS Code Ctrl+Shift+P 도 같은 팔레트 (두 번째 팔레트 금지).
+        e.preventDefault();
+        if (paletteOpen) setPaletteOpen(false);
+        else void openPalette("commands");
       } else if (mod && e.shiftKey && e.key.toLowerCase() === "f") {
         // S-5 내용 검색 — 검색 모드로 연다. Enter에 /api/fs/search를 실행하고
         // 경로·줄 번호 목록 + "잘렸습니다"를 보여준다. Mac Cmd도 된다(metaKey).
@@ -1267,6 +1332,26 @@ export default function App() {
         // 끝낸다 — 멈춤이 눈에 보이려면 Enter를 놓을 필요가 없다(사용자 요구).
         if (paletteOpen) setPaletteOpen(false);
         else if (turnRunning) void client.post("/api/agent/cancel").catch(() => {});
+      } else if (!paletteOpen && (e.key === "F12" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b"))) {
+        // U-11 정의로 이동 (F12 / Ctrl+B) — U-2 인덱스 전에는 파일 블록 토큰 클릭 경로로 안내.
+        e.preventDefault();
+        pushToast({ id: "key:def", kind: "info", title: t("keymap.gotoDefinition"), body: t("keymap.notIndexed"), at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "keymap" });
+      } else if (!paletteOpen && ((e.shiftKey && e.key === "F12") || (e.altKey && e.key === "F7"))) {
+        // U-11 사용처 찾기 (Shift+F12 / Alt+F7)
+        e.preventDefault();
+        pushToast({ id: "key:refs", kind: "info", title: t("keymap.findUsages"), body: t("keymap.notIndexed"), at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "keymap" });
+      } else if (!paletteOpen && (e.key === "F2" || (e.shiftKey && e.key === "F6"))) {
+        // U-11 이름 변경 (F2 / Shift+F6)
+        e.preventDefault();
+        pushToast({ id: "key:rename", kind: "info", title: t("keymap.renameSymbol"), body: t("keymap.notIndexed"), at: Date.now(), ttlMs: 8_000, requiresAck: false, source: "keymap" });
+      } else if (!paletteOpen && ((e.ctrlKey && e.key === ".") || (e.altKey && e.key === "Enter"))) {
+        // U-11 의도 액션 (Ctrl+. / Alt+Enter) — 포커스된 블록의 메뉴는 U-3에서. 여기서는 팔레트로 안내.
+        e.preventDefault();
+        void openPalette("commands").then(() => setPaletteQuery(">"));
+      } else if (!paletteOpen && mod && !e.shiftKey && e.key.toLowerCase() === "e") {
+        // U-11 최근 파일 (Ctrl+E) — 파일 범위로 같은 팔레트.
+        e.preventDefault();
+        void openPalette("files");
       } else if (e.altKey && e.key.startsWith("Arrow")) {
         // §5.8: 드래그 없이도 패널을 이동할 수 있어야 한다
         const map: Record<string, Zone> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "top", ArrowDown: "bottom" };
@@ -1282,7 +1367,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [paletteOpen, openPalette, turnRunning]);
+  }, [paletteOpen, openPalette, turnRunning, pushToast, t]);
 
   /** 헤더·셸·설정이 **같은 알림 경로**를 쓴다 — 한 종류의 알림이 화면 한 곳에 모인다. */
   const notice = useCallback(
@@ -1323,8 +1408,27 @@ export default function App() {
       { id: "palette.open", title: t("palette.cmdOpen"), category: "misc", keys: ["Ctrl+K"], run: () => { void openPalette("commands"); } },
       { id: "palette.files", title: t("palette.cmdFiles"), category: "misc", keys: ["Ctrl+P"], run: () => { void openPalette("files"); } },
       { id: "palette.search", title: t("palette.cmdSearch"), category: "misc", keys: ["Ctrl+Shift+F"], run: () => { void openPalette("search"); } },
+      // U-1: Search Everywhere 진입로 — 같은 팔레트, settings/history 범위 포함.
+      { id: "palette.history", title: t("palette.cmdHistory"), category: "misc", keys: [], run: () => { void openPalette("commands").then(() => setPaletteQuery("")); } },
+      // U-11: 키맵 프리셋 전환 — 팔레트에서 변경 (첫 실행 선택은 아래 배너).
+      { id: "keymap.useVscode", title: t("keymap.useVscode"), category: "settings", keys: [], run: () => { applyKeymap("vscode"); recordMetric("keymap.change", "vscode"); } },
+      { id: "keymap.useIntellij", title: t("keymap.useIntellij"), category: "settings", keys: [], run: () => { applyKeymap("intellij"); recordMetric("keymap.change", "intellij"); } },
+      // U-12: 생산성 보고서 — 빈 데이터면 "판정 불가" (숫자를 채우지 않음).
+      {
+        id: "metrics.report", title: t("metrics.report"), category: "misc", keys: [],
+        run: () => {
+          try {
+            const raw = localStorage.getItem(PRODUCTIVITY_STORAGE_KEY);
+            const arr: ProductivityEvent[] = raw ? (JSON.parse(raw) as ProductivityEvent[]) : [];
+            const s = summarizeProductivity(arr);
+            notice("info", t("metrics.report"), s.message);
+          } catch (e) {
+            notice("error", t("metrics.report"), e instanceof Error ? e.message : String(e));
+          }
+        },
+      },
     ],
-    [client, notice, openPalette, t],
+    [client, notice, openPalette, t, applyKeymap, recordMetric],
   );
 
   /**
@@ -1518,9 +1622,21 @@ export default function App() {
     settings: t("palette.catSettings"),
     misc: t("palette.catMisc"),
   };
-  const hits = useMemo(() => searchCommands(commands, paletteQuery, 12), [commands, paletteQuery]);
+  // U-1: 접두어가 기본 범위를 이긴다. 없으면 연 때의 모드.
+  const parsedPalette = useMemo(() => parsePaletteQuery(paletteQuery), [paletteQuery]);
+  const effectiveQuery = parsedPalette.explicit ? parsedPalette.query : paletteQuery;
+  const effectiveScope = parsedPalette.explicit
+    ? parsedPalette.scope
+    : paletteMode === "files" ? "files" as const : paletteMode === "search" ? "search" as const : "all" as const;
+  const hits = useMemo(() => searchCommands(commands, effectiveScope === "commands" ? effectiveQuery : effectiveQuery, 12), [commands, effectiveQuery, effectiveScope]);
   // S-5 파일 빠른 이동 — 서버 목록을 rankFiles(공유 순수 함수)로 필터한다.
-  const fileHits = useMemo(() => rankFiles(fileList, paletteQuery).slice(0, 12), [fileList, paletteQuery]);
+  const fileHitsAll = useMemo(() => rankFiles(fileList, effectiveScope === "files" || effectiveScope === "all" ? effectiveQuery : ""), [fileList, effectiveQuery, effectiveScope]);
+  const fileHits = useMemo(() => fileHitsAll.slice(0, 12), [fileHitsAll]);
+  const fileTrunc = truncateInfo(fileHitsAll.length, fileHits.length);
+  const attachAgentContext = useCallback((text: string) => {
+    setDraft((prev) => (prev ? `${prev} ${text}` : text));
+    focusDraft();
+  }, []);
   const full = bufferFullLabel(logStatus, locale);
   const bootDone = steps?.filter((s) => s.ok).length ?? 0;
 
@@ -1631,8 +1747,8 @@ export default function App() {
       }}
     >
       {/* 상단 바 */}
-      <header style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, padding: "0 10px", borderBottom: `1px solid ${BORDER}`, background: "#161b22" }}>
-        <strong>harnesside</strong>
+      <header style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, padding: "0 10px", whiteSpace: "nowrap", minWidth: 0, borderBottom: `1px solid ${BORDER}`, background: "#161b22" }}>
+        <strong style={{ flexShrink: 0 }}>harnesside</strong>
         {/* 지금 어디에 쓰고 있는지 — **항상** 보인다(§8.3). */}
         <WorkspaceBar
           client={client}
@@ -1658,10 +1774,10 @@ export default function App() {
             });
           }}
         />
-        <span style={{ color: DIM }}>{modelName ?? t("model.unconnected")}</span>
+        <span style={{ color: DIM, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }} title={modelName ?? undefined}>{modelName ? modelName.split("/").pop() : t("model.unconnected")}</span>
         {steps && <span style={{ color: DIM }}>{t("app.booting", { stage: bootDone, total: steps.length })}</span>}
         {full && <span style={{ color: full.color, fontSize: 11 }} title={t("log.limit")}>{full.text}</span>}
-        {error && <span style={{ color: "#f85149" }}>{error}</span>}
+        {error && <span style={{ color: "#f85149", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }} title={error}>{error}</span>}
         <span style={{ flex: 1 }} />
         {/* Language — mirrors `/lang`. Persists to localStorage for the next window. */}
         <select
@@ -1916,63 +2032,96 @@ export default function App() {
         )}
       </footer>
 
-      {/* 팔레트 — commands(명령) · files(빠른 이동) · search(내용 검색) */}
+      {/* U-11 첫 실행 키맵 선택 — 한 화면, 건너뛸 수 있다. 이후 팔레트에서 변경. */}
+      {!keymapChosen && (
+        <div role="dialog" aria-label={t("keymap.choose")} style={{ position: "fixed", inset: 0, background: "rgba(1,4,9,0.6)", display: "grid", placeItems: "center", zIndex: 60 }}>
+          <div style={{ width: 420, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, padding: 16 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>{t("keymap.choose")}</div>
+            <div style={{ color: DIM, fontSize: 12, marginBottom: 12 }}>{t("keymap.chooseHint")}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={() => { applyKeymap("vscode"); recordMetric("keymap.change", "vscode"); }} style={{ flex: 1, padding: "8px", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: "pointer" }}>VS Code</button>
+              <button type="button" onClick={() => { applyKeymap("intellij"); recordMetric("keymap.change", "intellij"); }} style={{ flex: 1, padding: "8px", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: "pointer" }}>IntelliJ</button>
+              <button type="button" onClick={() => setKeymapChosen(true)} style={{ padding: "8px 12px", background: "none", color: DIM, border: 0, cursor: "pointer" }}>{t("action.skip")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 팔레트 — U-1 유일한 입구: commands/files/search + symbols/turns/tasks/settings/recipes/history.
+          Ctrl+K · Ctrl+P · Ctrl+Shift+P · Shift Shift 모두 이 같은 껍데드. 접두어가 기본 범위를 이긴다. */}
       {paletteOpen && (
         <div onClick={() => setPaletteOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(1,4,9,0.6)", display: "grid", placeItems: "start center", paddingTop: "12vh", zIndex: 50 }}>
-          <div onClick={(e) => e.stopPropagation()} className="elev-3" style={{ width: 520, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, overflow: "hidden" }}>
+          <div onClick={(e) => e.stopPropagation()} className="elev-3" style={{ width: 560, background: "#161b22", border: `1px solid ${BORDER}`, borderRadius: 6, overflow: "hidden" }}>
             <input
               autoFocus
               value={paletteQuery}
               onChange={(e) => { setPaletteQuery(e.target.value); setSelIndex(0); }}
               onKeyDown={(e) => {
-                // 방향키로 목록 이동 — 목록 길이는 모드마다 다르므로 위에서 개수를 센다.
-                const count = paletteMode === "commands" ? hits.length : paletteMode === "files" ? fileHits.length : searchHits.length;
-                if (e.key === "ArrowDown") { e.preventDefault(); setSelIndex((i) => Math.min(count - 1, i + 1)); return; }
+                const count = effectiveScope === "commands" || effectiveScope === "all" ? hits.length + fileHits.length : effectiveScope === "files" ? fileHits.length : searchHits.length;
+                if (e.key === "ArrowDown") { e.preventDefault(); setSelIndex((i) => Math.min(Math.max(count - 1, 0), i + 1)); return; }
                 if (e.key === "ArrowUp") { e.preventDefault(); setSelIndex((i) => Math.max(0, i - 1)); return; }
+                if (e.key === "Tab") {
+                  // U-1: "에이전트에게 이걸로 …" — 선택 항목을 입력창 맥락 칩으로 첨부.
+                  e.preventDefault();
+                  const h = hits[selIndex] ?? hits[0];
+                  const f = fileHits[selIndex] ?? fileHits[0];
+                  if ((effectiveScope === "commands" || effectiveScope === "all") && h) {
+                    attachAgentContext(formatAgentContext({ kind: "command", label: h.cmd.id }));
+                  } else if ((effectiveScope === "files" || effectiveScope === "all") && f) {
+                    attachAgentContext(formatAgentContext({ kind: "file", label: f.path, path: f.path }));
+                  } else if (effectiveScope === "search" && (searchHits[selIndex] ?? searchHits[0])) {
+                    const s = (searchHits[selIndex] ?? searchHits[0]);
+                    attachAgentContext(formatAgentContext({ kind: "search-hit", label: s.path, path: s.path, line: s.line }));
+                  }
+                  return;
+                }
                 if (e.key !== "Enter") return;
-                // Enter: files면 선택(또는 첫) 후보를 열고, search면 검색을 실행한다.
-                // commands는 목록 버튼으로 실행한다(Enter 오작동 방지: 기존 동작 유지).
-                if (paletteMode === "files" && fileHits.length > 0) {
+                if ((effectiveScope === "files" || effectiveScope === "all") && effectiveScope === "files" && fileHits.length > 0) {
+                  const gl = parseGotoLine(effectiveQuery);
                   const top = (fileHits[selIndex] ?? fileHits[0]).path;
                   setPaletteOpen(false);
-                  void openFileByPath(top);
-                } else if (paletteMode === "search" && !searchBusy) {
-                  // 입력이 바뀌었으면 재검색, 아니면 선택된 히트를 연다.
-                  if (searchHits.length > 0 && paletteQuery.trim() === searchedQuery) {
+                  recordMetric("palette.select", `file:${top}`);
+                  void openFileByPath(gl ? gl.path : top);
+                } else if (effectiveScope === "search" && !searchBusy) {
+                  if (searchHits.length > 0 && effectiveQuery.trim() === searchedQuery) {
                     const hit = searchHits[selIndex] ?? searchHits[0];
                     setPaletteOpen(false);
+                    recordMetric("palette.select", `search:${hit.path}:${hit.line}`);
                     void openFileByPath(hit.path);
                   } else {
-                    void runContentSearch(paletteQuery);
+                    void runContentSearch(effectiveQuery);
+                  }
+                } else if ((effectiveScope === "commands" || effectiveScope === "all") && hits.length > 0) {
+                  const h = hits[selIndex] ?? hits[0];
+                  setPaletteOpen(false);
+                  recordMetric("palette.select", `cmd:${h.cmd.id}`);
+                  try {
+                    void h.cmd.run();
+                  } catch (err) {
+                    notice("error", t("palette.runFailed"), err instanceof Error ? err.message : String(err));
                   }
                 }
               }}
-              placeholder={paletteMode === "commands" ? t("palette.searchCommands") : paletteMode === "files" ? t("palette.filesHint") : t("palette.searchHint")}
-              aria-label={paletteMode === "commands" ? t("palette.cmdOpen") : paletteMode === "files" ? t("palette.cmdFiles") : t("palette.cmdSearch")}
+              placeholder={t("palette.searchAll")}
+              aria-label={t("palette.cmdOpen")}
               style={{ width: "100%", background: "transparent", border: 0, borderBottom: `1px solid ${BORDER}`, color: FG, padding: 10, outline: "none", font: "inherit" }}
             />
             <div style={{ maxHeight: 320, overflow: "auto" }}>
-              {paletteMode === "commands" && (<>
-              {hits.length === 0 && <div style={{ padding: 12, color: DIM }}>{t("palette.noCommand")}</div>}
-              {/* **이 항목들은 선택 가능하다.** 예전에는 `div` 였고 `onClick` 도
-                  `Enter` 처리도 **없었다** — 화면은 "메뉴" 처럼 보이는데 눌러도 아무
-                  일도 없었다(2026-10-01 실측). 조용히 안 되는 메뉴는 죽었다고
-                  알아채기 가장 어렵다: 목록이 보이므로 "기능이 없다" 가 아니라
-                  "이 몇 개가 말썽이다" 고 읽힌다.
-
-                  그래서 `button` 이고, 고른 항목은 **반드시 `run` 을 실행**한다.
-                  실패하면 **사유를 말한다** — 조용히 닫으면 "뭘 눌렀는지" 가 사라져
-                  아무 일도 없었다고 읽힌다. */}
-              {hits.map((h) => (
+              {(effectiveScope === "commands" || effectiveScope === "all") && (<>
+              {hits.length === 0 && effectiveScope === "commands" && <div style={{ padding: 12, color: DIM }}>{t("palette.noCommand")}</div>}
+              {hits.slice(0, effectiveScope === "all" ? 6 : 12).map((h) => {
+                const b = SCOPE_BADGE.commands;
+                return (
                 <button
                   key={h.cmd.id}
                   type="button"
                   onClick={() => {
                     setPaletteOpen(false);
+                    recordMetric("palette.select", `cmd:${h.cmd.id}`);
                     try {
                       void h.cmd.run();
-                    } catch (e) {
-                      notice("error", t("palette.runFailed"), e instanceof Error ? e.message : String(e));
+                    } catch (err) {
+                      notice("error", t("palette.runFailed"), err instanceof Error ? err.message : String(err));
                     }
                   }}
                   style={{
@@ -1982,21 +2131,27 @@ export default function App() {
                     cursor: "pointer", font: "inherit",
                   }}
                 >
+                  <span style={{ color: DIM, fontSize: 10, flexShrink: 0 }} aria-hidden="true">[{b.letter}{b.glyph}]</span>
                   <span style={{ flex: 1 }}>{h.cmd.title}</span>
                   <span style={{ color: DIM, fontSize: 10 }}>{catLabel[h.cmd.category]}</span>
                   {h.cmd.keys.length > 0 && <span style={{ color: DIM, fontSize: 10 }}>{h.cmd.keys.join(" ")}</span>}
                 </button>
-              ))}
+                );
+              })}
               </>)}
-              {paletteMode === "files" && (<>
-                {fileListTruncated && <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>{t("palette.filesTruncated")}</div>}
-                {fileHits.length === 0 && <div style={{ padding: 12, color: DIM }}>{t("palette.noFile")}</div>}
-                {fileHits.map((h) => (
+              {(effectiveScope === "files" || effectiveScope === "all") && (<>
+                {fileTrunc.truncated && <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>{t("palette.narrow", { shown: fileTrunc.shown, total: fileTrunc.total })}</div>}
+                {fileListTruncated && effectiveScope === "files" && <div style={{ padding: "6px 10px", color: "#d29922", fontSize: 11 }}>{t("palette.filesTruncated")}</div>}
+                {effectiveScope === "files" && fileHits.length === 0 && <div style={{ padding: 12, color: DIM }}>{t("palette.noFile")}</div>}
+                {fileHits.slice(0, effectiveScope === "all" ? 6 : 12).map((h) => {
+                  const b = SCOPE_BADGE.files;
+                  return (
                   <button
                     key={h.path}
                     type="button"
                     onClick={() => {
                       setPaletteOpen(false);
+                      recordMetric("palette.select", `file:${h.path}`);
                       void openFileByPath(h.path);
                     }}
                     style={{
@@ -2006,11 +2161,13 @@ export default function App() {
                       cursor: "pointer", font: "inherit",
                     }}
                   >
+                    <span style={{ color: DIM, fontSize: 10, flexShrink: 0 }} aria-hidden="true">[{b.letter}{b.glyph}]</span>
                     <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.path}</span>
                   </button>
-                ))}
+                  );
+                })}
               </>)}
-              {paletteMode === "search" && (<>
+              {effectiveScope === "search" && (<>
                 {searchBusy && <div style={{ padding: 12, color: DIM }}>{t("palette.searching")}</div>}
                 {searchError && <div style={{ padding: 12, color: "#f85149" }}>{searchError}</div>}
                 {!searchBusy && !searchError && searchTruncated && (
@@ -2025,6 +2182,7 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       setPaletteOpen(false);
+                      recordMetric("palette.select", `search:${h.path}:${h.line}`);
                       void openFileByPath(h.path);
                     }}
                     style={{
@@ -2034,11 +2192,31 @@ export default function App() {
                       cursor: "pointer", font: "inherit",
                     }}
                   >
+                    <span style={{ color: DIM, fontSize: 10, flexShrink: 0 }} aria-hidden="true">[S#]</span>
                     <span style={{ color: DIM, fontSize: 11, flexShrink: 0 }}>{h.path}:{h.line}</span>
                     <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{h.text}</span>
                   </button>
                 ))}
               </>)}
+              {(effectiveScope === "symbols" || effectiveScope === "recipes" || effectiveScope === "settings" || effectiveScope === "turns" || effectiveScope === "tasks" || effectiveScope === "history") && (
+                <div style={{ padding: 12, color: DIM, fontSize: 12 }}>
+                  {effectiveScope === "symbols" && t("palette.symbolsPending")}
+                  {effectiveScope === "recipes" && t("palette.recipesPending")}
+                  {effectiveScope === "turns" && t("palette.turnsPending", { count: blocks.length })}
+                  {effectiveScope === "tasks" && t("palette.tasksPending")}
+                  {effectiveScope === "history" && t("palette.historyPending")}
+                  {effectiveScope === "settings" && (
+                    <span>{t("palette.settingsHint")} — {keysFor(keymapPreset, "palette.all").join(" / ")}</span>
+                  )}
+                </div>
+              )}
+            </div>
+            {/* 접두어 목록은 항상 보인다 (문서 안 열기). Tab = 에이전트 맥락 첨부. */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "6px 10px", borderTop: `1px solid ${BORDER}`, color: DIM, fontSize: 10 }}>
+              {PREFIX_HELP.map((p) => (
+                <span key={p.prefix}>{p.prefix} {t(p.labelKey)}</span>
+              ))}
+              <span style={{ marginLeft: "auto" }}>Tab {t("palette.agentAttach")} · {keymapPreset}</span>
             </div>
           </div>
         </div>

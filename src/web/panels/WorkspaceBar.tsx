@@ -93,6 +93,7 @@ export function WorkspaceBar({
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [preview, setPreview] = useState<SwitchPreview | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mkName, setMkName] = useState<string | null>(null);
   const t = useI18n();
 
   const browse = useCallback(
@@ -123,7 +124,22 @@ export function WorkspaceBar({
   const close = useCallback(() => {
     setOpen(false);
     setPreview(null);
+    setMkName(null);
   }, []);
+
+  const mkdir = useCallback(async () => {
+    if (!listing || !mkName?.trim()) return;
+    setBusy(true);
+    try {
+      const r = await client.post<{ path: string }>("/api/workspace/mkdir", { parent: listing.path, name: mkName });
+      setMkName(null);
+      await browse(r.path, showHidden); // 만든 폴더로 바로 들어간다
+    } catch (e) {
+      setBrowseError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [client, listing, mkName, browse, showHidden]);
 
   useEffect(() => {
     if (!open) return;
@@ -167,7 +183,7 @@ export function WorkspaceBar({
   const alreadyHere = !!listing && listing.path === current?.root;
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative", flexShrink: 0 }}>
       {/* 지금 어디에 쓰고 있는지. **항상** 보이고, 누르면 탐색기가 열린다. */}
       <button
         type="button"
@@ -175,7 +191,7 @@ export function WorkspaceBar({
         title={`${current?.root ?? ""}\n${t("ws.explorer.open")}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        style={{ background: "none", border: 0, color: DIM, fontSize: 11, cursor: "pointer", font: "inherit", padding: 0 }}
+        style={{ background: "none", border: 0, color: DIM, fontSize: 11, cursor: "pointer", font: "inherit", padding: 0, whiteSpace: "nowrap", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}
       >
         📁 {current ? `${current.name}` : t("ws.checking")}
         {current && kindLabels(current.kind, t) ? ` · ${kindLabels(current.kind, t)}` : ""}
@@ -238,6 +254,9 @@ export function WorkspaceBar({
               <button type="button" onClick={() => listing && void browse(listing.home, showHidden)} disabled={!listing} style={btn()}>
                 {t("ws.explorer.home")}
               </button>
+              <button type="button" onClick={() => setMkName(mkName === null ? "" : null)} disabled={!listing} style={btn()} title={t("ws.explorer.mkdir")}>
+                + {t("ws.explorer.mkdir")}
+              </button>
               <input
                 value={pathInput}
                 onChange={(e) => setPathInput(e.target.value)}
@@ -249,6 +268,26 @@ export function WorkspaceBar({
                 style={{ flex: 1, minWidth: 0, background: BG, color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 8px", font: "inherit", outline: "none" }}
               />
             </div>
+
+            {mkName !== null && (
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  autoFocus
+                  value={mkName}
+                  onChange={(e) => setMkName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void mkdir();
+                    if (e.key === "Escape") { e.stopPropagation(); setMkName(null); }
+                  }}
+                  placeholder={t("ws.explorer.mkdirPlaceholder")}
+                  spellCheck={false}
+                  style={{ flex: 1, minWidth: 0, background: BG, color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "2px 8px", font: "inherit", outline: "none" }}
+                />
+                <button type="button" onClick={() => void mkdir()} disabled={busy || !mkName.trim()} style={btn({ opacity: busy || !mkName.trim() ? 0.5 : 1 })}>
+                  {t("ws.explorer.mkdirCreate")}
+                </button>
+              </div>
+            )}
 
             {browseError && <div style={{ color: "#f85149", fontSize: 11 }}>{browseError}</div>}
 

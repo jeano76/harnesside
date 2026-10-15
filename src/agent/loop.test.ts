@@ -3037,3 +3037,27 @@ test("rule-based compaction (tool-output masking) alone satisfies the target —
     await (loop as any).compact("manual", null);
     assert.equal(summaryCalls, 1);
   }));
+
+test("applyWorkspaceChange: 다음 턴에 시스템 프롬프트·전환 안내가 들어가고 대화 기록은 유지된다", () =>
+  withTempProject(async (dir) => {
+    const { backend, turnRequests } = scriptedBackend({
+      turnResponses: [assistantMessage("one"), assistantMessage("two")],
+      tokenCounts: [3, 3],
+    });
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "old-sys",
+      thresholds: { autoTriggerRatio: 0.9, contextWindowTokens: 100 },
+    });
+    await loop.send("first");
+    loop.applyWorkspaceChange({ root: dir, systemPrompt: "new-sys", note: "[workspace changed] A to B" });
+    await loop.send("second");
+    const msgs = turnRequests[1]!.messages;
+    assert.equal(msgs[0]!.content, "new-sys", "시스템 프롬프트가 옛 폴더 것으로 남았다");
+    const texts = msgs.map((m) => (typeof m.content === "string" ? m.content : ""));
+    assert.ok(texts.includes("first"), "전환 때 대화 기록이 사라졌다");
+    const noteAt = texts.indexOf("[workspace changed] A to B");
+    assert.ok(noteAt > texts.indexOf("first") && noteAt < texts.indexOf("second"), "안내문이 새 사용자 메시지 앞에 없다");
+  }));
