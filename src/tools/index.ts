@@ -7,6 +7,7 @@ import * as browser from "./browser.js";
 import type { BrowserConfig } from "./browser.js";
 import type { SkillIndexEntry } from "../skills/loader.js";
 import { loadSkillBody } from "../skills/loader.js";
+import { loadSkillChecklist } from "../skills/checklist.js";
 
 
 /** Set once at startup from .harnesside/config.yaml (PROMPT.md new requirement:
@@ -189,7 +190,16 @@ export const TOOL_DEFS: ToolDef[] = [
         "description, before starting that kind of work.",
       parameters: {
         type: "object",
-        properties: { name: { type: "string" } },
+        properties: {
+          name: { type: "string" },
+          mode: {
+            type: "string",
+            enum: ["checklist", "full"],
+            description:
+              "checklist (default): a ≤15-line checklist extracted from the skill. full: the whole body " +
+              "(still size-capped; use only when a checklist item is unclear).",
+          },
+        },
         required: ["name"],
       },
     },
@@ -471,7 +481,12 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
         const available = skillIndex.map((s) => s.name).join(", ") || "(none loaded)";
         throw new Error(`unknown skill: ${args.name}. Available: ${available}`);
       }
-      return { content: await loadSkillBody(entry) };
+      const body = await loadSkillBody(entry);
+      if (args.mode === "full") return { content: body };
+      if (args.mode !== undefined && args.mode !== "checklist") {
+        throw new Error(`unknown mode: ${args.mode}. Use "checklist" (default) or "full"`);
+      }
+      return { content: await loadSkillChecklist(projectRoot, entry.name, body) };
     }
     case "write_file": {
       requireContent(name, args);

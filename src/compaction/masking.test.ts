@@ -77,3 +77,39 @@ test("archivePath is named in the placeholder and the original is returned for a
   assert.ok(r.archived[0].text.startsWith("line0 "), "the archived text is the untouched original");
   assert.ok(!String(maskObservations(convo(6)).messages.find((m) => m.role === "tool")!.content).includes("FULL text is saved"), "no path claimed when none given");
 });
+
+test("X-3: 스킬 결과는 최근 N개 보호에서 빠지고 가장 먼저 마스킹된다 — 영구 상주하지 않는다", () => {
+  const big = "s".repeat(1500);
+  const call = (id: string, name: string, args: string): ChatMessage => ({
+    role: "assistant",
+    content: null,
+    tool_calls: [{ id, type: "function", function: { name, arguments: args } }],
+  });
+  const msgs: ChatMessage[] = [
+    { role: "system", content: "sys" },
+    call("a", "load_skill", '{"name":"x"}'),
+    { role: "tool", tool_call_id: "a", content: big },
+    call("b", "run_shell", '{"command":"ls"}'),
+    { role: "tool", tool_call_id: "b", content: "o".repeat(1500) },
+    call("c", "run_shell", '{"command":"pwd"}'),
+    { role: "tool", tool_call_id: "c", content: "p".repeat(1500) },
+  ];
+  // 최근 4개 보호이므로 기존 규칙이면 셋 다 보호 → 0건. 스킬만 내려간다.
+  const r = maskObservations(msgs, {});
+  assert.equal(r.maskedCount, 1);
+  assert.ok(String(r.messages[2]!.content).startsWith(MASK_MARKER), "스킬 결과가 마스킹되지 않았다");
+  assert.equal(r.messages[4]!.content, "o".repeat(1500));
+  // 필요량이 작으면 스킬 하나만으로 멈추고 다른 출력은 원문을 유지한다.
+  const r2 = maskObservations([...msgs.slice(0, 7), call("d", "run_shell", "{}"), { role: "tool", tool_call_id: "d", content: "q".repeat(1500) }], { keepRecentToolResults: 1, needTokens: 1 });
+  assert.ok(String(r2.messages[2]!.content).startsWith(MASK_MARKER));
+  assert.equal(r2.messages[4]!.content, "o".repeat(1500));
+});
+
+test("X-3: 방금 불러온 스킬(가장 마지막 도구 결과)은 마스킹하지 않는다", () => {
+  const msgs: ChatMessage[] = [
+    { role: "system", content: "sys" },
+    { role: "assistant", content: null, tool_calls: [{ id: "a", type: "function", function: { name: "load_skill", arguments: '{"name":"x"}' } }] },
+    { role: "tool", tool_call_id: "a", content: "s".repeat(1500) },
+  ];
+  assert.equal(maskObservations(msgs, {}).maskedCount, 0);
+});

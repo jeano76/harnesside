@@ -73,11 +73,25 @@ export function maskObservations(messages: ChatMessage[], opts: MaskingOptions =
   let savedTokens = 0;
   const preview: string[] = [];
   const archived: MaskResult["archived"] = [];
-  const out = messages.map((m, i): ChatMessage => {
-    if (m.role !== "tool" || protect.has(i) || typeof m.content !== "string") return m;
-    if (o.needTokens !== undefined && savedTokens >= o.needTokens) return m; // 필요한 만큼 줄였다 — 나머지는 원문 유지
+  const out = messages.slice();
+
+  // X-3: 스킬 본문은 **영구 상주하지 않는다.** 다시 불러올 수 있으므로 압축 때 가장 먼저 내린다 —
+  // 최근 N개 보호 대상에서도 빼고(가장 마지막 도구 결과 1개만 보호), 순서도 맨 앞이다.
+  const isSkill = (i: number): boolean => {
+    const m = messages[i]!;
+    return m.role === "tool" && !!m.tool_call_id && (labels.get(m.tool_call_id) ?? "").startsWith("load_skill(");
+  };
+  const lastTool = toolIdx[toolIdx.length - 1];
+  const skillFirst = toolIdx.filter((i) => isSkill(i) && i !== lastTool);
+  const order = [...skillFirst, ...messages.map((_, i) => i).filter((i) => !skillFirst.includes(i))];
+
+  for (const i of order) {
+    const m = messages[i]!;
+    if (m.role !== "tool" || typeof m.content !== "string") continue;
+    if (protect.has(i) && !skillFirst.includes(i)) continue;
+    if (o.needTokens !== undefined && savedTokens >= o.needTokens) continue; // 필요한 만큼 줄였다 — 나머지는 원문 유지
     const text = m.content;
-    if (text.length < o.minChars || text.startsWith(MASK_MARKER)) return m;
+    if (text.length < o.minChars || text.startsWith(MASK_MARKER)) continue;
 
     const keep = ERROR_RE.test(text) ? o.keepChars * 3 : o.keepChars;
     const head = text.slice(0, keep).trimEnd();
@@ -90,12 +104,12 @@ export function maskObservations(messages: ChatMessage[], opts: MaskingOptions =
     const replaced =
       `${MASK_MARKER}: ${label} — ${text.length} chars; ${where}]\n${head}` +
       (head.length < text.length ? " …" : "");
-    if (replaced.length >= text.length) return m;
+    if (replaced.length >= text.length) continue;
     maskedCount++;
     savedTokens += Math.max(0, estimateTextTokens(text) - estimateTextTokens(replaced));
     archived.push({ id, label, text });
     if (preview.length < 8) preview.push(`[tool] ${label.slice(0, 70)} — ${text.length}자`);
-    return { ...m, content: replaced };
-  });
+    out[i] = { ...m, content: replaced };
+  }
   return maskedCount === 0 ? none : { archived, messages: out, maskedCount, savedTokens, preview };
 }

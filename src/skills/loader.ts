@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { clampTrigger } from "./checklist.js";
 
 export interface SkillIndexEntry {
   name: string;
@@ -202,6 +203,6 @@ export function injectRulesIntoSystemPrompt(basePrompt: string, rules: RuleFile[
  *  the model's perspective. */
 export function injectSkillIndexIntoSystemPrompt(basePrompt: string, skills: SkillIndexEntry[]): string {
   if (skills.length === 0) return basePrompt;
-  const list = skills.map((s) => `- ${s.name}: ${s.trigger}`).join("\n");
-  return `${basePrompt}\n\n# Available Skills\nCall the load_skill tool with one of these names when its trigger matches the current task:\n${list}`;
+  const list = skills.map((s) => `- ${s.name}: ${clampTrigger(s.trigger)}`).join("\n");
+  return `${basePrompt}\n\n# Available Skills\nCall the load_skill tool with one of these names when its trigger matches the current task (it returns a short checklist; mode:\"full\" for the whole body):\n${list}`;
 }
