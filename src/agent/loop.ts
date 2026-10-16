@@ -23,6 +23,9 @@ import {
 import { clearCheckpoint, writeCheckpoint, readCheckpoint } from "../compaction/checkpoint.js";
 import type { Checkpoint } from "../compaction/checkpoint.js";
 import { maskObservations } from "../compaction/masking.js";
+import { budgetToolOutput, effectiveCap } from "./contextBudget.js";
+import { mkdir, writeFile, readdir, rm } from "node:fs/promises";
+import { join as joinPath } from "node:path";
 import { ensureArchiveWritable, newArchivePath, writeArchive } from "../compaction/archive.js";
 import { stripToolCallTemplateLeak } from "./textSanitize.js";
 import { salvagePartialFileWrite } from "./toolCallSalvage.js";
@@ -457,6 +460,32 @@ export class AgentLoop {
 
   /** 워크스페이스 전환 대기분 — 다음 턴 시작에서 적용한다(턴 중간에 끼우면 tool_calls/결과 쌍이 깨진다). */
   private pendingWorkspace: { root: string; systemPrompt: string; note: string } | null = null;
+
+  /** 마지막 실측 컨텍스트 사용량 — X-2 상한이 남은 여유에 비례하도록 쓴다. null 이면 미측정. */
+  private lastUsedTokens: number | null = null;
+
+  /**
+   * X-2: 도구 결과가 컨텍스트로 들어가는 단일 지점. 상한을 넘으면 원문을 파일로 저장하고
+   * 앞·뒤·실패 줄 + 경로만 돌려준다. 저장 실패는 삼키지 않고 안내문에 "저장하지 못했다" 로 적힌다.
+   */
+  private async budgetResult(toolName: string, content: string): Promise<string> {
+    const window = this.thresholds.contextWindowTokens;
+    const cap = effectiveCap(toolResultCharCap(window), window, this.lastUsedTokens);
+    if (content.length <= cap) return content;
+    const dir = joinPath(this.opts.projectRoot, ".harnesside", "state", "tool-output");
+    let rel: string | null = null;
+    try {
+      await mkdir(dir, { recursive: true });
+      const name = `${new Date().toISOString().replace(/[:.]/g, "-")}-${toolName.replace(/[^\w-]/g, "_")}.txt`;
+      await writeFile(joinPath(dir, name), content, "utf8");
+      rel = `.harnesside/state/tool-output/${name}`;
+      const old = (await readdir(dir)).sort();
+      for (const f of old.slice(0, Math.max(0, old.length - 50))) await rm(joinPath(dir, f), { force: true });
+    } catch {
+      /* 저장 실패 → rel 은 null, 안내문이 그 사실을 말한다 */
+    }
+    return budgetToolOutput(content, cap, rel).text;
+  }
 
   constructor(private opts: AgentLoopOptions) {
     this.messages = [{ role: "system", content: opts.systemPrompt }];
@@ -1377,7 +1406,7 @@ export class AgentLoop {
                 JSON.parse(call.function.arguments).path,
                 this.thresholds.contextWindowTokens
               )
-            : capToolResult(result.content, this.thresholds.contextWindowTokens);
+            : await this.budgetResult(call.function.name, result.content);
           if (result.diff) {
           doneDiff = result.diff;
             this.opts.onDiff?.(this.summarizeArgs(call.function.arguments), result.diff);
@@ -1445,7 +1474,7 @@ export class AgentLoop {
           // into the history uncapped, pushed usage past the compaction
           // trigger on its own, got compacted away before the model read it,
           // and the model reran it — a compaction every ~16s, live.
-          content = capToolResult(`ERROR: ${err.message}`, this.thresholds.contextWindowTokens);
+          content = await this.budgetResult(call.function.name, `ERROR: ${err.message}`);
           logFailure({
             timestamp: new Date().toISOString(),
             summary: `tool ${call.function.name} failed`,
@@ -1651,6 +1680,7 @@ export class AgentLoop {
       this.estimateCallsFast++;
       const safety = Math.max(1500, Math.floor(window * 0.2));
       if (fastUsed < trigger - safety) {
+        this.lastUsedTokens = fastUsed;
         this.opts.onContextUsage?.(fastUsed, window);
         return { compacted: false, used: fastUsed };
       }
@@ -1658,6 +1688,7 @@ export class AgentLoop {
     }
     const used = await estimateTokens(this.messages, this.opts.backend, toolDefsJson(), activeToolDefs());
     this.estimateCallsExact++;
+    this.lastUsedTokens = used;
     this.opts.onContextUsage?.(used, this.thresholds.contextWindowTokens);
     // P3 조기 압축 (opt-in, 기본 off): 실패 턴이 연속되고 사용량이 earlyRatio를
     // 넘었으면 0.7을 기다리지 않고 압축. 일반 트리거는 아래에서 그대로 처리.

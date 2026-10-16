@@ -2449,7 +2449,7 @@ test("a failing tool's error output is capped like a successful result, not push
     const toolMsg = turnRequests[1].messages.find((m) => m.role === "tool")!;
     assert.match(String(toolMsg.content), /^ERROR:/);
     assert.ok(String(toolMsg.content).length < 5000, `expected a capped error result, got ${String(toolMsg.content).length} chars`);
-    assert.match(String(toolMsg.content), /truncated/);
+    assert.match(String(toolMsg.content), /줄 생략/); // X-2: 잘린 사실은 항상 표시한다
   }));
 
 test("an over-long read_file result is cut at a line boundary and says which start_line to continue from", () =>
@@ -3060,4 +3060,32 @@ test("applyWorkspaceChange: 다음 턴에 시스템 프롬프트·전환 안내�
     assert.ok(texts.includes("first"), "전환 때 대화 기록이 사라졌다");
     const noteAt = texts.indexOf("[workspace changed] A to B");
     assert.ok(noteAt > texts.indexOf("first") && noteAt < texts.indexOf("second"), "안내문이 새 사용자 메시지 앞에 없다");
+  }));
+
+test("X-2: 거대한 run_shell 출력은 원문이 파일로 저장되고, 컨텍스트에는 상한 이하 + 실패 줄 + 경로만 들어간다", () =>
+  withTempProject(async (dir) => {
+    const cmd = `node -e "for(let i=0;i<500;i++)console.log('ok '+i); console.log('not ok 99 - FAIL here'); for(let i=0;i<60000;i++)console.log('tail '+i); console.log('# fail 1')"`;
+    const shellCall = { id: "c1", type: "function" as const, function: { name: "run_shell", arguments: JSON.stringify({ command: cmd }) } };
+    const { backend, turnRequests } = scriptedBackend({
+      turnResponses: [assistantMessage(null, [shellCall]), assistantMessage("done")],
+      tokenCounts: [1, 1],
+    });
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: { autoTriggerRatio: 0.9, contextWindowTokens: 24576 },
+    });
+    await loop.send("go");
+    const toolMsg = turnRequests[1]!.messages.find((m) => m.role === "tool");
+    const text = typeof toolMsg?.content === "string" ? toolMsg.content : "";
+    assert.ok(text.length > 0 && text.length <= 12_000, `길이 ${text.length}`);
+    assert.match(text, /줄 생략/);
+    assert.ok(text.includes("# fail 1"), "끝의 실패 요약이 사라졌다");
+    const m = /(\.harnesside\/state\/tool-output\/[^\s]+\.txt)/.exec(text);
+    assert.ok(m, "원문 경로가 없다");
+    const full = await readFile(join(dir, m![1]!), "utf8");
+    // 저장본은 run_shell 이 돌려준 값(앞 256KB + 뒤 32KB)이다 — 도구 자체의 상한은 이 게이트 앞단이다.
+    assert.ok(full.includes("not ok 99 - FAIL here") && full.length > text.length * 3, "원문이 저장되지 않았다");
   }));
