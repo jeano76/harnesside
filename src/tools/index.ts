@@ -8,6 +8,8 @@ import type { BrowserConfig } from "./browser.js";
 import type { SkillIndexEntry } from "../skills/loader.js";
 import { loadSkillBody } from "../skills/loader.js";
 import { loadSkillChecklist } from "../skills/checklist.js";
+import { runDelegation, formatDelegateResult, DEFAULT_DELEGATE_CONFIG } from "../delegate/delegate.js";
+import type { DelegateConfig } from "../delegate/delegate.js";
 
 
 /** Set once at startup from .harnesside/config.yaml (PROMPT.md new requirement:
@@ -59,6 +61,12 @@ let skillIndex: SkillIndexEntry[] = [];
 
 export function configureSkills(index: SkillIndexEntry[]): void {
   skillIndex = index;
+}
+
+let delegateConfig: DelegateConfig = DEFAULT_DELEGATE_CONFIG;
+
+export function configureDelegate(cfg: Partial<DelegateConfig>): void {
+  delegateConfig = { ...DEFAULT_DELEGATE_CONFIG, ...cfg };
 }
 
 export const TOOL_DEFS: ToolDef[] = [
@@ -123,6 +131,26 @@ export const TOOL_DEFS: ToolDef[] = [
           new_text: { type: "string" },
         },
         required: ["path", "old_text", "new_text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delegate",
+      description:
+        "Hand ONE well-defined coding task to an external agent (claude) and get a short report. " +
+        "Needs a concrete task, the files it may touch, and a verify script name from package.json. " +
+        "Completion is decided by running verify, not by the agent's claim. Not for vague or destructive requests.",
+      parameters: {
+        type: "object",
+        properties: {
+          task: { type: "string" },
+          files: { type: "array", items: { type: "string" } },
+          verify: { type: "string" },
+          skills: { type: "array", items: { type: "string" } },
+        },
+        required: ["task", "files"],
       },
     },
   },
@@ -540,6 +568,19 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
       await backupBeforeOverwrite(args.path, original, updated, projectRoot);
       await writeFile(args.path, updated, "utf8");
       return { content: `edited ${args.path}`, diff: formatDiff(args.path, original, updated) };
+    }
+    case "delegate": {
+      const skillChecklists: { name: string; text: string }[] = [];
+      for (const n of Array.isArray(args.skills) ? args.skills : []) {
+        const entry = skillIndex.find((e) => e.name === n);
+        if (entry) skillChecklists.push({ name: n, text: await loadSkillChecklist(projectRoot, n, await loadSkillBody(entry)) });
+      }
+      const r = await runDelegation(
+        { task: args.task, files: Array.isArray(args.files) ? args.files : [], verify: args.verify, skills: args.skills, skillChecklists },
+        projectRoot,
+        delegateConfig
+      );
+      return { content: formatDelegateResult(r) };
     }
     case "run_shell": {
       // cwd was previously always process.cwd() — the whole CLI process's
