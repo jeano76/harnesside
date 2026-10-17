@@ -27,3 +27,9 @@ test("검증 뒤 다시 고치면 다시 미검증", () => {
   g.noteEdit("b.ts");
   assert.match(g.nudge()!, /b\.ts/);
 });
+
+import { looksLikeVerification } from "./verifyGate.js";
+test("탐색 명령은 검증이 아니고 테스트·빌드 명령은 검증이다", () => {
+  for (const c of ["ls -la", "cat package.json", "grep -r foo .", "git status"]) assert.equal(looksLikeVerification(c), false, c);
+  for (const c of ["npm test", "npm run check", "pytest -q", "tsc --noEmit", "node check.js", "cargo test", "node -e \"console.log(1)\""]) assert.equal(looksLikeVerification(c), true, c);
+});

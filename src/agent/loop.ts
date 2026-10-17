@@ -1,4 +1,4 @@
-import { VerifyGate } from "./verifyGate.js";
+import { VerifyGate, looksLikeVerification } from "./verifyGate.js";
 import type { ChatMessage, ModelBackend } from "../backend/types.js";
 import { AGENT_STATE_TOOLS, FILE_TOOLS, activeToolDefs, executeTool } from "../tools/index.js";
 import type { ApprovalGate, ToolRequest } from "../server/approval.js";
@@ -1514,7 +1514,8 @@ export class AgentLoop {
           }
           this.recordFileTouch(call.function.name, call.function.arguments);
           if (editPath !== null) verifyGate.noteEdit(editPath);
-          else if (call.function.name === "run_recipe" || call.function.name === "run_shell") verifyGate.noteVerify();
+          else if (call.function.name === "run_recipe") verifyGate.noteVerify();
+          else if (call.function.name === "run_shell" && looksLikeVerification(String(JSON.parse(call.function.arguments || "{}").command ?? ""))) verifyGate.noteVerify();
           this.pushExecutedToolLog(`${call.function.name}(${this.summarizeArgs(call.function.arguments)})`);
           if (editPath !== null) {
             const check = await runPostEditCheck(editPath, this.opts.projectRoot, this.opts.verify, call.function.name === "append_file");

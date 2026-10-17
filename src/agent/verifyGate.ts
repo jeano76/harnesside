@@ -2,6 +2,10 @@
 
 const DOC_EXT = /\.(md|txt|rst|ya?ml|json|csv|lock)$/i;
 
+/** 검증처럼 보이는 셸 명령인가. `ls`·`cat` 같은 탐색은 검증이 아니다(실측: 안내 직후 탐색 명령으로 게이트가 풀렸다). */
+export const looksLikeVerification = (cmd: string): boolean =>
+  /\b(npm|yarn|pnpm|bun)\s+(run\s+)?(test|check|build|lint|typecheck|tsc)\b|\b(pytest|jest|vitest|mocha|tsc|eslint|ruff|mypy|cargo\s+(test|check|build)|go\s+(test|build|vet)|make|ctest|gradle|mvn)\b|\bnode\s+(--test|-e|\S+\.(c|m)?js)\b|\bpython3?\s+(-m\s+(pytest|unittest)|\S+\.py)\b/.test(cmd);
+
 export class VerifyGate {
   private unverified = new Set<string>();
   private nudges = 0;
