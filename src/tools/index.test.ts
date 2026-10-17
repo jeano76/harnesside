@@ -344,7 +344,8 @@ test("write_file makes no backup for a new file, and edit_file backs up before e
   withTempDir(async (dir) => {
     const path = join(dir, "a.txt");
     const first = await executeTool("write_file", JSON.stringify({ path, content: "one\n" }), dir);
-    assert.equal(first.content, `wrote ${path}`);
+    assert.match(first.content, new RegExp(`^wrote ${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(first.content, /\[scope\] 새 파일 생성/);
     await executeTool("edit_file", JSON.stringify({ path, old_text: "one", new_text: "two" }), dir);
     const backups = await readdir(join(dir, ".harnesside", "state", "backups"));
     assert.equal(backups.length, 1);
