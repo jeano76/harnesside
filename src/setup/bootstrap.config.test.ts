@@ -214,3 +214,29 @@ test("a model kept from the existing config never enters the download step", asy
     const after = parse(await readFile(join(dir, ".harnesside", "config.yaml"), "utf8"));
     assert.equal(after.llama.modelPath, modelPath);
   }));
+
+test("config 에 적은 speculativeTypes(draft-mtp)는 콜드 스타트 튜닝에서도 유지된다", async () =>
+  withTempDir(async (dir) => {
+    await mkdir(join(dir, ".harnesside"), { recursive: true });
+    const modelPath = join(dir, "m.gguf");
+    await writeFile(modelPath, Buffer.alloc(4096));
+    await mkdir(join(dir, "bin"), { recursive: true });
+    const fakeBin = join(dir, "bin", SRV);
+    await writeFakeExe(fakeBin, { stdout: "version: 1 (abc)" });
+    await writeFile(
+      join(dir, ".harnesside", "config.yaml"),
+      `backend: local-llama\nmodel: ${modelPath}\nllama:\n  binPath: ${fakeBin}\n  modelPath: ${modelPath}\n  port: 8080\n  speculativeTypes: draft-mtp\n`
+    );
+    const report = await ensureLocalStack({
+      env: { HOME: join(dir, "home"), PATH: "" } as NodeJS.ProcessEnv,
+      projectRoot: dir,
+      hardware: {
+        cpuCount: 4, ramTotalBytes: 16 * 1024 ** 3, ramAvailableBytes: 12 * 1024 ** 3,
+        gpus: [], gpuBackend: "none", canBuildCuda: false, tools: {}, platform: "linux",
+      },
+      probe: async () => "free",
+      detectServer: async () => ({ kind: "none" }) as any,
+      listExistingModels: async () => [],
+    });
+    assert.equal(report.tuning?.speculativeTypes, "draft-mtp");
+  }));

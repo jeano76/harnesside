@@ -777,6 +777,19 @@ export async function ensureLocalStack(opts: BootstrapOptions): Promise<Bootstra
         : undefined,
   });
   for (const r of tuning.rationale) log(r);
+  // 사람이 config 에 적은 speculative 설정(예: draft-mtp)은 같은 모델이면 유지한다. 예측 튜너는 draft 계열을
+  // 만들 수 없어서 이 줄이 없으면 콜드 스타트마다 MTP 가 조용히 꺼진다.
+  const cfgLlama = existing?.llama;
+  if (
+    tuning.speculativeTypes === undefined &&
+    typeof cfgLlama?.speculativeTypes === "string" &&
+    cfgLlama.speculativeTypes &&
+    cfgLlama.modelPath === modelPath
+  ) {
+    tuning.speculativeTypes = cfgLlama.speculativeTypes;
+    if (typeof cfgLlama.speculativeDraftNMax === "number") tuning.speculativeDraftNMax = cfgLlama.speculativeDraftNMax;
+    log(`speculative: config 에 지정된 ${cfgLlama.speculativeTypes} 를 유지합니다.`);
+  }
 
   // 설치 시 실측(`harnesside measure`)이 **같은 엔진·모델·컨텍스트·오프로드**로 잰 스레드 수가
   // 있으면 예측 대신 그 값을 쓴다. 키가 하나라도 다르면(드라이버·엔진·모델 교체) 쓰지 않는다 —
