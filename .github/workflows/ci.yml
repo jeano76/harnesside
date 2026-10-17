@@ -345,9 +345,9 @@ jobs:
           setsid npx tsx src/server/index.ts --no-browser < /dev/null > /tmp/fail.log 2>&1 &
           for i in $(seq 1 90); do grep -q '12/12' /tmp/fail.log && break; sleep 1; done
           head -80 /tmp/fail.log
-          grep -q '(실패)' /tmp/fail.log || { echo "실패한 단계가 없다 — 시나리오가 성립하지 않았다(무언가를 찾았다)"; exit 1; }
-          grep -q '· 왜:' /tmp/fail.log || { echo "실패 단계에 '왜'(원본 한 줄)가 없다"; exit 1; }
-          grep -q '· 다음:' /tmp/fail.log || { echo "실패 단계에 '다음 행동'이 없다"; exit 1; }
+          grep -qE '\((failed|실패)\)' /tmp/fail.log || { echo "실패한 단계가 없다 — 시나리오가 성립하지 않았다(무언가를 찾았다)"; exit 1; }
+          grep -qE '· (why|왜):' /tmp/fail.log || { echo "실패 단계에 '왜'(원본 한 줄)가 없다"; exit 1; }
+          grep -qE '· (next|다음):' /tmp/fail.log || { echo "실패 단계에 '다음 행동'이 없다"; exit 1; }
           SPID=$(head -1 .harnesside/state/instance.lock 2>/dev/null || true)
           [ -n "$SPID" ] && kill -TERM "$SPID" 2>/dev/null || true
           sleep 3
