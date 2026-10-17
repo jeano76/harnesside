@@ -26,6 +26,9 @@ import { estimateTextTokens } from "../shared/textTokens.js";
 import { estimateTokens } from "../compaction/compactor.js";
 import { DEFAULT_MAX_REASONING, clampReasoningBudget, MIN_REASONING_FLOOR, MAX_REASONING_CEILING } from "../shared/reasoning.js";
 import { activeToolDefs } from "../tools/index.js";
+import { readProjectRecipes, runRecipeDef, createLastRunStore, writeProjectRecipes, type LastRunStore } from "./recipes.js";
+import { diagnosticsFromFailures, type Diagnostic } from "../recipes/diagnostics.js";
+import { detectRecipes, serializeRecipes, type RecipeDef } from "../recipes/recipes.js";
 import { applyEvent, normalizeTool, type AgentBlock } from "../session/blocks.js";
 import { resumeInfo, type ResumeInfo } from "../compaction/checkpoint.js";
 
@@ -226,6 +229,72 @@ export class AgentService {
   /** 지금까지의 대화 블록(저장·복원용). */
   get conversation(): AgentBlock[] {
     return this.blocks;
+  }
+
+  /**
+   * U-6 검증 레시피 — 라우트(`index.ts`의 `/api/recipes/*`)가 부르는 진입점.
+   * 판단은 recipes 모듈에 있고 여기는 배선만 한다.
+   */
+  private lastRuns: LastRunStore = createLastRunStore();
+
+  async listRecipes(): Promise<{ found: boolean; recipes: RecipeDef[]; errors: string[]; runs: Record<string, { at: number; ok: boolean; timedOut: boolean }> }> {
+    const pr = await readProjectRecipes(this.opts.baseDir());
+    return { ...pr, runs: this.lastRuns.all() };
+  }
+
+  async runRecipe(name: string): Promise<import("./recipes.js").RecipeRunResult> {
+    const pr = await readProjectRecipes(this.opts.baseDir());
+    if (!pr.found) throw Object.assign(new Error("레시피 파일이 없습니다 — 감지 제안을 먼저 승인하세요"), { status: 404 });
+    if (pr.errors.length > 0) throw Object.assign(new Error(`레시피 파일 오류: ${pr.errors[0]}`), { status: 400 });
+    const def = pr.recipes.find((r) => r.name === name);
+    if (!def) throw Object.assign(new Error(`없는 레시피입니다: ${name}`), { status: 404 });
+    const result = await runRecipeDef(def, this.opts.baseDir());
+    this.lastRuns.record(name, result);
+    this.opts.logger?.(`[recipe] ${name}: ${result.ok ? "PASS" : result.timedOut ? "TIMEOUT" : "FAIL"} (${result.durationMs}ms)`);
+    return result;
+  }
+
+  /** U-6 감지 제안 — 파일이 있을 때만 내용을 읽어 넘긴다 (FS 접근은 여기서만). */
+  async detectRecipeProposal(): Promise<{ proposal: RecipeDef[]; yaml: string }> {
+    const root = this.opts.baseDir();
+    const readIfExists = async (name: string): Promise<string | undefined> => {
+      try {
+        const { readFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        return await readFile(join(root, name), "utf8");
+      } catch {
+        return undefined;
+      }
+    };
+    const proposal = detectRecipes({
+      packageJson: await readIfExists("package.json"),
+      pyproject: await readIfExists("pyproject.toml"),
+      goMod: await readIfExists("go.mod"),
+      cargoToml: await readIfExists("Cargo.toml"),
+    });
+    return { proposal, yaml: serializeRecipes(proposal) };
+  }
+
+  async saveRecipes(text: string): Promise<{ errors: string[] }> {
+    return writeProjectRecipes(this.opts.baseDir(), text);
+  }
+
+  /** U-7 루프용: lint/build 레시피만 돌려 진단을 모은다. */
+  private async runLintDiagnostics(): Promise<Diagnostic[]> {
+    const root = this.opts.baseDir();
+    const pr = await readProjectRecipes(root);
+    if (!pr.found || pr.errors.length > 0) return [];
+    const out: Diagnostic[] = [];
+    for (const def of pr.recipes) {
+      if (def.kind !== "lint" && def.kind !== "build") continue;
+      try {
+        const res = await runRecipeDef(def, root);
+        out.push(...diagnosticsFromFailures(def.name, res.parsed.failures));
+      } catch (e) {
+        this.opts.logger?.(`[diagnostics] 레시피 "${def.name}" 실행 실패 — 건너뜀: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return out;
   }
 
   /**
@@ -463,6 +532,16 @@ export class AgentService {
         this.lastUsage = { usedTokens: used, totalTokens: total };
       },
       approvalGate: this.opts.approvalGate ?? undefined,
+      // U-7 증분 진단: lint/build 레시피만 돌린다. 레시피 파일이 없으면
+      // 빈 배열 — 루프는 건너뛴다 (비용 0, 거짓말 0).
+      diagnostics: { runAll: () => this.runLintDiagnostics() },
+      onDiagnostics: (text, newCount, preExistingCount) =>
+        this.emit({
+          type: "agent.tool",
+          text,
+          tool: { name: "diagnostics", args: JSON.stringify({ newProblems: newCount, preExisting: preExistingCount }), done: true },
+          at: now(),
+        }),
     });
     this.loop = loop;
     return loop;
