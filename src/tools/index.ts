@@ -3,6 +3,7 @@ import { appendFile, mkdir, open, readFile, readdir, stat, unlink, writeFile } f
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ToolDef } from "../backend/types.js";
 import { formatDiff } from "./diff.js";
+import { withScopeWarnings } from "./scopeGuard.js";
 import * as browser from "./browser.js";
 import type { BrowserConfig } from "./browser.js";
 import type { SkillIndexEntry } from "../skills/loader.js";
@@ -518,7 +519,8 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
     }
     case "write_file": {
       requireContent(name, args);
-      const before = await readFile(args.path, "utf8").catch(() => "");
+      const prior = await readFile(args.path, "utf8").catch(() => null);
+      const before = prior ?? "";
       // Found auditing for the same class of gap as run_shell/CDP's
       // missing timeouts: writing a brand-new file in a directory that
       // doesn't exist yet — routine for "create a new module/handler" —
@@ -528,20 +530,24 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
       const backup = await backupBeforeOverwrite(args.path, before, args.content, projectRoot);
       await writeFile(args.path, args.content, "utf8");
       return {
-        content: backup ? `wrote ${args.path} (previous version saved to ${backup})` : `wrote ${args.path}`,
+        content: withScopeWarnings(
+          backup ? `wrote ${args.path} (previous version saved to ${backup})` : `wrote ${args.path}`,
+          { path: args.path, existed: prior !== null, before, after: args.content }
+        ),
         diff: formatDiff(args.path, before, args.content),
       };
     }
     case "append_file": {
       requireContent(name, args);
-      const before = await readFile(args.path, "utf8").catch(() => "");
+      const prior = await readFile(args.path, "utf8").catch(() => null);
+      const before = prior ?? "";
       // Same directory-creation fix as write_file — a first append_file
       // call (e.g. after a truncated write_file never got to run) must
       // still be able to create the file fresh, not require it to
       // already exist.
       await mkdir(dirname(args.path), { recursive: true });
       await appendFile(args.path, args.content, "utf8");
-      return { content: `appended ${args.content.length} chars to ${args.path}`, diff: formatDiff(args.path, before, before + args.content) };
+      return { content: withScopeWarnings(`appended ${args.content.length} chars to ${args.path}`, { path: args.path, existed: prior !== null, before, after: before + args.content }), diff: formatDiff(args.path, before, before + args.content) };
     }
     case "edit_file": {
       const original = await readFile(args.path, "utf8");
@@ -567,7 +573,7 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
       const updated = original.replace(args.old_text, args.new_text);
       await backupBeforeOverwrite(args.path, original, updated, projectRoot);
       await writeFile(args.path, updated, "utf8");
-      return { content: `edited ${args.path}`, diff: formatDiff(args.path, original, updated) };
+      return { content: withScopeWarnings(`edited ${args.path}`, { path: args.path, existed: true, before: original, after: updated }), diff: formatDiff(args.path, original, updated) };
     }
     case "delegate": {
       const skillChecklists: { name: string; text: string }[] = [];
