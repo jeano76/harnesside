@@ -308,3 +308,10 @@ test("same model, no mismatch noise", async () => {
   assert.equal(r.modelMismatch, undefined);
   assert.doesNotMatch(r.summary, /서버와 다름/);
 });
+
+test("parseLlamaServerArgs keeps --spec-type so a restart/recalibrate does not silently drop MTP", () => {
+  const a = parseLlamaServerArgs("/x/llama-server -m /m.gguf --port 8080 -c 4096 --spec-type draft-mtp --spec-draft-n-max 3");
+  assert.equal(a.speculativeTypes, "draft-mtp");
+  assert.equal(a.speculativeDraftNMax, 3);
+  assert.equal(parseLlamaServerArgs("/x/llama-server -m /m.gguf").speculativeTypes, undefined);
+});

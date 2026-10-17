@@ -93,6 +93,8 @@ function recordedTuning(config: unknown) {
     flashAttn: typeof llama.flashAttn === "boolean" ? llama.flashAttn : undefined,
     cacheTypeK: typeof llama.cacheTypeK === "string" ? llama.cacheTypeK : undefined,
     cacheTypeV: typeof llama.cacheTypeV === "string" ? llama.cacheTypeV : undefined,
+    speculativeTypes: typeof llama.speculativeTypes === "string" ? llama.speculativeTypes : undefined,
+    speculativeDraftNMax: num(llama.speculativeDraftNMax),
     calibratedFor: typeof llama.calibratedFor === "string" ? llama.calibratedFor : undefined,
   };
 }

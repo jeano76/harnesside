@@ -536,6 +536,9 @@ export interface ParsedServerArgs {
   flashAttn?: boolean;
   cacheTypeK?: string;
   cacheTypeV?: string;
+  /** `--spec-type` / `--spec-draft-n-max`: 빠뜨리면 재시작·재보정 때 MTP 가 조용히 꺼진다. */
+  speculativeTypes?: string;
+  speculativeDraftNMax?: number;
 }
 
 export function parseLlamaServerArgs(cmdline: string): ParsedServerArgs {
@@ -565,6 +568,8 @@ export function parseLlamaServerArgs(cmdline: string): ParsedServerArgs {
     flashAttn: fa === undefined ? (t.includes("-fa") ? true : undefined) : !/^(off|0|false)$/i.test(fa),
     cacheTypeK: val("-ctk", "--cache-type-k"),
     cacheTypeV: val("-ctv", "--cache-type-v"),
+    speculativeTypes: val("--spec-type"),
+    speculativeDraftNMax: num("--spec-draft-n-max"),
   };
 }
 
