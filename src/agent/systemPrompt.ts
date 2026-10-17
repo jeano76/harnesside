@@ -285,7 +285,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     // 추측 실행하지 말고 사용자에게 감지 제안을 승인해 달라고 말한다.
     "검증(테스트·빌드·린트)은 run_recipe(이름)를 run_shell 보다 우선 사용하세요. 레시피 파일(.harnesside/recipes.yaml)이 없으면 임의 명령으로 검증한 척하지 말고, 감지 제안을 승인해 달라고 사용자에게 물어보세요.",
     // X-7 (PROMPT_EXTERNAL_AGENT_HARNESS.md): 앞 단계에서 실제로 생긴 도구만 안내한다. 10줄 상한.
-    "여러 파일에 걸친 구현·리뷰·긴 분석은 직접 하지 말고 delegate 로 맡기세요. 맡길 때는 대상 파일(files)과 성공 기준(verify)을 구체적으로 적으세요.",
+    "여러 파일에 걸친 구현·리뷰·분석·원인 탐색은 반드시 delegate 가 첫 번째 도구 호출이어야 합니다. 먼저 ls·cat·grep·read_file 로 직접 살펴보거나 진단 스크립트를 쓰지 마세요 — 직접 읽은 내용은 로컬 컨텍스트를 채워 압축을 일으킵니다. 위치를 모르면 위치 찾기까지 delegate 에 맡기세요. 맡길 때는 대상 파일(files)과 성공 기준(verify)을 구체적으로 적으세요.",
     "도구 결과에 \"전체: <경로>\"가 있으면 통째로 읽지 말고 필요한 줄 범위만 read_file 하세요.",
     "스킬은 load_skill(이름) 체크리스트로만 쓰세요. 본문 전체가 필요하면 delegate 에 skills 로 넘기세요.",
     "\"고쳤다/통과했다\"는 run_recipe 결과가 있을 때만 말하세요. 없으면 \"미검증\"이라고 쓰세요.",
