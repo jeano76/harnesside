@@ -31,6 +31,13 @@ export interface ApprovalRequest extends ToolRequest {
   expiresAt: number;
 }
 
+/**
+ * 실행 모드. `plan` 은 기본값 — 허용 목록 밖의 도구는 매번 사용자에게 묻는다(무응답=거절이라
+ * 에이전트가 읽기만 하고 계획만 세우는 것처럼 보인다). `act` 는 묻지 않고 실행한다.
+ * `act` 에서도 denylist 는 그대로 거절한다 — 모드가 정책보다 앞서지 않는다.
+ */
+export type ApprovalMode = "plan" | "act";
+
 export type ApprovalDecision = "allow-once" | "allow-always" | "reject" | "timeout";
 
 export interface ApprovalPolicy {
@@ -68,6 +75,7 @@ export class ApprovalGate {
   private waiting = new Map<string, { resolve: (d: ApprovalDecision) => void; req: ApprovalRequest; timer: NodeJS.Timeout }>();
   private counter = 0;
   private policy: ApprovalPolicy;
+  private mode: ApprovalMode = "plan";
 
   constructor(policy: Partial<ApprovalPolicy> = {}, private events: GateEvents = {}) {
     // **배열은 반드시 복사한다.** `{ ...DEFAULT_POLICY }` 같은 얕은 복사를 하면
@@ -103,6 +111,11 @@ export class ApprovalGate {
     }
     if (risk === "auto") {
       this.events.onDecision?.({ ...req, id: "auto", requestedAt: Date.now(), expiresAt: 0 }, "allow-once", "allowlist");
+      return Promise.resolve("allow-once");
+    }
+
+    if (this.mode === "act") {
+      this.events.onDecision?.({ ...req, id: "act", requestedAt: Date.now(), expiresAt: 0 }, "allow-once", "act-mode");
       return Promise.resolve("allow-once");
     }
 
@@ -159,6 +172,16 @@ export class ApprovalGate {
       this.settle(id, "reject", reason);
     }
     return ids.length;
+  }
+
+  getMode(): ApprovalMode {
+    return this.mode;
+  }
+
+  /** `act` 로 바꾸면 이미 대기 중인 요청도 함께 허용한다 — 전환 직전에 뜬 카드가 남지 않게. */
+  setMode(mode: ApprovalMode): void {
+    this.mode = mode;
+    if (mode === "act") for (const id of [...this.waiting.keys()]) this.settle(id, "allow-once", "act-mode");
   }
 
   allow(tool: string): void {

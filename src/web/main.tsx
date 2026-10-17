@@ -117,6 +117,7 @@ const SLASH_TIP_KEYS: Record<string, string> = {
   improve: "slash.tip.improve",
   "improve-apply": "slash.tip.improve-apply",
   "plan-clear": "slash.tip.plan-clear",
+  mode: "slash.tip.mode",
   term: "slash.tip.term",
   cli: "slash.tip.cli",
   models: "slash.tip.models",
@@ -779,6 +780,15 @@ export default function App() {
           "",
           t("slash.report.termFooter"),
         ].join("\n"));
+      } else if (key === "mode") {
+        // `/mode [plan|act]` — 인자가 없으면 현재 모드를 보여준다.
+        const want = arg.trim().toLowerCase();
+        if (!want) {
+          const r = await client.get<{ mode: string }>("/api/approval/mode");
+          return done(`mode: ${r.mode}  (/mode act · /mode plan)`);
+        }
+        const r = await client.post<{ ok: boolean; mode: string }>("/api/approval/mode", { mode: want });
+        done(r.mode === "act" ? "mode: act — 도구를 승인 없이 실행합니다 (denylist 제외)" : "mode: plan — 도구 실행 전에 승인을 묻습니다");
       } else if (key === "lang") {
         // `/lang` — interface language switch. Client-side only: the locale lives
         // in the browser (persisted to localStorage), so no server round-trip.

@@ -50,6 +50,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { key: "improve", label: "/improve", descriptionKey: "slash.desc.improve", where: "both" },
   { key: "improve-apply", label: "/improve-apply", descriptionKey: "slash.desc.improve-apply", where: "both" },
   { key: "plan-clear", label: "/plan-clear", descriptionKey: "slash.desc.plan-clear", where: "both" },
+  { key: "mode", label: "/mode", descriptionKey: "slash.desc.mode", where: "web" },
   // 터미널 제어 — 웹 창에는 감지할 터미널도 제어할 터미널도 없다.
   // 조용히 없는 척 하지 않고 **이유를 말한다**(`where: "tui"`).
   { key: "term", label: "/term", descriptionKey: "slash.desc.term", where: "both" },
@@ -123,7 +124,7 @@ export function webSlashCommands(): SlashCommandDef[] {
  * **읽기만** 한다(같은 일을 두 곳에 두지 않는다).
  */
 const HELP_GROUPS: Array<[titleKey: string, keys: string[]]> = [
-  ["slash.help.group.dialog", ["compact", "queue", "plan-clear"]],
+  ["slash.help.group.dialog", ["compact", "queue", "plan-clear", "mode"]],
   ["slash.help.group.skills", ["skills", "rules", "improve", "improve-apply"]],
   ["slash.help.group.models", ["models", "server", "reset"]],
   ["slash.help.group.cli", ["term", "cli"]],

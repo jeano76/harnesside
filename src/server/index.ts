@@ -963,6 +963,19 @@ const updates: UpdateService = new UpdateService({
             if (!ok) throw Object.assign(new Error("This approval request was already decided or does not exist"), { status: 404 });
             return { ok: true, decided: decision };
           })
+          .route("GET", "/api/approval/mode", () => {
+            if (!approvalGate) throw Object.assign(new Error("The approval gate is not ready yet"), { status: 503 });
+            return { mode: approvalGate.getMode() };
+          })
+          .route("POST", "/api/approval/mode", async (c) => {
+            if (!approvalGate) throw Object.assign(new Error("The approval gate is not ready yet"), { status: 503 });
+            const body = (await readBody(c.req)) as { mode?: string };
+            if (body.mode !== "plan" && body.mode !== "act") {
+              throw Object.assign(new Error(`Invalid mode: ${String(body.mode)} (plan | act)`), { status: 400 });
+            }
+            approvalGate.setMode(body.mode);
+            return { ok: true, mode: body.mode };
+          })
           .route("GET", "/api/approval/policy", () => {
             if (!approvalGate) throw Object.assign(new Error("The approval gate is not ready yet"), { status: 503 });
             return approvalGate.getPolicy();
