@@ -126,3 +126,25 @@ test("긴 요약은 자른다 — 승인 화면이 화면 밖으로 밀리면 �
   assert.ok(s.length <= 51, `길이 ${s.length}`);
   assert.match(s, /…$/);
 });
+
+test("act 모드는 묻지 않고 실행한다 — 단 denylist 는 그대로 거절한다", async () => {
+  const gate = new ApprovalGate({ denylist: ["rm_all"] });
+  assert.equal(gate.getMode(), "plan");
+  gate.setMode("act");
+  assert.equal(await gate.request({ tool: "write_file", summary: "w" }), "allow-once");
+  assert.equal(await gate.request({ tool: "rm_all", summary: "x" }), "reject");
+  assert.equal(gate.pendingCount, 0);
+});
+
+test("act 로 전환하면 이미 대기 중인 요청도 허용된다", async () => {
+  const gate = new ApprovalGate();
+  const p = gate.request({ tool: "write_file", summary: "w" });
+  assert.equal(gate.pendingCount, 1);
+  gate.setMode("act");
+  assert.equal(await p, "allow-once");
+  gate.setMode("plan");
+  const p2 = gate.request({ tool: "write_file", summary: "w" });
+  assert.equal(gate.pendingCount, 1);
+  gate.rejectAll();
+  assert.equal(await p2, "reject");
+});
