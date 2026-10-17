@@ -143,7 +143,7 @@ export const TOOL_DEFS: ToolDef[] = [
       description:
         "Hand ONE well-defined coding task to an external agent (claude) and get a short report. " +
         "Needs a concrete task, the files it may touch, and a verify script name from package.json. " +
-        "Completion is decided by running verify, not by the agent's claim. Not for vague or destructive requests.",
+        "Completion is decided by running verify, not by the agent's claim. mode:\"review\" = read-only review of your own changes by another model (no edits). Not for vague or destructive requests.",
       parameters: {
         type: "object",
         properties: {
@@ -151,6 +151,7 @@ export const TOOL_DEFS: ToolDef[] = [
           files: { type: "array", items: { type: "string" } },
           verify: { type: "string" },
           skills: { type: "array", items: { type: "string" } },
+          mode: { type: "string", enum: ["implement", "review"] },
         },
         required: ["task", "files"],
       },
@@ -601,7 +602,7 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
         if (entry) skillChecklists.push({ name: n, text: await loadSkillChecklist(projectRoot, n, await loadSkillBody(entry)) });
       }
       const r = await runDelegation(
-        { task: args.task, files: Array.isArray(args.files) ? args.files : [], verify: args.verify, skills: args.skills, skillChecklists },
+        { task: args.task, files: Array.isArray(args.files) ? args.files : [], verify: args.verify, skills: args.skills, skillChecklists, mode: args.mode === "review" ? "review" : "implement" },
         projectRoot,
         delegateConfig
       );

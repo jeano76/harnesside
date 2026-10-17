@@ -197,3 +197,19 @@ test("X-8: 위임마다 index.jsonl 에 한 줄(상태·소요·크기·검증 �
     assert.equal(row.verify.ok, true);
     assert.ok(row.durationMs >= 0 && row.logBytes > 0 && row.summaryBytes > 0);
   }));
+
+test("review: 읽기 전용 리뷰는 파일이 안 바뀌면 done + 'verify 없음', 바뀌면 error", () =>
+  withProject(async (dir, script) => {
+    const ro = await runDelegation({ agent: "fake", task: TASK, files: ["a.ts"], mode: "review" }, dir, DEFAULT_DELEGATE_CONFIG, { agents: { fake: fake("blocked", script) } });
+    assert.equal(ro.status, "blocked");
+    const bad = await runDelegation({ agent: "fake", task: TASK, files: ["a.ts"], mode: "review" }, dir, DEFAULT_DELEGATE_CONFIG, { agents: { fake: fake("ok", script) } });
+    assert.equal(bad.status, "error");
+    assert.match(bad.summary, /읽기 전용 리뷰인데 파일이 바뀌었다/);
+  }));
+
+test("review: CLAUDE_SPEC 는 읽기 전용이면 Edit/Write 를 막는다", async () => {
+  const { CLAUDE_SPEC } = await import("./delegate.js");
+  const a = CLAUDE_SPEC.buildArgs({ prompt: "p", maxBudgetUsd: null, readOnly: true });
+  assert.ok(a[a.indexOf("--disallowedTools") + 1].startsWith("Edit,Write"));
+  assert.ok(!a[a.indexOf("--allowedTools") + 1].includes("Edit"));
+});
