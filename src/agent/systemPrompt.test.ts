@@ -155,3 +155,10 @@ test("경계: 문단은 **정확히 상한까지만** 허용한다 (측정값이
   assert.equal(readabilityFlags(at(PARAGRAPH_CHAR_LIMIT)).length, 0, "상한과 같으면 통과해야 한다");
   assert.equal(readabilityFlags(at(PARAGRAPH_CHAR_LIMIT + 1)).length, 1, "상한을 넘으면 잡혀야 한다");
 });
+
+test("X-7: 위임·예산·스킬·검증 안내가 들어 있고 추가분은 10줄 이하", () => {
+  const p = buildSystemPrompt({ workspaceRoot: "/w", ruleFiles: [] });
+  for (const k of ["delegate", "전체: <경로>", "load_skill", "미검증", "재현 테스트"]) assert.ok(p.includes(k), k);
+  const added = p.split("\n").filter((l) => /delegate|전체: <경로>|load_skill\(이름\)|미검증|재현 테스트부터/.test(l));
+  assert.ok(added.length <= 10);
+});

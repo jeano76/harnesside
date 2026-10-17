@@ -1,3 +1,4 @@
+import { VerifyGate } from "./verifyGate.js";
 import type { ChatMessage, ModelBackend } from "../backend/types.js";
 import { AGENT_STATE_TOOLS, FILE_TOOLS, activeToolDefs, executeTool } from "../tools/index.js";
 import type { ApprovalGate, ToolRequest } from "../server/approval.js";
@@ -841,6 +842,8 @@ export class AgentLoop {
     // CONSECUTIVE such replies; any normal reply resets it, so a long task can recover many times
     // while a model that never recovers still surfaces as a real stop.
     let incompleteReplyRetries = 0;
+    // X-4: 고친 코드가 검증 없이 끝나지 않게 한다.
+    const verifyGate = new VerifyGate();
     // 사고 예산으로 끊은 다음 라운드 한 번은 thinking 을 끈다. 그 라운드의 사고는 없으므로 같은 이유로 다시 끊기지 않는다.
     let thinkOffNextRound = false;
     // 이 턴에서 예산으로 끊은 횟수 — 끊을 때마다 예산을 키우고, 상한이면 예산을 끈다 (effectiveBudget).
@@ -1327,6 +1330,12 @@ export class AgentLoop {
       }
 
       if (!message.tool_calls || message.tool_calls.length === 0) {
+        const gateNudge = verifyGate.nudge();
+        if (gateNudge) {
+          this.opts.onStatus?.(gateNudge);
+          this.messages.push({ role: "user", content: gateNudge });
+          continue;
+        }
         // The turn ended cleanly (not interrupted by compaction — that
         // exits through a different path below). If every declared step
         // is done (or nothing was ever declared), there's nothing left to
@@ -1504,6 +1513,8 @@ export class AgentLoop {
             this.opts.onToolResult?.(this.summarizeArgs(call.function.arguments), content);
           }
           this.recordFileTouch(call.function.name, call.function.arguments);
+          if (editPath !== null) verifyGate.noteEdit(editPath);
+          else if (call.function.name === "run_recipe" || call.function.name === "run_shell") verifyGate.noteVerify();
           this.pushExecutedToolLog(`${call.function.name}(${this.summarizeArgs(call.function.arguments)})`);
           if (editPath !== null) {
             const check = await runPostEditCheck(editPath, this.opts.projectRoot, this.opts.verify, call.function.name === "append_file");

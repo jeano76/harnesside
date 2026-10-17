@@ -284,6 +284,12 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     // 합의된 검증 방식이고 결과도 파싱되어 돌아온다. 레시피 파일이 없으면
     // 추측 실행하지 말고 사용자에게 감지 제안을 승인해 달라고 말한다.
     "검증(테스트·빌드·린트)은 run_recipe(이름)를 run_shell 보다 우선 사용하세요. 레시피 파일(.harnesside/recipes.yaml)이 없으면 임의 명령으로 검증한 척하지 말고, 감지 제안을 승인해 달라고 사용자에게 물어보세요.",
+    // X-7 (PROMPT_EXTERNAL_AGENT_HARNESS.md): 앞 단계에서 실제로 생긴 도구만 안내한다. 10줄 상한.
+    "여러 파일에 걸친 구현·리뷰·긴 분석은 직접 하지 말고 delegate 로 맡기세요. 맡길 때는 대상 파일(files)과 성공 기준(verify)을 구체적으로 적으세요.",
+    "도구 결과에 \"전체: <경로>\"가 있으면 통째로 읽지 말고 필요한 줄 범위만 read_file 하세요.",
+    "스킬은 load_skill(이름) 체크리스트로만 쓰세요. 본문 전체가 필요하면 delegate 에 skills 로 넘기세요.",
+    "\"고쳤다/통과했다\"는 run_recipe 결과가 있을 때만 말하세요. 없으면 \"미검증\"이라고 쓰세요.",
+    "버그는 재현 테스트부터. 요청과 무관한 줄은 바꾸지 마세요.",
   ];
   const rules = input.ruleFiles ?? [];
   if (rules.length === 0) {
