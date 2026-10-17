@@ -280,6 +280,10 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "당신은 로컬 코딩 에이전트입니다. 파일은 현재 워크스페이스 루트 기준 상대경로로 다룹니다.",
     `현재 작업 루트: ${input.workspaceRoot}`,
     "파괴적인 도구(삭제·덮어쓰기·셸)는 승인 게이트를 거칩니다. 승인 없이는 실행되지 않습니다.",
+    // U-6: 검증은 run_recipe 우선. run_shell 보다 먼저 쓴다 — 레시피가 프로젝트의
+    // 합의된 검증 방식이고 결과도 파싱되어 돌아온다. 레시피 파일이 없으면
+    // 추측 실행하지 말고 사용자에게 감지 제안을 승인해 달라고 말한다.
+    "검증(테스트·빌드·린트)은 run_recipe(이름)를 run_shell 보다 우선 사용하세요. 레시피 파일(.harnesside/recipes.yaml)이 없으면 임의 명령으로 검증한 척하지 말고, 감지 제안을 승인해 달라고 사용자에게 물어보세요.",
   ];
   const rules = input.ruleFiles ?? [];
   if (rules.length === 0) {

@@ -51,6 +51,7 @@ import { rankFiles } from "../shared/searchRank.js";
 import { parsePaletteQuery, PREFIX_HELP, SCOPE_BADGE, truncateInfo, parseGotoLine, formatAgentContext } from "./palette/prefix.js";
 import { KEYMAP_ACTIONS, keysFor, findActionByKey, checkBrowserConflicts, KEYMAP_STORAGE_KEY, parseKeymapPreset, type KeymapPreset } from "./keymap/keymap.js";
 import { summarizeProductivity, PRODUCTIVITY_STORAGE_KEY, PRODUCTIVITY_CAP, type ProductivityEvent } from "../shared/productivity.js";
+import { recipeStatusText, type LastRun } from "../recipes/recipeStatus.js";
 import { filterEntries, defaultFilter, visibleTail, bufferFullLabel, filterLabel, type Filter, type LogLevel } from "./panels/logFilter.js";
 import { i18n, useI18n, useLocale, LOCALES } from "./i18n/index.js";
 import { ApprovalCard, applyApprovalEvent } from "./panels/ApprovalCard.js";
@@ -233,6 +234,11 @@ export default function App() {
   const [searchedQuery, setSearchedQuery] = useState<string | null>(null);
   /** 팔레트 선택 위치 — 방향키로 이동, Enter로 실행. 쿼리·모드가 바뀌면 0으로. */
   const [selIndex, setSelIndex] = useState(0);
+  /** U-6 레시피 목록 — `!` 범위와 상태바가 같은 값을 읽는다 (두 벌 금지). */
+  const [recipeList, setRecipeList] = useState<{ found: boolean; recipes: { name: string; kind: string; parse: string }[]; errors: string[]; runs: Record<string, LastRun> } | null>(null);
+  const [recipeDetect, setRecipeDetect] = useState<{ proposal: { name: string; kind: string; parse: string }[]; yaml: string } | null>(null);
+  const [recipeBusy, setRecipeBusy] = useState<string | null>(null);
+  const [lastRecipe, setLastRecipe] = useState<{ name: string; run: LastRun } | null>(null);
   // 승인 대기 — 서버가 보낸 요청을 **대화 위에 떠 있는 카드**로 표시한다.
   // `id` 마다 하나 (`Map` 이 아니라 배열): 두 요청이 동시에 떠야 사용자도 그렇다.
   const [approvals, setApprovals] = useState<Map<string, ApprovalRequest>>(() => new Map());
@@ -951,6 +957,79 @@ export default function App() {
     }
   }, [pushToast, t]);
 
+  /** 헤더·셸·설정이 **같은 알림 경로**를 쓴다 — 한 곳에서만 정의한다.
+   *  레시피 콜백(runRecipeByName 등)이 이보다 아래에 있어 위로 올렸다.
+   *  `pushToast` 는 위에서 이미 정의돼 있다. */
+  const notice = useCallback(
+    (kind: "info" | "warn" | "error", title: string, body: string, source = "app") =>
+      pushToast({ id: `${source}:${title}`, kind, title, body, at: Date.now(), ttlMs: 12_000, requiresAck: false, source }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  /** U-6 레시피 목록 — `!` 범위와 상태바가 같은 값을 읽는다 (두 벌 금지). */
+  const fetchRecipes = useCallback(async () => {
+    try {
+      const r = await client.get<{ found: boolean; recipes: { name: string; kind: string; parse: string }[]; errors: string[]; runs: Record<string, LastRun> }>("/api/recipes");
+      setRecipeList(r);
+      const entries = Object.entries(r.runs ?? {});
+      if (entries.length > 0) {
+        const [name, run] = entries.sort((a, b) => b[1].at - a[1].at)[0];
+        setLastRecipe({ name, run });
+      }
+      if (!r.found) {
+        try {
+          const d = await client.get<{ proposal: { name: string; kind: string; parse: string }[]; yaml: string }>("/api/recipes/detect");
+          setRecipeDetect(d);
+        } catch {
+          setRecipeDetect(null);
+        }
+      }
+    } catch {
+      setRecipeList({ found: false, recipes: [], errors: [], runs: {} });
+    }
+  }, []);
+
+  // 상태바용 — 마운트에 한 번. 이후 실행·생성 때마다 갱신한다.
+  useEffect(() => {
+    void fetchRecipes();
+  }, [fetchRecipes]);
+
+  // `!` 범위를 열면 목록을 갱신한다 (워크스페이스 전환 뒤 낡은 목록 방지).
+  useEffect(() => {
+    if (paletteOpen && paletteQuery.startsWith("!") && !recipeList) void fetchRecipes();
+  }, [paletteOpen, paletteQuery, recipeList, fetchRecipes]);
+
+  /** U-6 레시피 실행 — 팔레트 `!이름`. 결과는 상태바 + 알림 (원문은 에이전트 도구 경로와 동일). */
+  const runRecipeByName = useCallback(async (name: string) => {
+    setRecipeBusy(name);
+    try {
+      const r = await client.post<{ name: string; ok: boolean; timedOut: boolean; exitCode: number | null; durationMs: number; raw: string; parsed: { passed: number | null; failed: number } }>("/api/recipes/run", { name });
+      const run: LastRun = { at: Date.now(), ok: r.ok, timedOut: r.timedOut };
+      setLastRecipe({ name, run });
+      setRecipeList((prev) => (prev ? { ...prev, runs: { ...prev.runs, [name]: run } } : prev));
+      recordMetric("recipe.run", `${name}:${r.ok ? "pass" : r.timedOut ? "timeout" : "fail"}`);
+      notice(r.ok ? "info" : "error", `▶ ${name}: ${r.ok ? t("recipe.pass") : r.timedOut ? t("recipe.timeout") : t("recipe.fail")}`, t("recipe.resultDetail", { failed: r.parsed.failed, ms: r.durationMs }));
+    } catch (e) {
+      notice("error", `▶ ${name}`, e instanceof Error ? e.message : String(e));
+    } finally {
+      setRecipeBusy(null);
+    }
+  }, [notice, recordMetric, t]);
+
+  /** U-6 감지 제안 승인 생성 — 버튼을 누른 것이 승인이다. 추측 생성 금지. */
+  const createRecipesFile = useCallback(async () => {
+    if (!recipeDetect) return;
+    try {
+      await client.put("/api/recipes", { content: recipeDetect.yaml });
+      setRecipeDetect(null);
+      await fetchRecipes();
+      notice("info", t("recipe.created"), t("recipe.createdBody"));
+    } catch (e) {
+      notice("error", t("recipe.createFailed"), e instanceof Error ? e.message : String(e));
+    }
+  }, [recipeDetect, fetchRecipes, notice, t]);
+
   // 부팅 상태 폴링 + 워크스페이스 지문
   useEffect(() => {
     let alive = true;
@@ -1369,13 +1448,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [paletteOpen, openPalette, turnRunning, pushToast, t]);
 
-  /** 헤더·셸·설정이 **같은 알림 경로**를 쓴다 — 한 종류의 알림이 화면 한 곳에 모인다. */
-  const notice = useCallback(
-    (kind: "info" | "warn" | "error", title: string, body: string, source = "app") =>
-      pushToast({ id: `${source}:${title}`, kind, title, body, at: Date.now(), ttlMs: 12_000, requiresAck: false, source }),
-    [],
-  );
-
   const onModelPhase = useCallback((p: { state: string; progress: number; message: string }) => {
     setBlocks((prev) => applyEvent(prev, { type: "agent.status", text: t("update.status", { message: p.message }), at: Date.now() }));
   }, [t]);
@@ -1633,6 +1705,12 @@ export default function App() {
   const fileHitsAll = useMemo(() => rankFiles(fileList, effectiveScope === "files" || effectiveScope === "all" ? effectiveQuery : ""), [fileList, effectiveQuery, effectiveScope]);
   const fileHits = useMemo(() => fileHitsAll.slice(0, 12), [fileHitsAll]);
   const fileTrunc = truncateInfo(fileHitsAll.length, fileHits.length);
+  // U-6: `!` 범위 — 이름 부분 일치로 필터. 없으면 감지 제안을 보여준다.
+  const recipeMatches = useMemo(() => {
+    if (!recipeList?.found) return [];
+    const q = effectiveQuery.trim().toLowerCase();
+    return recipeList.recipes.filter((r) => !q || r.name.toLowerCase().includes(q)).slice(0, 12);
+  }, [recipeList, effectiveQuery]);
   const attachAgentContext = useCallback((text: string) => {
     setDraft((prev) => (prev ? `${prev} ${text}` : text));
     focusDraft();
@@ -1968,7 +2046,20 @@ export default function App() {
       >
         {BODY.terminal}
       </div>
-      <MonitorStrip latest={metrics} />
+      <div style={{ display: "flex", alignItems: "stretch", gap: 0 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <MonitorStrip latest={metrics} />
+        </div>
+        {/* U-6 상태바: 마지막 레시피 실행 결과 (시각 포함). 실행한 적 없으면 "미실행". */}
+        <button
+          type="button"
+          onClick={() => { void openPalette("commands").then(() => setPaletteQuery("!")); }}
+          title={t("palette.scopeRecipes")}
+          style={{ flexShrink: 0, background: "#161b22", border: 0, borderTop: `1px solid ${BORDER}`, color: lastRecipe && !lastRecipe.run.ok ? "#f85149" : DIM, cursor: "pointer", font: "inherit", fontSize: 10, padding: "1px 8px", whiteSpace: "nowrap" }}
+        >
+          {lastRecipe ? `▶ ${lastRecipe.name} ${recipeStatusText(lastRecipe.run)}` : `○ ${t("recipe.neverRun")}`}
+        </button>
+      </div>
 
       {/* 로그 — **닫을 수 없는 기본 탭**(§5.12)이지만 **접을 수 있다**(2026-10-01).
           "닫을 수 없음" 은 사라져서는 안 된다는 뜻이지, 항상 펼쳐 두어야 한다는 뜻이 아니다.
@@ -2057,7 +2148,7 @@ export default function App() {
               value={paletteQuery}
               onChange={(e) => { setPaletteQuery(e.target.value); setSelIndex(0); }}
               onKeyDown={(e) => {
-                const count = effectiveScope === "commands" || effectiveScope === "all" ? hits.length + fileHits.length : effectiveScope === "files" ? fileHits.length : searchHits.length;
+                const count = effectiveScope === "commands" || effectiveScope === "all" ? hits.length + fileHits.length : effectiveScope === "files" ? fileHits.length : effectiveScope === "recipes" ? recipeMatches.length : searchHits.length;
                 if (e.key === "ArrowDown") { e.preventDefault(); setSelIndex((i) => Math.min(Math.max(count - 1, 0), i + 1)); return; }
                 if (e.key === "ArrowUp") { e.preventDefault(); setSelIndex((i) => Math.max(0, i - 1)); return; }
                 if (e.key === "Tab") {
@@ -2072,10 +2163,20 @@ export default function App() {
                   } else if (effectiveScope === "search" && (searchHits[selIndex] ?? searchHits[0])) {
                     const s = (searchHits[selIndex] ?? searchHits[0]);
                     attachAgentContext(formatAgentContext({ kind: "search-hit", label: s.path, path: s.path, line: s.line }));
+                  } else if (effectiveScope === "recipes" && (recipeMatches[selIndex] ?? recipeMatches[0])) {
+                    const r = (recipeMatches[selIndex] ?? recipeMatches[0]);
+                    attachAgentContext(formatAgentContext({ kind: "recipe", label: r.name }));
                   }
                   return;
                 }
                 if (e.key !== "Enter") return;
+                if (effectiveScope === "recipes" && recipeMatches.length > 0 && !recipeBusy) {
+                  const r = recipeMatches[selIndex] ?? recipeMatches[0];
+                  setPaletteOpen(false);
+                  recordMetric("palette.select", `recipe:${r.name}`);
+                  void runRecipeByName(r.name);
+                  return;
+                }
                 if ((effectiveScope === "files" || effectiveScope === "all") && effectiveScope === "files" && fileHits.length > 0) {
                   const gl = parseGotoLine(effectiveQuery);
                   const top = (fileHits[selIndex] ?? fileHits[0]).path;
@@ -2198,10 +2299,58 @@ export default function App() {
                   </button>
                 ))}
               </>)}
-              {(effectiveScope === "symbols" || effectiveScope === "recipes" || effectiveScope === "settings" || effectiveScope === "turns" || effectiveScope === "tasks" || effectiveScope === "history") && (
+              {effectiveScope === "recipes" && (<>
+                {!recipeList && <div style={{ padding: 12, color: DIM }}>{t("palette.searching")}</div>}
+                {recipeList && !recipeList.found && (<>
+                  {recipeDetect && recipeDetect.proposal.length > 0 ? (
+                    <div style={{ padding: 12 }}>
+                      <div style={{ fontSize: 12, marginBottom: 6 }}>{t("recipe.detectHint")}</div>
+                      {recipeDetect.proposal.map((p) => (
+                        <div key={p.name} style={{ fontSize: 12, padding: "2px 0" }}>
+                          <span style={{ color: DIM, fontSize: 10 }}>[R▶]</span> {p.name} <span style={{ color: DIM }}>{p.kind} · {p.parse}</span>
+                        </div>
+                      ))}
+                      <button type="button" onClick={() => void createRecipesFile()} style={{ marginTop: 8, padding: "6px 12px", background: "#21262d", color: FG, border: `1px solid ${BORDER}`, borderRadius: 4, cursor: "pointer", font: "inherit", fontSize: 12 }}>
+                        {t("recipe.approveCreate")}
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ padding: 12, color: DIM, fontSize: 12 }}>{t("recipe.noProposal")}</div>
+                  )}
+                </>)}
+                {recipeList && recipeList.found && (<>
+                  {recipeList.errors.length > 0 && <div style={{ padding: "6px 10px", color: "#f85149", fontSize: 11 }}>{recipeList.errors[0]}</div>}
+                  {recipeMatches.length === 0 && <div style={{ padding: 12, color: DIM }}>{t("recipe.noMatch")}</div>}
+                  {recipeMatches.map((r) => {
+                    const run = recipeList.runs[r.name] ?? null;
+                    return (
+                      <button
+                        key={r.name}
+                        type="button"
+                        onClick={() => {
+                          setPaletteOpen(false);
+                          recordMetric("palette.select", `recipe:${r.name}`);
+                          void runRecipeByName(r.name);
+                        }}
+                        style={{
+                          display: "flex", gap: 8, width: "100%", textAlign: "left",
+                          padding: "6px 10px", background: "none", border: 0,
+                          borderBottom: "1px solid #21262d", color: FG,
+                          cursor: "pointer", font: "inherit",
+                        }}
+                      >
+                        <span style={{ color: DIM, fontSize: 10, flexShrink: 0 }} aria-hidden="true">[R▶]</span>
+                        <span style={{ flex: 1 }}>{recipeBusy === r.name ? `${r.name} …` : r.name}</span>
+                        <span style={{ color: DIM, fontSize: 10 }}>{r.kind}</span>
+                        <span style={{ color: run && !run.ok ? "#f85149" : DIM, fontSize: 10 }}>{recipeStatusText(run)}</span>
+                      </button>
+                    );
+                  })}
+                </>)}
+              </>)}
+              {(effectiveScope === "symbols" || effectiveScope === "settings" || effectiveScope === "turns" || effectiveScope === "tasks" || effectiveScope === "history") && (
                 <div style={{ padding: 12, color: DIM, fontSize: 12 }}>
                   {effectiveScope === "symbols" && t("palette.symbolsPending")}
-                  {effectiveScope === "recipes" && t("palette.recipesPending")}
                   {effectiveScope === "turns" && t("palette.turnsPending", { count: blocks.length })}
                   {effectiveScope === "tasks" && t("palette.tasksPending")}
                   {effectiveScope === "history" && t("palette.historyPending")}

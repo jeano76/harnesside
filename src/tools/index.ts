@@ -11,6 +11,7 @@ import { loadSkillBody } from "../skills/loader.js";
 import { loadSkillChecklist } from "../skills/checklist.js";
 import { runDelegation, formatDelegateResult, DEFAULT_DELEGATE_CONFIG } from "../delegate/delegate.js";
 import type { DelegateConfig } from "../delegate/delegate.js";
+import { RECIPE_FILE, DEFAULT_RECIPE_TIMEOUT_MS, loadRecipesFile, parseOutput } from "../recipes/recipes.js";
 
 
 /** Set once at startup from .harnesside/config.yaml (PROMPT.md new requirement:
@@ -164,6 +165,22 @@ export const TOOL_DEFS: ToolDef[] = [
         type: "object",
         properties: { command: { type: "string" } },
         required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_recipe",
+      description:
+        "Run a named verification recipe from .harnesside/recipes.yaml (test/build/lint/run). " +
+        "Prefer this over run_shell for verification — the recipe is the project's single agreed " +
+        "way to check, and the result comes back parsed (pass/fail counts and failure locations). " +
+        "Use run_shell only for one-off commands with no recipe.",
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
       },
     },
   },
@@ -371,7 +388,7 @@ class CappedOutput {
   }
 }
 
-interface ShellResult {
+export interface ShellResult {
   code: number | null;
   timedOut: boolean;
   stdout: string;
@@ -382,11 +399,13 @@ interface ShellResult {
  *  stdin is closed so a command waiting on input gets EOF instead of
  *  blocking until the timeout. On POSIX the command runs in its own
  *  process group, so a timeout also kills what it spawned (exec only
- *  killed the /bin/sh wrapper, leaving e.g. a hung test runner behind). */
-function runShell(command: string, cwd: string, timeoutMs: number): Promise<ShellResult> {
+ *  killed the /bin/sh wrapper, leaving e.g. a hung test runner behind).
+ *
+ *  U-6: 레시피 실행도 같은 함수다. 두 벌의 셸 실행기를 두지 않는다. */
+export function runShell(command: string, cwd: string, timeoutMs: number, env?: Record<string, string>): Promise<ShellResult> {
   return new Promise((resolve, reject) => {
     const posix = process.platform !== "win32";
-    const child = spawn(command, { cwd, shell: true, stdio: ["ignore", "pipe", "pipe"], detached: posix });
+    const child = spawn(command, { cwd, shell: true, stdio: ["ignore", "pipe", "pipe"], detached: posix, env: env ? { ...process.env, ...env } : undefined });
     const out = new CappedOutput();
     const err = new CappedOutput();
     child.stdout!.on("data", (c: Buffer) => out.push(c));
@@ -625,6 +644,32 @@ export async function executeTool(name: string, argsJson: string, projectRoot: s
       }
       if (r.code !== 0) throw new Error(`exit ${r.code ?? "?"}: ${body || "(no output)"}`);
       return { content: body || "(exit 0, no output)" };
+    }
+    case "run_recipe": {
+      // U-6: 이름 붙은 검증 실행. 레시피 파일이 없으면 "없다"고 말한다 (추측 실행 금지).
+      // 결과는 원문 + 파싱된 구조 (통과/실패 수 · 실패 위치).
+      const recipeName = (args.name as string | undefined)?.trim();
+      if (!recipeName) throw new Error("run_recipe needs a `name`");
+      let text: string;
+      try {
+        text = await readFile(join(projectRoot, RECIPE_FILE), "utf8");
+      } catch {
+        throw new Error(`no recipes file (${RECIPE_FILE}) — ask the user to create one from the detected proposal first`);
+      }
+      const { recipes, errors } = loadRecipesFile(text);
+      if (errors.length > 0) throw new Error(`recipes file invalid: ${errors[0]}`);
+      const def = recipes.find((r) => r.name === recipeName);
+      if (!def) throw new Error(`unknown recipe "${recipeName}" (available: ${recipes.map((r) => r.name).join(", ") || "none"})`);
+      const started = Date.now();
+      const r = await runShell(def.cmd, projectRoot, def.timeoutMs ?? DEFAULT_RECIPE_TIMEOUT_MS, def.env);
+      const body = [r.stdout, r.stderr].filter(Boolean).join("\n");
+      if (r.timedOut) {
+        throw new Error(`recipe "${recipeName}" timed out and was killed — not a pass${body ? `\n${body}` : ""}`);
+      }
+      const parsed = parseOutput(def.parse, body, r.code);
+      const head = `recipe "${recipeName}": ${r.code === 0 ? "PASS" : "FAIL"} in ${Date.now() - started}ms (exit ${r.code ?? "?"}, failed ${parsed.failed}${parsed.passed != null ? `, passed ${parsed.passed}` : ""})`;
+      const locs = parsed.failures.slice(0, 10).map((f) => `- ${f.file || "(unknown location)"}${f.line ? `:${f.line}` : ""} ${f.message}`.trim());
+      return { content: [head, body || "(no output)", ...locs].join("\n") };
     }
     case "browser_list_tabs":
       // Defensive: a disabled browser tool isn't in activeToolDefs(), so

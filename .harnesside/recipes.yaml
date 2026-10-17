@@ -1,0 +1,13 @@
+# U-6 검증 레시피 — 이 저장소 자체의 합의된 검증 방식.
+# 사람·에이전트·커밋 검사가 같은 것을 쓴다. 변경 시 리뷰 대상 (U-8).
+recipes:
+  - name: typecheck
+    cmd: npm run typecheck
+    kind: lint
+    parse: tsc
+    timeoutMs: 180000
+  - name: test
+    cmd: npm test
+    kind: test
+    parse: plain
+    timeoutMs: 300000

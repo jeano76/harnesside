@@ -1030,6 +1030,26 @@ const updates: UpdateService = new UpdateService({
             if (!r.available) return { available: false, reason: r.reason, locations: [] };
             return { available: true, locations: r.locations };
           })
+          // ── U-6 검증 레시피 ───────────────────────────────────────────────
+          // 레시피 파일이 없으면 found:false — "없음"이지 오류가 아니다.
+          // 생성(PUT)은 사용자가 감지 제안을 승인했을 때만 (추측 생성 금지).
+          .route("GET", "/api/recipes", async () => agent.listRecipes())
+          .route("GET", "/api/recipes/detect", async () => agent.detectRecipeProposal())
+          .route("PUT", "/api/recipes", async (c) => {
+            const body = (await readBody(c.req)) as { content?: string };
+            if (typeof body.content !== "string" || !body.content.trim()) {
+              throw Object.assign(new Error("content is required"), { status: 400 });
+            }
+            const r = await agent.saveRecipes(body.content);
+            if (r.errors.length > 0) throw Object.assign(new Error(`레시피 오류: ${r.errors[0]}`), { status: 400 });
+            return { ok: true };
+          })
+          .route("POST", "/api/recipes/run", async (c) => {
+            const body = (await readBody(c.req)) as { name?: string };
+            const name = String(body.name ?? "").trim();
+            if (!name) throw Object.assign(new Error("name is required"), { status: 400 });
+            return agent.runRecipe(name);
+          })
           // §5.5 계측. **계측하지 않는다** — 마지막 샘플만 돌려준다.
           .route("GET", "/api/metrics", () => ({
             latest: metrics.ring.latest,

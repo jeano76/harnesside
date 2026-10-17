@@ -29,6 +29,13 @@ import { join as joinPath } from "node:path";
 import { ensureArchiveWritable, newArchivePath, writeArchive } from "../compaction/archive.js";
 import { stripToolCallTemplateLeak } from "./textSanitize.js";
 import { salvagePartialFileWrite } from "./toolCallSalvage.js";
+import {
+  diffDiagnostics,
+  shouldSendDiagnosticFeedback,
+  formatDiagnosticsBlock,
+  formatDiagnosticFeedback,
+  type Diagnostic,
+} from "../recipes/diagnostics.js";
 import { existsSync } from "node:fs";
 import {
   ProgressTracker,
@@ -361,6 +368,11 @@ export interface AgentLoopOptions {
   autoResume?: boolean;
   /** 승인 게이트 — 파괴적 도구 호출을 통과시킨다. 없으면 게이트 없이 실행(테스트용). */
   approvalGate?: ApprovalGate | null;
+  /** U-7 증분 진단. 턴 시작 시 기준선·턴 끝 현재값을 같은 실행으로 돌려준다.
+   *  null이면 진단을 건너뛴다 (레시피 파일이 없을 때가 그렇다 — 비용 0). */
+  diagnostics?: { runAll(): Promise<Diagnostic[]> } | null;
+  /** U-7 턴 끝 진단 블록 — 사람에게 보이는 경로 (대화 안 블록, 패널 아님). */
+  onDiagnostics?: (text: string, newCount: number, preExistingCount: number) => void;
 }
 
 /**
@@ -420,6 +432,9 @@ export class AgentLoop {
   private estimateCallsFast = 0;
   /** Files touched via read_file/write_file/edit_file, most-recent status wins. */
   private filesTouched = new Map<string, Checkpoint["files"][number]["status"]>();
+  /** U-7: 이번 턴에 수정된 파일 + 시각. send() 시작에 리셋한다. 기준선이
+   *  수정보다 늦게 잡혔는지(오염) 판정하는 근거다. */
+  private turnModifiedAt: { path: string; at: number }[] = [];
   /** Fallback step history when the model never calls update_plan: every
    *  successfully executed tool call, in order. Bounded (see
    *  pushExecutedToolLog) — unbounded growth here doesn't cost request
@@ -637,6 +652,18 @@ export class AgentLoop {
       // repetitive-call detection window) restarts fresh every time.
       this.breaker.reset();
       this.progress.reset(this.now());
+      this.turnModifiedAt = [];
+      // U-7 기준선: 진단 실행자가 있으면 턴과 동시에 출발시킨다 (await는
+      // 파일이 실제로 수정됐을 때만 — 질문만 한 턴에 lint를 기다리지 않는다).
+      // 기준선이 수정보다 늦게 잡히면 오염으로 표시한다 (아래).
+      const diag = this.opts.diagnostics ?? null;
+      const baselineP: Promise<{ ds: Diagnostic[]; doneAt: number } | null> | null = diag
+        ? diag
+            .runAll()
+            // 벽시계 — this.now() 는 테스트 틱일 수 있다 (recordFileTouch 주석 참조).
+            .then((ds) => ({ ds, doneAt: Date.now() }))
+            .catch(() => null)
+        : null;
       // A compaction can also fire *mid-session* (not just be left over
       // from a previous process) and abandon work — e.g. mid-tool-call-loop
       // below. Previously that resume context only ever got folded in on a
@@ -649,8 +676,63 @@ export class AgentLoop {
       this.goal ??= userText.trim().slice(0, 200) || null;
       this.messages.push({ role: "user", content: userText });
       await this.runUntilIdle();
+      if (diag && baselineP) await this.finishTurnDiagnostics(diag, baselineP, 0);
       this.checkForRealtimeImprovementAfterTurn();
     });
+  }
+
+  /**
+   * U-7 턴 끝 증분 진단.
+   *
+   * - 이번 턴에 수정된 파일이 없으면 아무것도 하지 않는다 (기준선 실행은
+   *   버려진다 — 질문만 한 턴에 결과를 기다리지 않았으므로 비용은 동시 실행분뿐).
+   * - 기준선이 수정보다 늦게 잡혔으면(오염) 구분하지 않고 전체를 "미구분"으로
+   *   보고한다 — 새 문제 0개로 속이는 쪽이 더 나쁘다.
+   * - 새 문제가 있으면 한 번만 모델에 피드백하고 턴을 이어간다 (상한 1).
+   *   그래도 남으면 사람에게 블록으로 넘기고 끝낸다 (무한 재시도 금지).
+   */
+  private async finishTurnDiagnostics(
+    diag: { runAll(): Promise<Diagnostic[]> },
+    baselineP: Promise<{ ds: Diagnostic[]; doneAt: number } | null>,
+    feedbacksSent: number,
+  ): Promise<void> {
+    if (this.turnModifiedAt.length === 0) return;
+    const baseline = await baselineP;
+    if (!baseline) {
+      this.opts.onStatus?.("[diagnostics] 기준선 실행 실패 — 이번 턴 문제는 구분하지 않습니다");
+      return;
+    }
+    let current: Diagnostic[] | null = null;
+    try {
+      current = await diag.runAll();
+    } catch {
+      current = null;
+    }
+    if (!current) {
+      this.opts.onStatus?.("[diagnostics] 턴 끝 진단 실행 실패 — 이번 턴 문제는 구분하지 않습니다");
+      return;
+    }
+    const firstModAt = Math.min(...this.turnModifiedAt.map((m) => m.at));
+    if (baseline.doneAt > firstModAt) {
+      // 기준선이 수정 이후에 잡혔다 — 새 문제를 이미 포함할 수 있으므로
+      // "새 문제 0개"라고 말하지 않는다.
+      const text = [
+        `진단 기준선 오염 — 이번 턴 문제와 기존 문제를 구분할 수 없음 (전체 ${current.length}건)`,
+        ...current.slice(0, 10).map((d) => `- ${d.file || "(위치 모름)"}${d.line ? `:${d.line}` : ""} ${d.message}`),
+      ].join("\n");
+      this.opts.onDiagnostics?.(text, current.length, 0);
+      return;
+    }
+    const { newProblems, preExisting } = diffDiagnostics(baseline.ds, current);
+    if (newProblems.length === 0) return;
+    if (shouldSendDiagnosticFeedback(feedbacksSent)) {
+      this.messages.push({ role: "user", content: formatDiagnosticFeedback(newProblems) });
+      await this.runUntilIdle();
+      await this.finishTurnDiagnostics(diag, Promise.resolve(baseline), feedbacksSent + 1);
+      return;
+    }
+    const text = formatDiagnosticsBlock(newProblems, preExisting.length);
+    if (text) this.opts.onDiagnostics?.(text, newProblems.length, preExisting.length);
   }
 
   /** Fires the (fire-and-forget) real-time improvement check only after the
@@ -1565,6 +1647,11 @@ export class AgentLoop {
       // A file already marked "modified" stays "modified" even if later re-read.
       if (status === "read" && this.filesTouched.get(path) === "modified") return;
       this.filesTouched.set(path, status);
+      // U-7: 턴 끝 진단의 범위 근거. 시각은 벽시계(Date.now)로 남긴다 —
+      // this.now() 는 테스트에서 틱(호출마다 +45s)으로 주입되므로, 여기서
+      // 부르면 진행 가드의 시간을 앞당겨 턴이 일찍 멈춘다 (실측 회귀).
+      // 기준선 doneAt 과 같은 벽시계끼리 비교하므로 판정에 문제없다.
+      if (status === "modified") this.turnModifiedAt.push({ path, at: Date.now() });
     } catch {
       // malformed args — nothing to record
     }
