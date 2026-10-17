@@ -186,3 +186,14 @@ test("safety: 마스킹·루프 감지·요청 검증 단위", () => {
   assert.ok(hit);
   assert.equal(validateRequest({ task: TASK, files: ["src/a.ts"] }, "/w").ok, true);
 });
+
+test("X-8: 위임마다 index.jsonl 에 한 줄(상태·소요·크기·검증 결과)이 남는다", () =>
+  withProject(async (dir, script) => {
+    await runDelegation({ agent: "fake", task: TASK, files: ["a.ts"], verify: "check" }, dir, DEFAULT_DELEGATE_CONFIG, { agents: { fake: fake("ok", script) } });
+    const lines = (await readFile(join(dir, ".harnesside", "state", "delegations", "index.jsonl"), "utf8")).trim().split("\n");
+    assert.equal(lines.length, 1);
+    const row = JSON.parse(lines[0]);
+    assert.equal(row.status, "done");
+    assert.equal(row.verify.ok, true);
+    assert.ok(row.durationMs >= 0 && row.logBytes > 0 && row.summaryBytes > 0);
+  }));
