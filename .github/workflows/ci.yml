@@ -407,7 +407,7 @@ jobs:
           done
           curl -sf --max-time 3 http://127.0.0.1:9222/json/version > /dev/null || {
             echo "Chrome CDP 가 열리지 않았다"; tail -40 /tmp/window.log; exit 1; }
-          grep -q 'Chrome 기동' /tmp/window.log || { echo "Chrome 기동 단계 로그가 없다"; tail -30 /tmp/window.log; exit 1; }
+          grep -qE 'Start Chrome|Chrome 기동' /tmp/window.log || { echo "Chrome 기동 단계 로그가 없다"; tail -30 /tmp/window.log; exit 1; }
 
       - name: 창 내용 검증 (verify-window)
         run: node scripts/verify-window.mjs
