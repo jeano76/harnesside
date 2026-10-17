@@ -10,7 +10,7 @@
 import { spawn, execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { LoopDetector, redactSecrets, validateRequest, type DelegateRequest } from "./safety.js";
@@ -187,7 +187,7 @@ function runVerify(root: string, cmd: { cmd: string; args: string[] }, timeoutMs
   });
 }
 
-export async function runDelegation(
+async function runDelegationInner(
   req: DelegateInput,
   root: string,
   cfg: DelegateConfig = DEFAULT_DELEGATE_CONFIG,
@@ -334,4 +334,34 @@ export async function runDelegation(
 
 export function formatDelegateResult(r: DelegateResult): string {
   return JSON.stringify(r, null, 2);
+}
+
+/** X-8: 위임마다 index.jsonl 한 줄. 기록 실패가 위임 결과를 바꾸지 않는다. */
+export async function runDelegation(
+  req: DelegateInput,
+  root: string,
+  cfg: DelegateConfig = DEFAULT_DELEGATE_CONFIG,
+  deps: DelegateDeps = {}
+): Promise<DelegateResult> {
+  const r = await runDelegationInner(req, root, cfg, deps);
+  try {
+    const logBytes = r.logPath ? (await stat(r.logPath).catch(() => ({ size: 0 }))).size : 0;
+    const line = JSON.stringify({
+      at: new Date().toISOString(),
+      agent: req.agent ?? cfg.agent,
+      task: req.task.trim().slice(0, 120),
+      durationMs: r.durationMs,
+      summaryBytes: Buffer.byteLength(r.summary, "utf8"),
+      logBytes,
+      verify: r.verify ? { recipe: r.verify.recipe, ok: r.verify.ok } : null,
+      outOfScope: r.outOfScope.length,
+      status: r.status,
+    });
+    const dir = join(root, ".harnesside", "state", "delegations");
+    await mkdir(dir, { recursive: true });
+    await appendFile(join(dir, "index.jsonl"), `${line}\n`, "utf8");
+  } catch {
+    /* 기록은 부가 기능 */
+  }
+  return r;
 }
