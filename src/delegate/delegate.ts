@@ -25,25 +25,27 @@ export interface AgentSpec {
   name: string;
   bin: string;
   /** 프롬프트(작업 명세 경로를 가리킨다)로 argv 를 만든다. 출력은 stream-json 한 줄씩이어야 한다. */
-  buildArgs(o: { prompt: string; maxBudgetUsd: number | null }): string[];
+  buildArgs(o: { prompt: string; maxBudgetUsd: number | null; readOnly?: boolean }): string[];
 }
 
 /** Claude Code 비대화형. 편집은 자동 승인하되(작업 디렉터리 안), 셸은 검증·읽기 명령만, push·삭제·설치는 막는다(P6). */
 export const CLAUDE_SPEC: AgentSpec = {
   name: "claude",
   bin: "claude",
-  buildArgs: ({ prompt, maxBudgetUsd }) => [
+  buildArgs: ({ prompt, maxBudgetUsd, readOnly }) => [
     "-p",
     prompt,
     "--output-format",
     "stream-json",
     "--verbose",
     "--permission-mode",
-    "acceptEdits",
+    readOnly ? "default" : "acceptEdits",
     "--allowedTools",
-    "Read,Edit,Write,Glob,Grep,Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(npm run:*),Bash(npm test:*),Bash(npx tsc:*),Bash(node --test:*)",
+    readOnly
+      ? "Read,Glob,Grep,Bash(git diff:*),Bash(git status:*),Bash(git log:*)"
+      : "Read,Edit,Write,Glob,Grep,Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(npm run:*),Bash(npm test:*),Bash(npx tsc:*),Bash(node --test:*)",
     "--disallowedTools",
-    "Bash(git push:*),Bash(rm:*),Bash(npm install:*),Bash(npm i:*),Bash(curl:*),Bash(wget:*),WebFetch",
+    `${readOnly ? "Edit,Write,NotebookEdit," : ""}Bash(git push:*),Bash(rm:*),Bash(npm install:*),Bash(npm i:*),Bash(curl:*),Bash(wget:*),WebFetch`,
     "--no-session-persistence",
     ...(maxBudgetUsd !== null ? ["--max-budget-usd", String(maxBudgetUsd)] : []),
   ],
@@ -91,6 +93,8 @@ export interface DelegateResult {
 export interface DelegateInput extends DelegateRequest {
   /** 도구 계층이 `load_skill(checklist)` 로 만들어 넘긴다. */
   skillChecklists?: { name: string; text: string }[];
+  /** "review": 읽기 전용 리뷰(X-4 5단계). 구현한 모델과 다른 모델이 diff 를 읽고 지적만 한다. */
+  mode?: "implement" | "review";
 }
 
 export interface DelegateDeps {
@@ -210,7 +214,8 @@ async function runDelegationInner(
     await mkdir(dir, { recursive: true });
     const taskPath = join(dir, "task.md");
     const logPath = join(dir, "log.txt");
-    const goal = req.task.trim();
+    const review = req.mode === "review";
+    const goal = review ? `${req.task.trim()}\n\n[읽기 전용 리뷰] 파일을 수정하지 마라. 문제점(버그·누락·범위 밖 변경)만 근거와 함께 보고하라.` : req.task.trim();
     await writeFile(
       taskPath,
       buildTaskMd({ goal, criteria: req.verify ? [`\`${req.verify}\` 가 성공(exit 0)`] : [], files: check.files, skillChecklists: req.skillChecklists ?? [] }),
@@ -219,7 +224,7 @@ async function runDelegationInner(
 
     const before = await snapshotChanges(root);
     const prompt = `작업 명세는 ${taskPath} 에 있다. 먼저 그 파일을 읽고 지시를 정확히 따르라. 대화 없이 끝까지 수행하고, 마지막에 명세의 '최종 출력 형식'만 출력하라.`;
-    const child = spawn(spec.bin, spec.buildArgs({ prompt, maxBudgetUsd: cfg.maxBudgetUsd }), {
+    const child = spawn(spec.bin, spec.buildArgs({ prompt, maxBudgetUsd: cfg.maxBudgetUsd, readOnly: review }), {
       cwd: root, // P6: 작업 디렉터리를 워크스페이스 루트로 고정
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
@@ -312,6 +317,12 @@ async function runDelegationInner(
     }
     if (!block) {
       return { ...base, status: "malformed", verify: null, summary: clipBytes(`최종 STATUS 블록이 없다 — 성공으로 치지 않는다. 마지막 출력: ${text.slice(-600)}`, SUMMARY_MAX_BYTES) };
+    }
+    if (review && changedFiles.length > 0) {
+      return { ...base, status: "error", verify: null, summary: clipBytes(`읽기 전용 리뷰인데 파일이 바뀌었다: ${changedFiles.join(", ")} — 결과를 믿지 말고 git diff 로 확인·복원하라.`, SUMMARY_MAX_BYTES) };
+    }
+    if (review && block.status === "done") {
+      return { ...base, status: "done", verify: null, summary: clipBytes(`${block.body}\n[리뷰: 코드는 바뀌지 않았다]`, SUMMARY_MAX_BYTES) };
     }
     if (block.status !== "done") {
       return { ...base, status: block.status, verify: null, summary: clipBytes(block.body, SUMMARY_MAX_BYTES) };

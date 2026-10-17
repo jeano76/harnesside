@@ -290,6 +290,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "스킬은 load_skill(이름) 체크리스트로만 쓰세요. 본문 전체가 필요하면 delegate 에 skills 로 넘기세요.",
     "\"고쳤다/통과했다\"는 run_recipe 결과가 있을 때만 말하세요. 없으면 \"미검증\"이라고 쓰세요.",
     "버그는 재현 테스트부터. 요청과 무관한 줄은 바꾸지 마세요.",
+    "큰 변경을 끝낸 뒤 자기 코드의 리뷰는 delegate(mode: \"review\") 로 다른 모델에게 맡기세요. 리뷰는 읽기 전용입니다.",
   ];
   const rules = input.ruleFiles ?? [];
   if (rules.length === 0) {
