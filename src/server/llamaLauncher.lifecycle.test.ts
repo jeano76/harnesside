@@ -223,3 +223,57 @@ test("스폰 실패면 **헬스체크를 기다리지 않는다** — 120초를 
   // **기본값(120초)을 넘겨 기다리지 않는다.** 사용자는 왜 안 뜨는지 알 수 없다.
   assert.ok(took < 2_000, `바이너리 없는데 ${took}ms 를 기다렸다`);
 });
+
+test("자동 재기동 — 예기치 않게 죽으면 한도 안에서 다시 띄우고, 한도를 넘으면 포기한다", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-restart-"));
+  const bin = join(dir, "llama-dies.sh");
+  const counter = join(dir, "spawns");
+  // 매 기동마다 줄을 하나 남기고 150ms 뒤 스스로 죽는다.
+  await writeFile(bin, `#!/bin/sh\necho x >> ${counter}\nsleep 0.15\nexit 1\n`, "utf8");
+  await chmod(bin, 0o755);
+  const restarts: number[] = [];
+  let gaveUp = "";
+  const launcher = new LlamaLauncher(
+    {
+      binPath: bin, modelPath: "/m.gguf", host: "127.0.0.1", port: port(), tuning: {} as never,
+      autoRestart: { maxRestarts: 2, windowMs: 60_000, minUptimeMs: 50, backoffMs: [10] },
+    },
+    { events: { onRestart: (i) => restarts.push(i.attempt), onRestartGaveUp: (i) => (gaveUp = i.reason) } }
+  );
+  try {
+    launcher.spawn();
+    for (let i = 0; i < 100 && !gaveUp; i++) await new Promise((r) => setTimeout(r, 50));
+    const { readFile } = await import("node:fs/promises");
+    const spawns = (await readFile(counter, "utf8")).trim().split("\n").length;
+    assert.deepEqual(restarts, [1, 2]);
+    assert.equal(spawns, 3, "최초 1회 + 재기동 2회, 동시에 둘이 뜨지 않는다");
+    assert.match(gaveUp, /재기동했는데 또 종료/);
+    assert.equal(launcher.restarting, false);
+  } finally {
+    await launcher.stop(100);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("자동 재기동 — 기동 직후(minUptime 미만) 죽으면 재기동하지 않고, stop() 이후에도 하지 않는다", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "harnesside-restart-"));
+  const bin = join(dir, "llama-fails.sh");
+  await writeFile(bin, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(bin, 0o755);
+  let restarted = 0;
+  let gaveUp = "";
+  const launcher = new LlamaLauncher(
+    { binPath: bin, modelPath: "/m.gguf", host: "127.0.0.1", port: port(), tuning: {} as never,
+      autoRestart: { maxRestarts: 3, windowMs: 60_000, minUptimeMs: 5_000, backoffMs: [10] } },
+    { events: { onRestart: () => restarted++, onRestartGaveUp: (i) => (gaveUp = i.reason) } }
+  );
+  try {
+    launcher.spawn();
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(restarted, 0);
+    assert.match(gaveUp, /기동 실패/);
+  } finally {
+    await launcher.stop(100);
+    await rm(dir, { recursive: true, force: true });
+  }
+});

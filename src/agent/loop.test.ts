@@ -1109,6 +1109,75 @@ test("compact()'s own summary request reports [compaction failed] (not silently 
     assert.ok(statusMessages.some((s) => s.includes("[compaction failed]")));
   }));
 
+test("compaction failure against a dead backend reports the server-down reason (no retries)", () =>
+  withTempProject(async (dir) => {
+    clearFailureLog();
+    setCompactionRetryBackoffMsForTests([0, 0, 0]);
+    let summaryCallCount = 0;
+    const reasons: (string | undefined)[] = [];
+    const backend: ModelBackend = {
+      async chat(req: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+        if (!req.tools) {
+          summaryCallCount++;
+          throw new Error("request to http://127.0.0.1:8080/v1/chat/completions failed, reason: connect ECONNREFUSED 127.0.0.1:8080");
+        }
+        return { choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }] };
+      },
+      async listModels() {
+        return [];
+      },
+      async tokenize() {
+        return 99;
+      },
+    };
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100, fastPathInputTokens: 0 },
+      onCompactionStatus: (st, _at, reason) => {
+        if (st === "failed") reasons.push(reason);
+      },
+    });
+    await assert.doesNotReject(() => loop.send("do something"));
+    assert.equal(summaryCallCount, 1, "a refused connection is not retried");
+    assert.match(reasons[0] ?? "", /llama-server.*not responding/);
+  }));
+
+test("compaction is skipped with a reason, without any summary request, when isBackendAlive() is false", () =>
+  withTempProject(async (dir) => {
+    clearFailureLog();
+    let summaryCallCount = 0;
+    const reasons: (string | undefined)[] = [];
+    const backend: ModelBackend = {
+      async chat(req: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+        if (!req.tools) summaryCallCount++;
+        return { choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }] };
+      },
+      async listModels() {
+        return [];
+      },
+      async tokenize() {
+        return 99;
+      },
+    };
+    const loop = new AgentLoop({
+      projectRoot: dir,
+      model: "m",
+      backend,
+      systemPrompt: "sys",
+      thresholds: { autoTriggerRatio: 0.5, contextWindowTokens: 100, fastPathInputTokens: 0 },
+      isBackendAlive: () => false,
+      onCompactionStatus: (st, _at, reason) => {
+        if (st === "failed") reasons.push(reason);
+      },
+    });
+    await assert.doesNotReject(() => loop.send("do something"));
+    assert.equal(summaryCallCount, 0);
+    assert.match(reasons[0] ?? "", /llama-server.*not running/);
+  }));
+
 test("a context-overflow error that persists even after tightening the kept-context budget down to the floor is reported, not retried forever", () =>
   withTempProject(async (dir) => {
     let turnCallCount = 0;

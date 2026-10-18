@@ -22,6 +22,20 @@ export interface LlamaLaunchOptions {
   /** §4.6 — 브라우저가 예약한 VRAM MiB. rationale 에 남고 로그로도 보인다. */
   browserReserveMiB?: number;
   gpuMode?: string;
+  /**
+   * 예상 밖으로 죽으면 같은 설정으로 다시 띄운다. 꺼 두면(기본) 예전처럼 알리기만 한다.
+   * 죽은 프로세스의 `exit` 를 확인한 **뒤에만** 다시 스폰하므로 두 서버가 동시에 뜨지 않는다
+   * (8 GiB VRAM 에서 두 번째 서버는 즉시 OOM — 측정됨).
+   */
+  autoRestart?: {
+    /** `windowMs` 안에서 허용하는 재기동 횟수. 넘으면 포기하고 알린다(재기동 루프 방지). */
+    maxRestarts: number;
+    windowMs: number;
+    /** 이보다 짧게 살다 죽으면 "기동 실패"로 보고 재기동하지 않는다. */
+    minUptimeMs: number;
+    /** n번째 재기동 전 대기(ms). 마지막 값을 반복한다. */
+    backoffMs: number[];
+  };
 }
 
 export interface BuiltArgs {
@@ -134,6 +148,9 @@ export interface LlamaLauncherEvents {
   /** 자식 프로세스의 한 줄 로그(§5.12 의 `source: "llama"`). */
   onLine?: (line: string, stream: "stdout" | "stderr") => void;
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
+  /** 자동 재기동 직전·포기 시점 알림. */
+  onRestart?: (info: { attempt: number; max: number; delayMs: number; code: number | null; signal: NodeJS.Signals | null }) => void;
+  onRestartGaveUp?: (info: { reason: string; code: number | null; signal: NodeJS.Signals | null }) => void;
   /** 스폰 자체가 실패했을 때(바이너리 없음·권한 없음). 조용히 넘기면 사용자가 모른다. */
   onSpawnError?: (err: Error) => void;
 }
@@ -141,6 +158,10 @@ export interface LlamaLauncherEvents {
 export class LlamaLauncher {
   private proc: ChildProcess | null = null;
   private stopping = false;
+  private startedAt = 0;
+  private restartTimes: number[] = [];
+  private restartTimer: NodeJS.Timeout | null = null;
+  private _restarting = false;
   /**
    * 스폰 자체가 실패한 원인(ENOENT 등).
    *
@@ -160,6 +181,11 @@ export class LlamaLauncher {
     return `http://${this.opts.host}:${this.opts.port}`;
   }
 
+  /** 죽은 뒤 재기동 대기·진행 중인지. 이때 pid 가 없어도 "죽음"이 아니다. */
+  get restarting(): boolean {
+    return this._restarting;
+  }
+
   get pid(): number | undefined {
     return this.proc?.pid;
   }
@@ -173,6 +199,7 @@ export class LlamaLauncher {
     if (this.proc) return this.build();
     const { args } = this.build();
     // stdio 는 파이프: 자식 로그를 줄 단위로 로그 패널에 tee 한다(§5.12).
+    this.startedAt = Date.now();
     this.proc = spawn(this.opts.binPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
       detached: false, // 부모 종료 시 함께 정리된다(§2.2)
@@ -214,9 +241,38 @@ export class LlamaLauncher {
       this.deps.events?.onExit?.(code, signal);
       this.deps.logger?.info({ code, signal, stopping: this.stopping }, "llama-server 종료됨");
       this.proc = null;
+      this.maybeRestart(code, signal, Date.now() - this.startedAt);
     });
     this.deps.logger?.info({ bin: this.opts.binPath, args }, "llama-server 스폰");
     return this.build();
+  }
+
+  private maybeRestart(code: number | null, signal: NodeJS.Signals | null, uptimeMs: number): void {
+    const cfg = this.opts.autoRestart;
+    if (!cfg || this.stopping) return;
+    const giveUp = (reason: string) => {
+      this._restarting = false;
+      this.deps.logger?.error({ reason }, "llama-server 자동 재기동 포기");
+      this.deps.events?.onRestartGaveUp?.({ reason, code, signal });
+    };
+    if (uptimeMs < cfg.minUptimeMs) return giveUp(`기동 ${Math.round(uptimeMs / 1000)}초 만에 종료 — 기동 실패로 보고 재기동하지 않습니다`);
+    const now = Date.now();
+    this.restartTimes = this.restartTimes.filter((t) => now - t < cfg.windowMs);
+    if (this.restartTimes.length >= cfg.maxRestarts) {
+      return giveUp(`${Math.round(cfg.windowMs / 60000)}분 안에 ${cfg.maxRestarts}번 재기동했는데 또 종료됨`);
+    }
+    const attempt = this.restartTimes.length + 1;
+    this.restartTimes.push(now);
+    const delayMs = cfg.backoffMs[Math.min(attempt - 1, cfg.backoffMs.length - 1)] ?? 0;
+    this._restarting = true;
+    this.deps.events?.onRestart?.({ attempt, max: cfg.maxRestarts, delayMs, code, signal });
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.stopping || this.proc) return;
+      this.spawn();
+      this._restarting = false;
+    }, delayMs);
+    this.restartTimer.unref?.();
   }
 
   /** 스폰이 실패했으면 그 원인. 없으면 null — "실패하지 않았다" 와 "시도 안 했다" 를 구분한다. */
@@ -260,9 +316,14 @@ export class LlamaLauncher {
 
   /** SIGTERM → 5초 대기 → SIGKILL (§4.4). */
   async stop(graceMs = 5000): Promise<void> {
+    this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this._restarting = false;
     const p = this.proc;
     if (!p) return;
-    this.stopping = true;
     const pid = p.pid;
     if (pid) {
       try {

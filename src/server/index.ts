@@ -512,6 +512,12 @@ const updates: UpdateService = new UpdateService({
       void session.saveNow();
     },
     logger: (l) => emit(l),
+    isBackendAlive: () => {
+      if (!boot) return true; // 부팅 중 — 아직 없을 뿐 죽은 게 아니다
+      if (boot.ports?.adopted) return isAdoptedLlamaAlive();
+      return !!launcher?.pid;
+    },
+    onCompactionFailed: (reason) => ring.error("compaction", `컴팩션 실패: ${reason}`, "server", { reason }),
     diff: (path, diff) => {
       // 도구 계층이 주는 diff 는 **ANSI 색이 들어 있다**(UI 전용이라고 명시돼 있다).
       // 색 제어문자를 그대로 WS 로 흘리면 웹이 이스케이프를 문자 그대로 화면에 찍는다 —
@@ -1953,7 +1959,7 @@ const cdpPort = cdpEnv !== undefined && cdpEnv.trim() !== "" ? Number(cdpEnv) : 
           isLlamaAlive: () => {
             if (!boot) return true; // 아직 부팅 중 — 자식이 아직 없을 뿐 죽은 게 아니다
             if (boot.ports?.adopted) return isAdoptedLlamaAlive();
-            return !!launcher?.pid;
+            return !!launcher?.pid || !!launcher?.restarting;
           },
           isChromeAlive: () => !!browser?.pid,
           // **"못 띄움" 과 "닫힘" 은 다른 사실이다.** 띄우려 했으나 실패한 상태를
@@ -2045,6 +2051,7 @@ const cdpPort = cdpEnv !== undefined && cdpEnv.trim() !== "" ? Number(cdpEnv) : 
       tuning,
       browserReserveMiB: boot.gpu?.reserveMiB,
       gpuMode: boot.gpu?.mode,
+      autoRestart: { maxRestarts: 3, windowMs: 10 * 60_000, minUptimeMs: 10_000, backoffMs: [2_000, 5_000, 15_000] },
     },
     {
       logger: {
@@ -2059,6 +2066,10 @@ const cdpPort = cdpEnv !== undefined && cdpEnv.trim() !== "" ? Number(cdpEnv) : 
           // 헬스체크 실패의 "왜"(Q-5) — 원인이 담긴 줄은 거의 항상 stderr 의 오류 줄이다.
           if (stream === "stderr" || /error|fail|oom|abort|bind|address/i.test(line)) lastLlamaErr = line;
         },
+        onRestart: ({ attempt, max, delayMs, code, signal }) =>
+          ring.warn("lifecycle", `llama-server 가 예기치 않게 종료되어 ${delayMs / 1000}초 뒤 다시 띄웁니다 (${attempt}/${max})`, "server", { code, signal, lastErr: lastLlamaErr }),
+        onRestartGaveUp: ({ reason, code, signal }) =>
+          ring.error("lifecycle", `llama-server 자동 재기동을 포기했습니다 — ${reason}`, "server", { code, signal, lastErr: lastLlamaErr }),
       },
     }
   );

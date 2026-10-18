@@ -67,6 +67,8 @@ export interface AgentEvent {
     keptTokens?: number;
     summary?: string;
     droppedPreview?: string[];
+    /** `failed` 일 때 사람이 읽는 실패 사유 (서버 종료 등). */
+    reason?: string;
   };
   at?: number;
 }
@@ -140,6 +142,10 @@ export interface AgentServiceOptions {
    */
   thresholds?: CompactionThresholds | (() => CompactionThresholds);
   logger?: (line: string) => void;
+  /** 모델 서버가 살아 있는지 — false 면 컴팩션이 요약 요청을 건너뛰고 사유를 알린다. */
+  isBackendAlive?: () => boolean;
+  /** 컴팩션 실패 사유 — 영구 로그(server.ndjson)용. */
+  onCompactionFailed?: (reason: string) => void;
   /** 턴이 끝났을 때(성공/실패/취소 무관) — 세션 저장 훅이 이걸 듣는다(§5.10). */
   onTurnEnd?: (s: TurnState) => void;
   now?: () => number;
@@ -502,10 +508,12 @@ export class AgentService {
       },
       onStatus: (status) => this.emit({ type: "agent.status", text: status, at: now() }),
       onPlanProgress: (done, total) => this.emit({ type: "agent.status", text: `Plan ${done}/${total}`, at: now() }),
-      onCompactionStatus: (s) => {
+      isBackendAlive: this.opts.isBackendAlive,
+      onCompactionStatus: (s, _at, reason) => {
+        if (s === "failed") this.opts.onCompactionFailed?.(reason ?? "unknown");
         // 시작·진행을 전용 이벤트로도 흘린다 — 상태 줄 텍스트만으로는
         // "지금 압축 중인가 끝났나" 를 화면이 알 수 없다.
-        this.emit({ type: "agent.compaction", compaction: { phase: s }, at: now() });
+        this.emit({ type: "agent.compaction", compaction: { phase: s, ...(reason ? { reason } : {}) }, at: now() });
         this.emit({ type: "agent.status", text: `Compaction ${s}`, at: now() });
       },
       onCompactionDetail: (d: CompactionDetail) => {

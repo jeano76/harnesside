@@ -154,7 +154,7 @@ export function startWatchdog(deps: WatchdogDeps): Watchdog {
           "lifecycle",
           "llama-server 가 종료되었습니다. 모델 응답이 없습니다. 창은 계속 사용할 수 있습니다(요구 9).",
           "server",
-          { autoRestart: false, why: "VRAM 8 GiB 환경에서 두 번째 서버를 띄우면 즉시 OOM 합니다(측정됨)" }
+          { autoRestart: false, why: "자동 재기동 한도를 넘었거나 재기동 대상이 아닙니다(채택한 서버·기동 직후 종료). 두 번째 서버를 동시에 띄우면 8 GiB VRAM 에서 OOM 합니다(측정됨)" }
         );
       }
     } else {

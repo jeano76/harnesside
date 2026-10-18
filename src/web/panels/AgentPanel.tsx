@@ -167,6 +167,7 @@ export interface CompactionView {
   keptTokens?: number;
   summary?: string;
   droppedPreview?: string[];
+  reason?: string;
 }
 
 function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: () => void }) {
@@ -184,7 +185,7 @@ function CompactionBanner({ info, onClose }: { info: CompactionView; onClose: ()
     return (
       <div role="alert" style={{ display: "flex", gap: 6, alignItems: "center", padding: "3px 8px", fontSize: 11, color: "#f85149", borderBottom: "1px solid #30363d" }}>
         <span aria-hidden="true">✗</span>
-        <span style={{ flex: 1 }}>{t("compaction.failed")}</span>
+        <span style={{ flex: 1 }}>{t("compaction.failed")}{info.reason ? ` (${info.reason})` : ""}</span>
         <button type="button" onClick={onClose} aria-label={t("compaction.dismiss")} style={{ background: "none", border: 0, color: "#6e7681", cursor: "pointer", font: "inherit" }}>✕</button>
       </div>
     );

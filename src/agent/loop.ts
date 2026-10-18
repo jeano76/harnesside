@@ -171,6 +171,14 @@ export function setCompactionRetryBackoffMsForTests(backoffMs: number[]): void {
   COMPACTION_RETRY_BACKOFF_MS = backoffMs;
 }
 
+/** Connection-level failures: nothing is listening (llama-server died or was
+ *  never up). Unlike a timeout from a busy slot, waiting won't help. */
+export function isBackendUnreachable(err: { message?: string; code?: string; cause?: { code?: string } }): boolean {
+  const code = err.code ?? err.cause?.code ?? "";
+  return /^(ECONNREFUSED|ECONNRESET|EPIPE|ENOTFOUND|EHOSTUNREACH)$/.test(code) ||
+    /ECONNREFUSED|ECONNRESET|socket hang up|fetch failed|Premature close/i.test(err.message ?? "");
+}
+
 export function summarizeErrorForDisplay(message: string, maxLen = 300): string {
   if (message.length <= maxLen) return message;
   const omitted = message.length - maxLen;
@@ -342,7 +350,10 @@ export interface AgentLoopOptions {
    *  Meant for a persistent indicator (the status bar) that survives
    *  exactly that kind of scroll, the same reasoning behind
    *  `onPlanProgress`. */
-  onCompactionStatus?: (status: "running" | "complete" | "failed", timestamp: string) => void;
+  onCompactionStatus?: (status: "running" | "complete" | "failed", timestamp: string, reason?: string) => void;
+  /** Cheap liveness check for the model server. When it reports false,
+   *  compaction skips the summary request (it can only fail) and says why. */
+  isBackendAlive?: () => boolean;
   /** Fires once per successful compaction with what was actually dropped
    *  vs kept/summarized — lets the UI show compaction's before/after
    *  instead of it being a black box. */
@@ -1255,7 +1266,11 @@ export class AgentLoop {
         // with no .harnesside/config.yaml (falls back to an unreachable
         // default backend URL): report it and end the turn gracefully so
         // the user can fix config/connectivity and try again.
-        this.opts.onStatus?.(`[error] couldn't reach the model backend: ${summarizeErrorForDisplay(err.message)}`);
+        const serverDown = this.opts.isBackendAlive ? !this.opts.isBackendAlive() : false;
+        this.opts.onStatus?.(
+          `[error] couldn't reach the model backend: ${summarizeErrorForDisplay(err.message)}` +
+          (serverDown ? " — the model server (llama-server) is not running; restart it and try again." : "")
+        );
         logFailure({
           timestamp: new Date().toISOString(),
           summary: "backend chat request failed",
@@ -2067,6 +2082,14 @@ export class AgentLoop {
     // 1단계(규칙, 0초): 오래된 도구 출력을 자리표시자로 바꾼다 — 필요한 만큼만, 원문은 보관하고.
     // 충분하면 요약을 아예 생략하고, 부족하면 마스킹된(=더 작은) 대화를 아래 요약 경로에 넘긴다.
     if (await this.ruleBasedCompaction(reason, partial)) return;
+    if (this.opts.isBackendAlive && !this.opts.isBackendAlive()) {
+      const why = "model server (llama-server) is not running — compaction skipped; restart it to resume";
+      this.opts.onStatus?.(`[compaction failed] ${why} — checkpoint was saved; continuing with the current context.`);
+      this.opts.onCompactionStatus?.("failed", new Date().toISOString(), why);
+      logFailure({ timestamp: new Date().toISOString(), summary: "compaction skipped: backend down", toolName: "compact", errorMessage: why });
+      this.hasNewFailuresThisTurn = true;
+      return;
+    }
     // The compaction summary request is a chat() call like any other, so it
     // can hit the exact same two transient, non-deterministic backend
     // failures the main turn loop already retries once (connection timeout
@@ -2151,10 +2174,14 @@ export class AgentLoop {
         // (runCompaction writes it before making the summary request), so
         // nothing is lost — just don't crash, and don't pretend the
         // conversation was compacted when it wasn't.
+        const unreachable = isBackendUnreachable(err);
+        const reason = unreachable
+          ? `model server (llama-server) is not responding — it has likely exited: ${summarizeErrorForDisplay(err.message, 160)}`
+          : summarizeErrorForDisplay(err.message, 160);
         this.opts.onStatus?.(
-          `[compaction failed] ${summarizeErrorForDisplay(err.message)} — checkpoint was saved, but the conversation wasn't summarized; continuing with the current context.`
+          `[compaction failed] ${unreachable ? reason : summarizeErrorForDisplay(err.message)} — checkpoint was saved, but the conversation wasn't summarized; continuing with the current context.`
         );
-        this.opts.onCompactionStatus?.("failed", new Date().toISOString());
+        this.opts.onCompactionStatus?.("failed", new Date().toISOString(), reason);
         logFailure({
           timestamp: new Date().toISOString(),
           summary: "compaction summary request failed",

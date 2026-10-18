@@ -301,7 +301,7 @@ export default function App() {
   /** 실행 중 들어온 입력의 대기열 — 서버 `agent.queue` 이벤트를 그대로 보여준다. */
   const [queueItems, setQueueItems] = useState<string[]>([]);
   /** 압축 진행·결과 — 서버 `agent.compaction` 이벤트. null이면 숨김. */
-  const [compaction, setCompaction] = useState<{ phase: "running" | "complete" | "failed"; droppedCount?: number; droppedTokens?: number; keptCount?: number; keptTokens?: number; summary?: string; droppedPreview?: string[] } | null>(null);
+  const [compaction, setCompaction] = useState<{ phase: "running" | "complete" | "failed"; droppedCount?: number; droppedTokens?: number; keptCount?: number; keptTokens?: number; summary?: string; droppedPreview?: string[]; reason?: string } | null>(null);
   /** §7.4 진행 중인 다운로드 목록(WS 로 온다). */
   const [downloads, setDownloads] = useState<{ id: string; file: string; state: string; progress: number; totalBytes: number; receivedBytes: number; error: string | null }[]>([]);
   /** 복원했음을 사용자에게 **한 번** 말한다 — 조용히 복원되면 "왜 대화가 있지?" 가 된다. */
@@ -1142,7 +1142,7 @@ export default function App() {
           }
           if (evType === "agent.compaction") {
             // 압축 진행·결과도 UI 상태다. 블록으로 쌓으면 요약이 대화를 오염시킨다.
-            const c = ev.compaction as { phase?: string; droppedCount?: number; droppedTokens?: number; keptCount?: number; keptTokens?: number; summary?: string; droppedPreview?: string[] } | undefined;
+            const c = ev.compaction as { phase?: string; droppedCount?: number; droppedTokens?: number; keptCount?: number; keptTokens?: number; summary?: string; droppedPreview?: string[]; reason?: string } | undefined;
             if (c && (c.phase === "running" || c.phase === "complete" || c.phase === "failed")) {
               setCompaction({ ...c, phase: c.phase });
             }
