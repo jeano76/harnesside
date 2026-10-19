@@ -1,7 +1,7 @@
 import type { ChatMessage, ToolDef } from "../backend/types.js";
 import type { ModelBackend } from "../backend/types.js";
 import { Checkpoint, readCheckpoint, writeCheckpoint } from "./checkpoint.js";
-import { readNotes } from "./notes.js";
+import { readNotes, annotateStaleNotes } from "./notes.js";
 import { messagesToEntries, newArchivePath, writeArchive } from "./archive.js";
 
 export interface CompactionThresholds {
@@ -781,7 +781,15 @@ export function extractUserRequests(dropped: ChatMessage[]): string[] {
   return dropped
     .filter((m) => m.role === "user" && typeof m.content === "string")
     .map((m) => (m.content as string).trim())
-    .filter((t) => t && t !== CONTINUE_AFTER_COMPACTION && !t.startsWith("[resuming") && !t.startsWith("[Earlier conversation was compacted"))
+    .filter(
+      (t) =>
+        t &&
+        t !== CONTINUE_AFTER_COMPACTION &&
+        !t.startsWith("[resuming") &&
+        !t.startsWith("[Earlier conversation was compacted") &&
+        // 자동 주입된 반성 기록(rewind note)도 시스템 발화지 사용자 발화가 아니다.
+        !t.startsWith("[rewind note]")
+    )
     .map((t) => clipToTokens(t.replace(/\s+/g, " "), ANCHOR_ITEM_TOKENS));
 }
 
@@ -944,7 +952,9 @@ export async function buildResumePrompt(
   const checkpoint = await readCheckpoint(projectRoot);
   if (!checkpoint) return null;
   const includeSummary = opts.includeSummary ?? true;
-  const notes = includeSummary ? await readNotes(projectRoot) : "";
+  // 재개 소비자(새 컨텍스트)는 노트를 "사실" 로 받는데, 노트가 기록된 뒤 파일이 수정됐으면
+  // 그 사실은 이제 옛것이다 — 컴팩션 경로(loop.ts)와 같은 신선도 표시를 거친다.
+  const notes = includeSummary ? await annotateStaleNotes(await readNotes(projectRoot), projectRoot) : "";
 
   const remaining = checkpoint.steps.filter((s) => s.status !== "done");
   // A checkpoint can now exist without any compaction ever having run
