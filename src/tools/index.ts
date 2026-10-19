@@ -192,7 +192,8 @@ export const TOOL_DEFS: ToolDef[] = [
       description:
         "Record a finding you must not lose: a root cause you identified, what you verified and how, a dead end " +
         "to avoid. Notes are kept across context compaction; the rest of the conversation is only summarized. " +
-        "One short fact per call.",
+        "One short fact per call. Mention the file path(s) the fact refers to — if a noted file later changes, " +
+        "the note is flagged stale on re-injection so you re-check it instead of trusting it blindly.",
       parameters: {
         type: "object",
         properties: { text: { type: "string" } },

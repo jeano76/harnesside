@@ -46,7 +46,7 @@ import {
   type ProgressGuardOptions,
   type VerifyConfig,
 } from "./harness.js";
-import { appendNote, clearNotes, readNotes, NOTES_HEADER } from "../compaction/notes.js";
+import { appendNote, clearNotes, readNotes, annotateStaleNotes, NOTES_HEADER } from "../compaction/notes.js";
 import { gitCheckpoint } from "./gitCheckpoint.js";
 import { judgeReply, incompleteReplyNudge, MAX_INCOMPLETE_REPLY_RETRIES } from "./incompleteReply.js";
 import { overBudget, effectiveBudget, reasoningExcerpt, thinkingBudgetNudge, REASONING_EXCERPT_CHARS } from "./thinkingBudget.js";
@@ -855,6 +855,25 @@ export class AgentLoop {
     let incompleteReplyRetries = 0;
     // X-4: 고친 코드가 검증 없이 끝나지 않게 한다.
     const verifyGate = new VerifyGate();
+    // RIR/AgentRewind(arXiv 2609.18304 · 2608.14380)의 "rewind memory": 턴이 실패로
+    // 끝나는 지점(무진행 stop · 반복 응답 stop)에서, 되돌릴 증거를 남긴다. 자동 git
+    // 되돌리기는 사용자의 커밋·워크트리를 건드리는 위험한 동작이라 하지 않고 — 이 턴에
+    // 에이전트가 만든 커밋 해시와 만진 파일을 (a) 다음 턴 모델이 바로 보는 user 메시지와
+    // (b) compaction 에서 살아남는 notes.md 양쪽에 구체적으로 남긴다.
+    const rewindFiles: string[] = [];
+    const rewindCommits: string[] = [];
+    const writeRewindNote = async (reason: string): Promise<void> => {
+      if (rewindFiles.length === 0 && rewindCommits.length === 0) return;
+      const detail = rewindCommits.length
+        ? `agent-made commits ${rewindCommits.join(", ")} (revertable with git revert <hash>); files touched: ${rewindFiles.join(", ")}`
+        : `files touched: ${rewindFiles.join(", ")}`;
+      const text = `[rewind note] ${reason}. ${detail}. Before trying the same change again, review or git-revert those — repeating the same edits has already failed once.`;
+      this.messages.push({ role: "user", content: text });
+      // notes.md 에도 남긴다: 이 메시지는 컴팩션으로 사라지므로, 재개·컴팩션 뒤에도
+      // 반성이 살아남아야 같은 시도를 반복하지 않는다. 실패해도 (a) 는 이미 투입됐다.
+      await appendNote(this.opts.projectRoot, text).catch(() => {});
+      this.opts.onStatus?.(text);
+    };
     // 사고 예산으로 끊은 다음 라운드 한 번은 thinking 을 끈다. 그 라운드의 사고는 없으므로 같은 이유로 다시 끊기지 않는다.
     let thinkOffNextRound = false;
     // 이 턴에서 예산으로 끊은 횟수 — 끊을 때마다 예산을 키우고, 상한이면 예산을 끈다 (effectiveBudget).
@@ -921,6 +940,8 @@ export class AgentLoop {
           toolName: "chat",
           errorMessage: "progress guard stopped the turn",
         });
+        // AgentRewind/RIR: 좌초한 시도의 반성을 다음 시도에 넘긴다.
+        await writeRewindNote("the turn made no progress after editing files (no existing-file edit landed and no plan step completed)");
         this.hasNewFailuresThisTurn = true;
         return;
       }
@@ -1339,6 +1360,8 @@ export class AgentLoop {
             toolName: "chat",
             errorMessage: `same response ${repeats} times in the last ${recentAssistantTexts.length}`,
           });
+          // AgentRewind/RIR: 같은 응답 반복 역시 실패한 시도다 — 반성을 남긴다.
+          await writeRewindNote("the turn ended repeating the same response without advancing");
           this.hasNewFailuresThisTurn = true;
           return;
         }
@@ -1533,6 +1556,8 @@ export class AgentLoop {
           else if (call.function.name === "run_shell" && looksLikeVerification(String(JSON.parse(call.function.arguments || "{}").command ?? ""))) verifyGate.noteVerify();
           this.pushExecutedToolLog(`${call.function.name}(${this.summarizeArgs(call.function.arguments)})`);
           if (editPath !== null) {
+            // rewind memory 재료: 이 턴에 에이전트가 만진 파일.
+            if (!rewindFiles.includes(editPath)) rewindFiles.push(editPath);
             const check = await runPostEditCheck(editPath, this.opts.projectRoot, this.opts.verify, call.function.name === "append_file");
             const checkFailed = check?.includes("FAILED") ?? false;
             // Progress requires the edit to have LANDED clean: a check
@@ -1565,7 +1590,10 @@ export class AgentLoop {
             if (!checkFailed && this.opts.gitCheckpoint) {
               const label = `harnesside: ${call.function.name} ${this.summarizeArgs(call.function.arguments)}`.slice(0, 72);
               const cp = await gitCheckpoint(editPath, label, this.opts.projectRoot);
-              if (cp.committed) content = `${content}\n\n[checkpoint] committed as ${cp.hash} — revertable with git revert/reset.`;
+              if (cp.committed) {
+                content = `${content}\n\n[checkpoint] committed as ${cp.hash} — revertable with git revert/reset.`;
+                rewindCommits.push(`${cp.hash} (${editPath})`);
+              }
             }
           }
           // Drop the now-redundant copy of the file content from the
@@ -2150,8 +2178,11 @@ export class AgentLoop {
           `(요약 ${detail.summary.length}자, 요약 예산 ${budget.summaryMaxTokens} 토큰, 입력 ~${detail.summaryInputTokens ?? "?"} 토큰)`
         );
         // Working notes go back in with the summary, so what the model had
-        // established survives the compaction verbatim.
-        const notes = await readNotes(this.opts.projectRoot);
+        // established survives the compaction verbatim. Stale-marked first:
+        // a note about a file that changed after it was written must not be
+        // re-injected as if it were still current (MemTrace's misalignment,
+        // seen live as the same analysis being rewritten ~60 times).
+        const notes = await annotateStaleNotes(await readNotes(this.opts.projectRoot), this.opts.projectRoot);
         if (notes && typeof this.messages[0]?.content === "string") {
           this.messages[0] = { ...this.messages[0], content: `${this.messages[0].content}\n\n${NOTES_HEADER}\n${notes}` };
         }
